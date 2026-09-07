@@ -1,62 +1,65 @@
 # Monky Bot 🤖
 
-O **bot oficial de referência** do Monky — um bot universal onde concentramos tudo que se deseje que um bot tenha.
+O **bot oficial de referência** do Monky — comandos utilitários, diversão e mais.
 
-Serve como **dogfood** da interface de bots: é o "primeiro terceiro" usando o protocolo público, exatamente como um bot externo faria.
+> 📖 Para criar seu **próprio** bot do zero, veja a [Documentação de Bots](https://monkyorg.github.io/Monky/bots).
 
-> 📖 Para aprender a criar seu próprio bot, consulte a [documentação completa de Bots](https://monkyorg.github.io/Monky/bots) no site do Monky.
+## Início rápido
 
-## Requisitos
-
-- Node.js 18+
-- Um servidor Monky rodando (v9.0.0+)
-
-## Instalação
+### 1. Instale o Monky Bot
 
 ```bash
+# Clone o repositório
 git clone https://github.com/MonkyOrg/MonkyBot.git
 cd MonkyBot
 npm install
 ```
 
-## Configuração
+### 2. Crie o bot no servidor
 
-Crie um arquivo `.env` na raiz (use `.env.example` como base):
+1. Abra o app Monky
+2. Vá em **Configurações do Servidor → Bots**
+3. Clique **Criar**, dê um nome (ex.: "Monky Bot")
+4. **Copie o token** — ele só aparece uma vez!
 
-### Modo Manual (um servidor)
-
-```env
-MONKY_SERVER_URL=ws://localhost:3000
-MONKY_BOT_TOKEN=seu_token_aqui
-MONKY_PUBLIC_KEY=sua_chave_ed25519_hex
-```
-
-Para obter o token:
-1. No client Monky, vá em **Configurações do Servidor → Bots**
-2. Clique **Criar**, copie o token
-
-### Modo Marketplace (múltiplos servidores)
-
-```env
-MONKY_PUBLIC_KEY=sua_chave_ed25519_hex
-MONKY_SERVE=true
-MONKY_SERVE_PORT=7780
-MONKY_SERVE_PUBLIC_HOST=meubot.example.com
-MONKY_BOT_NAME=Monky Bot
-```
-
-Nesse modo, qualquer servidor Monky pode instalar o bot colando a URL `http://meubot.example.com:7780/manifest` nas configurações.
-
-## Uso
+### 3. Configure
 
 ```bash
-# Desenvolvimento (com hot-reload via ts-node)
-npm run dev
-
-# Produção
-npm run build
-npm start
+cp .env.example .env
 ```
+
+Edite o `.env` com os dados do seu servidor:
+
+```env
+MONKY_SERVER_URL=ws://seu-servidor:3000
+MONKY_BOT_TOKEN=cole_o_token_aqui
+```
+
+> 💡 A chave de segurança (Ed25519) é **gerada automaticamente** na primeira execução. Não precisa configurar nada.
+
+### 4. Execute
+
+```bash
+npm run dev
+```
+
+Pronto! O bot conecta, registra os comandos, e os usuários já podem usar `/ping`, `/dado`, etc.
+
+## Modo Marketplace (múltiplos servidores)
+
+Se quiser que **qualquer servidor Monky** possa instalar o bot pela URL:
+
+```env
+MONKY_SERVE=true
+MONKY_SERVE_PORT=7780
+MONKY_SERVE_PUBLIC_HOST=seu-ip-ou-dominio
+```
+
+```bash
+npm run dev
+```
+
+O bot imprime a URL do manifest. Qualquer admin de servidor Monky pode colar essa URL em **Configurações → Bots → Instalar Bot via URL** para adicionar o bot automaticamente.
 
 ## Comandos
 
@@ -65,7 +68,7 @@ npm start
 | `/ping` | Responde com pong e a latência |
 | `/dado [lados]` | Rola um dado (padrão: 6, máx: 100) |
 | `/moeda` | Cara ou coroa |
-| `/8ball <pergunta>` | Bola mágica responde sua pergunta |
+| `/8ball <pergunta>` | Bola mágica responde |
 | `/enquete <pergunta> [opções]` | Enquete rápida (opções separadas por vírgula) |
 | `/ajuda` | Lista todos os comandos |
 
@@ -74,38 +77,61 @@ npm start
 Crie um arquivo em `src/commands/`:
 
 ```ts
-// src/commands/saudacao.ts
 import { CommandDefinition } from '@monky/bot-sdk';
 
-export const saudacaoCommand: CommandDefinition = {
-  name: 'saudacao',
+export const meuComando: CommandDefinition = {
+  name: 'ola',
   description: 'Saúda o usuário',
-  handler: (ctx) => {
-    ctx.reply(`👋 Olá, ${ctx.invokerNickname}!`);
-  },
+  handler: (ctx) => ctx.reply(`👋 Olá, ${ctx.invokerNickname}!`),
 };
 ```
 
 Registre em `src/commands/index.ts`:
 
 ```ts
-import { saudacaoCommand } from './saudacao';
-// ...
-bot.command(saudacaoCommand);
+import { meuComando } from './meuComando';
+// ...dentro de registerAllCommands:
+bot.command(meuComando);
 ```
 
-## Arquitetura
+## Como funciona
 
 ```
-MonkyBot (este repositório)
-  ↕ WebSocket (via @monky/bot-sdk)
-Servidor Monky
+Usuário digita /ping
+        ↓
+Servidor Monky (roteia a mensagem)
+        ↓
+Monky Bot (processa) → ctx.reply('🏓 Pong!')
+        ↓
+Servidor Monky (entrega no canal)
+        ↓
+Usuário vê a resposta
 ```
 
-- O bot **não** tem acesso direto ao banco ou arquivos do servidor
-- Toda comunicação é via protocolo público do Monky
-- No modo marketplace, o bot mantém conexões independentes com cada servidor
-- Cada conexão tem reconnect automático
+O bot é um **processo externo** — roda na sua máquina, VPS ou nuvem. Não tem acesso ao banco nem arquivos do servidor. Toda comunicação é pelo protocolo público do Monky via WebSocket.
+
+## Estrutura
+
+```
+MonkyBot/
+├── src/
+│   ├── index.ts          # Ponto de entrada + configuração
+│   ├── commands/
+│   │   ├── index.ts      # Registro de todos os comandos
+│   │   ├── ping.ts
+│   │   ├── dice.ts
+│   │   ├── coin.ts
+│   │   ├── eightball.ts
+│   │   ├── poll.ts
+│   │   └── help.ts
+│   └── utils/
+│       └── keys.ts       # Auto-geração de chaves Ed25519
+├── .env.example
+├── .keys/                # Gerado automaticamente (não commitado)
+│   ├── private.pem
+│   └── public.hex
+└── package.json
+```
 
 ## Links
 
