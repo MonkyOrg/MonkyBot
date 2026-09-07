@@ -110,7 +110,20 @@ ${envLines}
 
 export function writeEcosystem(config: BotConfig): string {
   // Ensure botDir exists (it's the cwd for the process — .keys/ go there)
-  fs.mkdirSync(config.botDir, { recursive: true });
+  try {
+    fs.mkdirSync(config.botDir, { recursive: true });
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EACCES') {
+      throw new Error(
+        `Sem permissão para criar "${config.botDir}".\n` +
+        `Escolha um diretório dentro do seu home, ex:\n` +
+        `  monkybot config set botDir ~/.monkybot\n` +
+        `Ou execute: monkybot setup`
+      );
+    }
+    throw err;
+  }
   // Ecosystem lives in ~/.monkybot/, not botDir
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
   const ecosystemPath = getEcosystemPath();

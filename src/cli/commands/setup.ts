@@ -36,8 +36,9 @@ export async function setupCommand(): Promise<void> {
     const mode: 'manual' | 'marketplace' = modeChoice === '2' ? 'marketplace' : 'manual';
 
     // 2. Diretório de trabalho (onde ficam chaves .keys/ e dados)
-    const defaultDir = existing?.botDir || CONFIG_DIR;
-    const botDirInput = await prompt(rl, `Diretório de trabalho [${defaultDir}]: `);
+    const defaultDir = CONFIG_DIR;
+    const currentDir = existing?.botDir && existing.botDir !== defaultDir ? ` (atual: ${existing.botDir})` : '';
+    const botDirInput = await prompt(rl, `Diretório de trabalho [${defaultDir}]${currentDir}: `);
     const botDir = botDirInput || defaultDir;
 
     const config: BotConfig = { mode, botDir: path.resolve(botDir) };
