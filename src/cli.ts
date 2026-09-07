@@ -10,6 +10,7 @@ import {
   logsCommand,
   configCommand,
 } from './cli/commands/lifecycle';
+import { updateCommand, autoUpdateCommand } from './cli/commands/update';
 
 function getVersion(): string {
   try {
@@ -34,6 +35,8 @@ ${color('COMANDOS', ANSI.bold)}
   restart                Reinicia o bot aplicando a configuração atual
   status                 Exibe o estado do bot (PID, uptime, memória)
   logs                   Exibe os logs do bot em tempo real
+  update                 Atualiza o Monky Bot para a última versão
+  autoupdate             Gerencia atualização automática
   config                 Exibe a configuração atual
   config set <k> <v>     Altera uma configuração
 
@@ -42,15 +45,22 @@ ${color('OPÇÕES', ANSI.bold)}
   --help, -h             Exibe esta ajuda
 
 ${color('OPÇÕES POR COMANDO', ANSI.bold)}
-  restart  --fresh       Recria o processo pm2 do zero
-  logs     --lines <n>   Número de linhas iniciais (padrão: 50)
-  logs     --no-follow   Imprime os logs recentes e sai
+  restart     --fresh       Recria o processo pm2 do zero
+  logs        --lines <n>   Número de linhas iniciais (padrão: 50)
+  logs        --no-follow   Imprime os logs recentes e sai
+  update      --check       Apenas verifica, sem instalar
+  update      --yes         Atualiza sem pedir confirmação
+  autoupdate  on [HH:MM]   Ativa verificação diária (padrão: 04:00)
+  autoupdate  off           Desativa
+  autoupdate  status        Mostra se está ativo
 
 ${color('EXEMPLOS', ANSI.bold)}
   monkybot setup                     Configura o bot pela primeira vez
   monkybot start                     Inicia o bot em background
+  monkybot update                    Atualiza para a última versão
+  monkybot update --check            Verifica se há atualizações
+  monkybot autoupdate on 03:00       Ativa auto-update diário às 3h
   monkybot logs --lines 100          Exibe as últimas 100 linhas de log
-  monkybot config set serverUrl ws://meu-servidor:3000
 
 ${color('PRIMEIROS PASSOS', ANSI.bold)}
   1. monkybot setup     — Configure servidor e token
@@ -104,6 +114,14 @@ async function main(): Promise<void> {
 
     case 'config':
       configCommand(rest);
+      break;
+
+    case 'update':
+      await updateCommand(rest);
+      break;
+
+    case 'autoupdate':
+      await autoUpdateCommand(rest);
       break;
 
     default:
