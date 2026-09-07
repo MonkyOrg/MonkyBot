@@ -1,16 +1,14 @@
 /**
- * Builds a self-contained tarball of MonkyBot so it can be installed
- * globally via npm from a GitHub release, without cloning the repo.
- *
- * The tarball includes the compiled dist/, the bot-sdk dependency
- * (which itself bundles @monky/shared), and a package.json with
- * the `bin` entry so `monkybot` becomes a global CLI command.
+ * Build a self-contained npm tarball, preserving the dependency tree actually
+ * resolved by each requesting package, including workspace symlinks.
  *
  * Usage: node scripts/pack.js [version] [--out <dir>]
  */
-const { execSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
+const fs = require('node:fs');
+const path = require('node:path');
+const { createRequire } = require('node:module');
+const { runNpm } = require('./npm');
+const { checkSdk } = require('./check-sdk');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -18,187 +16,199 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
+function writeJson(file, value) {
+  fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
+}
+
 function parseArgs(argv) {
-  const args = { version: null, out: path.join(ROOT, 'release') };
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--out') {
-      args.out = path.resolve(argv[++i]);
-    } else if (!args.version) {
-      args.version = argv[i].replace(/^v/, '');
+  const args = { version: undefined, out: path.join(ROOT, 'release') };
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (arg === '--out') {
+      if (!argv[index + 1] || argv[index + 1].startsWith('--')) throw new Error('--out requires a directory.');
+      args.out = path.resolve(argv[++index]);
+    } else if (!args.version && !arg.startsWith('--')) {
+      args.version = arg.replace(/^v/, '');
+    } else {
+      throw new Error(`Unknown argument: ${arg}`);
     }
   }
   return args;
 }
 
-function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const pkg = readJson(path.join(ROOT, 'package.json'));
-  const version = args.version || process.env.MONKY_BOT_VERSION || pkg.version;
-
-  const dist = path.join(ROOT, 'dist');
-  if (!fs.existsSync(dist)) {
-    throw new Error(`Missing build output: ${dist}. Run "npm run build" first.`);
+function requiredFile(file) {
+  if (!fs.existsSync(file) || !fs.statSync(file).isFile() || fs.statSync(file).size === 0) {
+    throw new Error(`Missing or empty required file: ${file}`);
   }
+}
 
-  const staging = path.join(ROOT, 'release', 'bot-pack');
-  fs.rmSync(staging, { recursive: true, force: true });
-  fs.mkdirSync(staging, { recursive: true });
-
-  // Copy compiled output.
-  fs.cpSync(dist, path.join(staging, 'dist'), { recursive: true });
-
-  // Copy .env.example so users have a reference.
-  const envExample = path.join(ROOT, '.env.example');
-  if (fs.existsSync(envExample)) {
-    fs.copyFileSync(envExample, path.join(staging, '.env.example'));
+function productionDependencies(pkg) {
+  const dependencies = new Map();
+  for (const name of Object.keys(pkg.peerDependencies || {})) {
+    dependencies.set(name, pkg.peerDependenciesMeta?.[name]?.optional === true);
   }
+  for (const name of Object.keys(pkg.dependencies || {})) dependencies.set(name, false);
+  for (const name of Object.keys(pkg.optionalDependencies || {})) dependencies.set(name, true);
+  return dependencies;
+}
 
-  // ---------------------------------------------------------------------------
-  // Bundle ALL transitive dependencies into node_modules/ so the globally
-  // installed package is fully self-contained. We resolve each package from
-  // the monorepo workspace (file: links) or local node_modules.
-  // ---------------------------------------------------------------------------
+function lookupPaths(requester, name) {
+  return createRequire(path.join(requester, 'package.json')).resolve.paths(name) || [];
+}
 
-  const sdkPath = path.join(ROOT, 'node_modules', '@monky', 'bot-sdk');
-  const sdkRealPath = fs.existsSync(sdkPath) ? fs.realpathSync(sdkPath) : null;
-  // Detect workspace symlink: realpath differs from the node_modules location.
-  const isWorkspaceLink = sdkRealPath && sdkRealPath !== sdkPath &&
-    !sdkRealPath.includes(path.join('node_modules', '@monky', 'bot-sdk'));
-  const monorepoRoot = isWorkspaceLink ? path.resolve(sdkRealPath, '..', '..') : null;
+function resolvePackage(requester, name) {
+  // resolve.paths follows Node's lookup order without requiring packages to
+  // export their package.json. realpath makes workspace dependencies resolve
+  // from their own workspace, not from the bot's node_modules.
+  for (const directory of lookupPaths(requester, name)) {
+    const candidate = path.join(directory, name);
+    if (fs.existsSync(path.join(candidate, 'package.json'))) return fs.realpathSync(candidate);
+  }
+  return null;
+}
 
-  // Directories where we look for modules (order matters — first match wins).
-  const searchDirs = [
-    path.join(ROOT, 'node_modules'),
-    // In CI, bundled deps of bot-sdk live inside its own node_modules.
-    sdkRealPath ? path.join(sdkRealPath, 'node_modules') : null,
-    monorepoRoot ? path.join(monorepoRoot, 'node_modules') : null,
-    // Scoped packages may live adjacent in the monorepo (e.g. packages/shared).
-    monorepoRoot ? path.join(monorepoRoot, 'packages') : null,
-  ].filter(Boolean);
+function bundleDependencies(sourceRoot, destinationRoot) {
+  const placed = new Map();
+  let packageCount = 0;
 
-  /**
-   * Recursively collect every production dependency name starting from a
-   * package.json. Returns a Set of package names (e.g. "ws", "@monky/shared").
-   */
-  function collectDeps(pkgJsonPath, visited = new Set()) {
-    if (!fs.existsSync(pkgJsonPath)) return visited;
-    const pkg = readJson(pkgJsonPath);
-    for (const dep of Object.keys(pkg.dependencies || {})) {
-      if (visited.has(dep)) continue;
-      visited.add(dep);
-      // Find the dependency's package.json to recurse.
-      const resolved = resolvePkgDir(dep);
-      if (resolved) {
-        collectDeps(path.join(resolved, 'package.json'), visited);
+  function copyDependency(name, requesterSource, requesterDestination, optional, ancestors) {
+    const source = resolvePackage(requesterSource, name);
+    if (!source) {
+      if (optional) return null;
+      throw new Error(`Missing required dependency "${name}", requested by ${requesterSource}`);
+    }
+    const pkg = readJson(path.join(source, 'package.json'));
+    if (typeof pkg.name !== 'string' || typeof pkg.version !== 'string' || !pkg.version) {
+      throw new Error(`Invalid package metadata: ${path.join(source, 'package.json')}`);
+    }
+    const spec = name === pkg.name ? pkg.version : `npm:${pkg.name}@${pkg.version}`;
+
+    for (const directory of lookupPaths(requesterDestination, name)) {
+      const existing = placed.get(path.join(directory, name));
+      if (existing !== undefined) {
+        if (existing === source) return spec;
+        break;
       }
     }
-    return visited;
-  }
-
-  /** Resolve a package name to its real directory on disk. */
-  function resolvePkgDir(name) {
-    // For scoped monorepo packages (e.g. @monky/shared), also check packages/<name>.
-    const segments = name.startsWith('@') ? [name] : [name];
-    // Also try the unscoped name in the monorepo packages/ dir.
-    if (name.startsWith('@monky/')) {
-      segments.push(name.replace('@monky/', ''));
+    if (ancestors.includes(source)) {
+      throw new Error(`Cannot preserve a shadowed dependency cycle involving "${name}" at ${source}`);
     }
-    for (const dir of searchDirs) {
-      for (const seg of segments) {
-        const candidate = path.join(dir, seg);
-        if (fs.existsSync(candidate)) {
-          return fs.realpathSync(candidate);
+
+    const destination = path.join(requesterDestination, 'node_modules', name);
+    fs.mkdirSync(destination, { recursive: true });
+    if (pkg.name.startsWith('@monky/')) {
+      requiredFile(path.join(source, 'dist', 'index.js'));
+      fs.cpSync(path.join(source, 'dist'), path.join(destination, 'dist'), { recursive: true });
+      for (const filename of ['LICENSE', 'LICENSE.md', 'README.md']) {
+        const file = path.join(source, filename);
+        if (fs.existsSync(file)) fs.copyFileSync(file, path.join(destination, filename));
+      }
+    } else {
+      fs.cpSync(source, destination, {
+        recursive: true,
+        filter: (file) => {
+          const parts = path.relative(source, file).split(path.sep);
+          return !parts.includes('node_modules') && !parts.includes('.git');
+        },
+      });
+      if (!pkg.exports) {
+        try {
+          createRequire(path.join(requesterSource, 'package.json')).resolve(source);
+        } catch {
+          throw new Error(`Missing runtime entry for "${name}" at ${source}`);
         }
       }
     }
-    return null;
-  }
 
-  // Start from bot-sdk's package.json — this is the entry dependency.
-  const allDeps = new Set(['@monky/bot-sdk']);
-  if (sdkRealPath) {
-    collectDeps(path.join(sdkRealPath, 'package.json'), allDeps);
-  }
-
-  console.log(`[pack] Bundling ${allDeps.size} dependencies: ${[...allDeps].join(', ')}`);
-
-  for (const dep of allDeps) {
-    const srcDir = resolvePkgDir(dep);
-    if (!srcDir) {
-      console.warn(`[pack] WARNING: could not find ${dep} — skipping`);
-      continue;
+    placed.set(destination, source);
+    packageCount++;
+    const dependencies = {};
+    for (const [dependency, isOptional] of productionDependencies(pkg)) {
+      const childSpec = copyDependency(dependency, source, destination, isOptional, [...ancestors, source]);
+      if (childSpec !== null) dependencies[dependency] = childSpec;
     }
-
-    const destDir = path.join(staging, 'node_modules', dep);
-    if (fs.existsSync(destDir)) continue;
-    fs.mkdirSync(destDir, { recursive: true });
-
-    // For @monky/* packages, copy only dist + package.json (skip src, tests, node_modules).
-    if (dep.startsWith('@monky/')) {
-      const distDir = path.join(srcDir, 'dist');
-      if (fs.existsSync(distDir)) {
-        fs.cpSync(distDir, path.join(destDir, 'dist'), { recursive: true });
-      }
-      const pkgFile = path.join(srcDir, 'package.json');
-      if (fs.existsSync(pkgFile)) {
-        fs.copyFileSync(pkgFile, path.join(destDir, 'package.json'));
-      }
-    } else {
-      // Third-party package: copy everything except nested node_modules.
-      fs.cpSync(srcDir, destDir, {
-        recursive: true,
-        filter: (src) => {
-          // Only skip node_modules directories INSIDE the package itself.
-          const rel = path.relative(srcDir, src);
-          return !rel.split(path.sep).includes('node_modules');
-        },
-      });
-    }
+    // The release has already resolved all peers/optional modules. Do not let
+    // npm fetch a different tree (or follow file: workspace paths) on install.
+    const bundled = { ...pkg, dependencies, bundleDependencies: Object.keys(dependencies) };
+    delete bundled.bundledDependencies;
+    delete bundled.devDependencies;
+    delete bundled.peerDependencies;
+    delete bundled.peerDependenciesMeta;
+    delete bundled.optionalDependencies;
+    writeJson(path.join(destination, 'package.json'), bundled);
+    return spec;
   }
 
-  // Build the publishable package.json.
-  const depEntries = {};
-  for (const dep of allDeps) depEntries[dep] = '*';
-  const publishPkg = {
-    name: '@monky/bot',
-    version,
-    description: 'Monky Bot — the official universal reference bot for Monky',
-    license: 'MIT',
-    repository: { type: 'git', url: 'https://github.com/MonkyOrg/MonkyBot.git' },
-    homepage: 'https://github.com/MonkyOrg/MonkyBot#readme',
-    main: 'dist/index.js',
-    bin: { monkybot: './dist/cli.js' },
-    engines: { node: '>=18' },
-    dependencies: depEntries,
-    bundleDependencies: [...allDeps],
-  };
-
-  fs.writeFileSync(
-    path.join(staging, 'package.json'),
-    JSON.stringify(publishPkg, null, 2) + '\n'
-  );
-
-  // README.
-  const readme = path.join(ROOT, 'README.md');
-  if (fs.existsSync(readme)) {
-    fs.copyFileSync(readme, path.join(staging, 'README.md'));
+  const dependencies = {};
+  const rootPackage = readJson(path.join(sourceRoot, 'package.json'));
+  for (const [name, optional] of productionDependencies(rootPackage)) {
+    const spec = copyDependency(name, fs.realpathSync(sourceRoot), destinationRoot, optional, []);
+    if (spec !== null) dependencies[name] = spec;
   }
-
-  fs.mkdirSync(args.out, { recursive: true });
-  const packed = execSync('npm pack', { cwd: staging, encoding: 'utf8' })
-    .trim()
-    .split('\n')
-    .pop()
-    .trim();
-
-  const finalName = `monky-bot-${version}.tgz`;
-  const finalPath = path.join(args.out, finalName);
-  fs.rmSync(finalPath, { force: true });
-  fs.copyFileSync(path.join(staging, packed), finalPath);
-  fs.rmSync(path.join(staging, packed), { force: true });
-
-  console.log(`[pack] ${finalPath}`);
-  return finalPath;
+  return { dependencies, packageCount };
 }
 
-main();
+function pack({ version, out = path.join(ROOT, 'release'), root = ROOT } = {}) {
+  const pkg = readJson(path.join(root, 'package.json'));
+  version = version || process.env.MONKY_BOT_VERSION || pkg.version;
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new Error(`Invalid release version: ${version}`);
+  }
+  checkSdk(root);
+  for (const filename of ['index.js', 'cli.js']) requiredFile(path.join(root, 'dist', filename));
+  requiredFile(path.join(root, 'assets', 'monky-logo.png'));
+
+  const staging = path.join(root, 'release', 'bot-pack');
+  fs.rmSync(staging, { recursive: true, force: true });
+  fs.mkdirSync(staging, { recursive: true });
+
+  try {
+    fs.cpSync(path.join(root, 'dist'), path.join(staging, 'dist'), { recursive: true });
+    fs.cpSync(path.join(root, 'assets'), path.join(staging, 'assets'), { recursive: true });
+    for (const filename of ['.env.example', 'README.md', 'README.en.md']) {
+      const source = path.join(root, filename);
+      if (fs.existsSync(source)) fs.copyFileSync(source, path.join(staging, filename));
+    }
+
+    const { dependencies, packageCount } = bundleDependencies(root, staging);
+    const publishPkg = {
+      name: pkg.name,
+      version,
+      description: pkg.description,
+      license: pkg.license,
+      repository: { type: 'git', url: 'https://github.com/MonkyOrg/MonkyBot.git' },
+      homepage: 'https://github.com/MonkyOrg/MonkyBot#readme',
+      main: 'dist/index.js',
+      bin: { monkybot: './dist/cli.js' },
+      engines: { node: '>=18' },
+      monky: pkg.monky,
+      dependencies,
+      bundleDependencies: Object.keys(dependencies),
+    };
+    writeJson(path.join(staging, 'package.json'), publishPkg);
+
+    fs.mkdirSync(out, { recursive: true });
+    const result = JSON.parse(runNpm(['pack', '--json', '--ignore-scripts'], { cwd: staging }));
+    const packed = result[0]?.filename;
+    if (typeof packed !== 'string' || path.basename(packed) !== packed) {
+      throw new Error('npm pack did not return a tarball filename.');
+    }
+    const finalPath = path.join(out, `monky-bot-${version}.tgz`);
+    fs.copyFileSync(path.join(staging, packed), finalPath);
+    console.log(`[pack] ${packageCount} bundled packages; ${finalPath}`);
+    return finalPath;
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  }
+}
+
+if (require.main === module) {
+  try {
+    pack(parseArgs(process.argv.slice(2)));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+module.exports = { bundleDependencies, pack, parseArgs };

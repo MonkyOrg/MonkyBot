@@ -1,10 +1,13 @@
-import { CommandDefinition } from '@monky/bot-sdk';
+import type { CommandDefinition } from '@monky/bot-sdk';
+import { translate } from './i18n';
 
 export const pingCommand: CommandDefinition = {
   name: 'ping',
-  description: 'Responde com pong e mostra a latência do bot.',
+  description: 'Verifica se o bot está respondendo.',
   handler: (ctx) => {
-    const now = Date.now();
-    ctx.reply(`🏓 **Pong!** Latência: \`${Date.now() - now}ms\``);
+    if (ctx.signal.aborted) return;
+    ctx.reply(translate(ctx.locale,
+      '🏓 **Pong!** MonkyBot está online.',
+      '🏓 **Pong!** MonkyBot is online.'));
   },
 };

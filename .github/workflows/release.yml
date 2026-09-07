@@ -20,30 +20,34 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MONKY_SDK_RELEASE: ${{ vars.MONKY_SDK_RELEASE }}
         run: |
-          # Replace the local file: dependency with the latest bot-sdk from Monky releases
-          LATEST_SDK_URL=$(curl -fsSL -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/MonkyOrg/Monky/releases?per_page=20" | \
-            node -e "
-              const releases = JSON.parse(require('fs').readFileSync(0, 'utf8'));
-              for (const r of releases) {
-                const asset = (r.assets||[]).find(a => a.name.includes('monky-bot-sdk') && a.name.endsWith('.tgz'));
-                if (asset) { process.stdout.write(asset.browser_download_url); process.exit(0); }
-              }
-              process.exit(1);
-            ")
-          
-          # Rewrite package.json to use the release URL instead of file: path
-          node -e "
-            const pkg = require('./package.json');
-            pkg.dependencies['@monky/bot-sdk'] = '${LATEST_SDK_URL}';
-            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
-          
-          npm install
+          # Pin a release with the repository variable when needed. Otherwise
+          # use the latest published SDK, including compatible Monky betas.
+          SDK_ENDPOINT="repos/MonkyOrg/Monky/releases?per_page=30"
+          if [ -n "$MONKY_SDK_RELEASE" ]; then
+            SDK_ENDPOINT="repos/MonkyOrg/Monky/releases/tags/${MONKY_SDK_RELEASE}"
+          fi
+          SDK_URL=$(gh api "$SDK_ENDPOINT" --jq '
+            (if type == "array" then . else [.] end)
+            | [.[] | select(.draft == false) | .assets[]
+              | select(.name | startswith("monky-bot-sdk-"))
+              | select(.name | endswith(".tgz"))]
+            | .[0].browser_download_url // empty')
+          if [ -z "$SDK_URL" ]; then
+            echo "No published Monky bot-sdk artifact was found." >&2
+            exit 1
+          fi
+          npm pkg set "dependencies.@monky/bot-sdk=$SDK_URL"
+          npm install --ignore-scripts --no-audit --no-fund
 
-      - name: Build
-        run: npm run build
+      - name: Verify SDK protocol compatibility
+        run: npm run check:sdk
+
+      - name: Build and test
+        run: npm test
 
       - name: Determine version
         id: version
@@ -95,6 +99,9 @@ jobs:
 
       - name: Pack tarball
         run: node scripts/pack.js "${{ steps.version.outputs.version }}"
+
+      - name: Smoke test the offline installed tarball
+        run: npm run smoke:pack -- "release/monky-bot-${{ steps.version.outputs.version }}.tgz"
 
       - name: Generate release notes
         id: notes

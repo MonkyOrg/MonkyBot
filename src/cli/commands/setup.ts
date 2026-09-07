@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { ANSI, color, CONFIG_DIR, CONFIG_FILE } from '../constants';
 import { BotConfig, readConfig, writeConfig } from '../config';
+import { DEFAULT_BOT_NAME } from '../../profile';
 
 function prompt(rl: readline.Interface, question: string): Promise<string> {
   return new Promise((resolve) => {
@@ -101,11 +102,11 @@ export async function setupCommand(): Promise<void> {
       if (publicHost === 'localhost' || publicHost === '127.0.0.1') {
         console.log(color('⚠️  "localhost" só funciona para servidores na mesma máquina.', ANSI.yellow));
       }
-
-      const defaultName = existing?.botName || 'Monky Bot';
-      const nameInput = await prompt(rl, `Nome do bot [${defaultName}]: `);
-      config.botName = nameInput || defaultName;
     }
+
+    const defaultName = existing?.botName || DEFAULT_BOT_NAME;
+    const nameInput = await prompt(rl, `Nome do bot [${defaultName}]: `);
+    config.botName = nameInput || defaultName;
 
     writeConfig(config);
 

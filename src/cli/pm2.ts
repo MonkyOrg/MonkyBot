@@ -78,6 +78,7 @@ export function generateEcosystem(config: BotConfig): string {
   const cwd = forSingleQuotes(config.botDir);
 
   const env: Record<string, string> = { NODE_ENV: 'production' };
+  if (config.botName) env.MONKY_BOT_NAME = config.botName;
   if (config.mode === 'manual') {
     if (config.serverUrl) env.MONKY_SERVER_URL = config.serverUrl;
     if (config.botToken) env.MONKY_BOT_TOKEN = config.botToken;
@@ -85,7 +86,6 @@ export function generateEcosystem(config: BotConfig): string {
     env.MONKY_SERVE = 'true';
     if (config.servePort) env.MONKY_SERVE_PORT = String(config.servePort);
     if (config.publicHost) env.MONKY_SERVE_PUBLIC_HOST = config.publicHost;
-    if (config.botName) env.MONKY_BOT_NAME = config.botName;
   }
 
   const envLines = Object.entries(env)

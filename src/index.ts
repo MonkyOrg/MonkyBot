@@ -1,5 +1,6 @@
 import { BotClient } from '@monky/bot-sdk';
 import { registerAllCommands } from './commands';
+import { DEFAULT_BOT_NAME, loadBotAvatar } from './profile';
 import { loadOrGenerateKeys } from './utils/keys';
 
 // ── Configuration ────────────────────────────────────────────────────
@@ -12,22 +13,28 @@ const config = {
 
   // Modo marketplace: servir manifest para qualquer servidor instalar.
   serve: process.env.MONKY_SERVE === 'true',
-  servePort: parseInt(process.env.MONKY_SERVE_PORT || '7780', 10),
+  servePort: Number(process.env.MONKY_SERVE_PORT ?? '7780'),
+  serveHost: process.env.MONKY_SERVE_HOST || '0.0.0.0',
   servePublicHost: process.env.MONKY_SERVE_PUBLIC_HOST || 'localhost',
-  botName: process.env.MONKY_BOT_NAME || 'Monky Bot',
+  botName: process.env.MONKY_BOT_NAME || DEFAULT_BOT_NAME,
 };
 
 // ── Bootstrap ────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  console.log('🤖 Monky Bot');
+  console.log(`🤖 ${config.botName}`);
   console.log('');
 
   // Chaves Ed25519 são geradas automaticamente na primeira execução
   // e reutilizadas nas seguintes. Salvas em .keys/
   const keys = loadOrGenerateKeys();
 
-  const bot = new BotClient({ publicKey: keys.publicKeyHex });
+  const avatarBase64 = loadBotAvatar();
+  const bot = new BotClient({
+    publicKey: keys.publicKeyHex,
+    name: config.botName,
+    avatarBase64,
+  });
 
   // Registrar todos os comandos.
   registerAllCommands(bot);
@@ -49,67 +56,89 @@ async function main(): Promise<void> {
     console.error('❌ Erro:', err.message);
   });
 
+  const close = (): Promise<void> => bot.close().finally(() => {
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
+  });
+  const onSignal = (): void => {
+    void close().catch((error: unknown) => {
+      console.error('❌ Erro ao encerrar:', error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    });
+  };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+
   // ── Escolha de modo ────────────────────────────────────────────────
 
-  if (config.serve) {
-    // Marketplace: expõe manifest HTTP. Qualquer servidor Monky pode instalar.
-    const server = await bot.serve({
-      name: config.botName,
-      description: 'O bot oficial de referência do Monky — comandos utilitários, diversão e mais.',
-      port: config.servePort,
-      publicHost: config.servePublicHost,
-    });
+  try {
+    if (config.serve) {
+      if (!Number.isInteger(config.servePort) || config.servePort < 0 || config.servePort > 65535) {
+        throw new Error('MONKY_SERVE_PORT deve ser um número inteiro entre 0 e 65535.');
+      }
+      const server = await bot.serve({
+        name: config.botName,
+        icon: avatarBase64,
+        description: 'O bot oficial de referência do Monky — comandos utilitários, diversão e mais.',
+        port: config.servePort,
+        host: config.serveHost,
+        publicHost: config.servePublicHost,
+      });
 
-    const addr = server.address();
-    const port = typeof addr === 'object' && addr ? addr.port : config.servePort;
-    const host = config.servePublicHost;
-    const manifestUrl = `http://${host}:${port}/manifest`;
-    console.log('');
-    console.log(`🌐 Manifest: ${manifestUrl}`);
-    if (host === 'localhost' || host === '127.0.0.1') {
+      const addr = server.address();
+      const port = typeof addr === 'object' && addr ? addr.port : config.servePort;
+      const host = config.servePublicHost;
+      const urlHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+      const manifestUrl = `http://${urlHost}:${port}/manifest`;
       console.log('');
-      console.log('⚠️  Host "localhost" — outros servidores não conseguirão acessar.');
-      console.log('   Use o IP ou domínio público. Reconfigure com: monkybot setup');
+      console.log(`🌐 Manifest: ${manifestUrl}`);
+      if (host === 'localhost' || host === '127.0.0.1') {
+        console.log('');
+        console.log('⚠️  Host local — outros servidores não conseguirão acessar.');
+        console.log('   Use o IP ou domínio público. Reconfigure com: monkybot setup');
+      }
+      console.log('');
+      console.log('   Para adicionar a um servidor Monky:');
+      console.log('   Configurações do Servidor → Bots → Adicionar Bot via URL');
+      console.log(`   Cole: ${manifestUrl}`);
+      console.log('');
+      console.log('⏳ Aguardando servidores...');
+    } else if (config.serverUrl && config.token) {
+      bot.connect({ serverUrl: config.serverUrl, token: config.token });
+      console.log(`🔌 Conectando a ${config.serverUrl}...`);
+    } else {
+      console.log('⚙️  Nenhuma configuração encontrada. Escolha um modo:');
+      console.log('');
+      console.log('  📌 Modo Manual (um servidor):');
+      console.log('     Defina as variáveis de ambiente:');
+      console.log('       MONKY_SERVER_URL=ws://seu-servidor:3000');
+      console.log('       MONKY_BOT_TOKEN=token_do_bot');
+      console.log('');
+      console.log('     Para obter o token:');
+      console.log('     1. No app Monky → Configurações do Servidor → Bots');
+      console.log('     2. Digite um nome ao bot e clique "Criar"');
+      console.log('     3. Copie o token exibido (só aparece uma vez!)');
+      console.log('');
+      console.log('  🌐 Modo Marketplace (múltiplos servidores):');
+      console.log('     Defina as variáveis de ambiente:');
+      console.log('       MONKY_SERVE=true');
+      console.log('       MONKY_SERVE_PORT=7780');
+      console.log('       MONKY_SERVE_PUBLIC_HOST=seu-ip-ou-dominio');
+      console.log('');
+      console.log('     Qualquer servidor Monky pode adicionar o bot');
+      console.log('     colando a URL do manifest nas configurações.');
+      console.log('');
+      console.log('  📖 Docs: https://monkyorg.github.io/Monky/bots');
+      process.exitCode = 1;
+      await close();
     }
-    console.log('');
-    console.log('   Para instalar em um servidor Monky:');
-    console.log('   Configurações do Servidor → Bots → Instalar Bot via URL');
-    console.log(`   Cole: ${manifestUrl}`);
-    console.log('');
-    console.log('⏳ Aguardando servidores...');
-  } else if (config.serverUrl && config.token) {
-    // Manual: conecta a um servidor usando token.
-    bot.connect({ serverUrl: config.serverUrl, token: config.token });
-    console.log(`🔌 Conectando a ${config.serverUrl}...`);
-  } else {
-    // Nenhum modo configurado — mostrar ajuda.
-    console.log('⚙️  Nenhuma configuração encontrada. Escolha um modo:');
-    console.log('');
-    console.log('  📌 Modo Manual (um servidor):');
-    console.log('     Crie um arquivo .env com:');
-    console.log('       MONKY_SERVER_URL=ws://seu-servidor:3000');
-    console.log('       MONKY_BOT_TOKEN=token_do_bot');
-    console.log('');
-    console.log('     Para obter o token:');
-    console.log('     1. No app Monky → Configurações do Servidor → Bots');
-    console.log('     2. Clique "Criar", dê um nome ao bot');
-    console.log('     3. Copie o token exibido (só aparece uma vez!)');
-    console.log('');
-    console.log('  🌐 Modo Marketplace (múltiplos servidores):');
-    console.log('     Crie um arquivo .env com:');
-    console.log('       MONKY_SERVE=true');
-    console.log('       MONKY_SERVE_PORT=7780');
-    console.log('       MONKY_SERVE_PUBLIC_HOST=seu-ip-ou-dominio');
-    console.log('');
-    console.log('     Qualquer servidor Monky pode instalar o bot');
-    console.log('     colando a URL do manifest nas configurações.');
-    console.log('');
-    console.log('  📖 Docs: https://monkyorg.github.io/Monky/bots');
-    process.exit(1);
+  } catch (error: unknown) {
+    await close();
+    throw error;
   }
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error('Fatal:', err);
-  process.exit(1);
+  process.exitCode = 1;
 });
