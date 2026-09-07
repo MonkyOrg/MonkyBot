@@ -1,0 +1,22 @@
+{
+  "name": "@monky/bot",
+  "version": "1.0.0",
+  "description": "Monky Bot — the official universal reference bot for Monky",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "keywords": ["monky", "bot", "discord-like"],
+  "author": "MonkyOrg",
+  "license": "MIT",
+  "dependencies": {
+    "@monky/bot-sdk": "file:../Monky/packages/bot-sdk"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "ts-node": "^10.9.0",
+    "@types/node": "^20.0.0"
+  }
+}
