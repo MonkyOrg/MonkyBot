@@ -20,7 +20,27 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          # Replace the local file: dependency with the latest bot-sdk from Monky releases
+          LATEST_SDK_URL=$(curl -fsSL -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/MonkyOrg/Monky/releases?per_page=20" | \
+            node -e "
+              const releases = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+              for (const r of releases) {
+                const asset = (r.assets||[]).find(a => a.name.includes('monky-bot-sdk') && a.name.endsWith('.tgz'));
+                if (asset) { process.stdout.write(asset.browser_download_url); process.exit(0); }
+              }
+              process.exit(1);
+            ")
+          
+          # Rewrite package.json to use the release URL instead of file: path
+          node -e "
+            const pkg = require('./package.json');
+            pkg.dependencies['@monky/bot-sdk'] = '${LATEST_SDK_URL}';
+            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          
+          npm install
 
       - name: Build
         run: npm run build
