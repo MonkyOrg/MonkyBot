@@ -6,7 +6,22 @@ O **bot oficial de referência** do Monky — comandos utilitários, diversão e
 
 ## Início rápido
 
-### 1. Instale o Monky Bot
+### Opção A: Instalação via script (recomendado)
+
+```bash
+curl -fsSL https://monkyorg.github.io/install-monkybot.sh | bash
+```
+
+Isso instala o comando `monkybot` globalmente. Depois:
+
+```bash
+monkybot setup      # Configura interativamente (servidor, token, modo)
+monkybot start      # Inicia em background via pm2
+```
+
+### Opção B: Clone para desenvolvimento/customização
+
+Se quiser modificar comandos ou criar os seus próprios:
 
 ```bash
 # Clone o repositório

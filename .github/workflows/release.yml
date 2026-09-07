@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Determine version
+        id: version
+        run: |
+          # Get version from package.json
+          VERSION=$(node -e "console.log(require('./package.json').version)")
+          
+          # Check commit messages since last tag for version bumps
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          
+          if [ -n "$LAST_TAG" ]; then
+            LAST_VERSION=${LAST_TAG#v}
+            IFS='.' read -r MAJOR MINOR PATCH <<< "${LAST_VERSION%-*}"
+            
+            # Scan commits since last tag
+            HAS_FEAT=false
+            HAS_FIX=false
+            HAS_BREAKING=false
+            
+            while IFS= read -r msg; do
+              if echo "$msg" | grep -qiE '^(feat!|BREAKING CHANGE|major)'; then
+                HAS_BREAKING=true
+              elif echo "$msg" | grep -qiE '^feat'; then
+                HAS_FEAT=true
+              elif echo "$msg" | grep -qiE '^fix'; then
+                HAS_FIX=true
+              fi
+            done <<< "$(git log ${LAST_TAG}..HEAD --pretty=format:'%s')"
+            
+            if [ "$HAS_BREAKING" = true ]; then
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+            elif [ "$HAS_FEAT" = true ]; then
+              MINOR=$((MINOR + 1))
+              PATCH=0
+            elif [ "$HAS_FIX" = true ]; then
+              PATCH=$((PATCH + 1))
+            else
+              # Default: patch bump for any change
+              PATCH=$((PATCH + 1))
+            fi
+            
+            VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          fi
+          
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+      - name: Pack tarball
+        run: node scripts/pack.js "${{ steps.version.outputs.version }}"
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          
+          {
+            echo "body<<RELEASE_BODY_EOF"
+            echo "## 🤖 Monky Bot v${{ steps.version.outputs.version }}"
+            echo ""
+            echo "### Instalação rápida"
+            echo ""
+            echo '```bash'
+            echo 'curl -fsSL https://monkyorg.github.io/install-monkybot.sh | bash'
+            echo '```'
+            echo ""
+            echo "### Primeiros passos"
+            echo ""
+            echo '```bash'
+            echo 'monkybot setup   # Configura servidor e token'
+            echo 'monkybot start   # Inicia em background'
+            echo '```'
+            echo ""
+            
+            if [ -n "$LAST_TAG" ]; then
+              echo "### Mudanças desde $LAST_TAG"
+              echo ""
+              git log ${LAST_TAG}..HEAD --pretty=format:'- %s' | head -50
+              echo ""
+            fi
+            
+            echo ""
+            echo "### Artefatos"
+            echo ""
+            echo "| Artefato | Descrição |"
+            echo "|----------|-----------|"
+            echo "| \`monky-bot-${{ steps.version.outputs.version }}.tgz\` | Pacote instalável via npm |"
+            echo ""
+            echo "📖 [Documentação](https://monkyorg.github.io/Monky/bots)"
+            echo "RELEASE_BODY_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="v${{ steps.version.outputs.version }}"
+          TGZ="release/monky-bot-${{ steps.version.outputs.version }}.tgz"
+          
+          # Check if tag already exists
+          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+            echo "Tag $VERSION already exists, skipping release"
+            exit 0
+          fi
+          
+          gh release create "$VERSION" \
+            --title "Monky Bot $VERSION" \
+            --notes "${{ steps.notes.outputs.body }}" \
+            "$TGZ"

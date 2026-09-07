@@ -10,7 +10,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "cli": "node dist/cli.js"
+    "cli": "node dist/cli.js",
+    "pack": "node scripts/pack.js"
   },
   "keywords": ["monky", "bot", "discord-like"],
   "author": "MonkyOrg",
