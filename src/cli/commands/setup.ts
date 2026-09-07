@@ -10,19 +10,8 @@ function prompt(rl: readline.Interface, question: string): Promise<string> {
   });
 }
 
-/** Tries to detect the public IP via an external service, with local fallback. */
-function getExternalIp(): string | null {
-  // Try public IP first (curl ifconfig.me)
-  try {
-    const { execSync } = require('child_process');
-    const publicIp = execSync('curl -fsSL --max-time 3 ifconfig.me', {
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'ignore'],
-    }).trim();
-    if (publicIp && /^\d+\.\d+\.\d+\.\d+$/.test(publicIp)) return publicIp;
-  } catch {}
-
-  // Fallback: local non-loopback interface
+/** Detects a non-loopback local IPv4 address as a hint. */
+function getLocalIp(): string | null {
   const interfaces = os.networkInterfaces();
   for (const entries of Object.values(interfaces)) {
     if (!entries) continue;
@@ -96,16 +85,21 @@ export async function setupCommand(): Promise<void> {
       const portInput = await prompt(rl, `Porta do manifest [${defaultPort}]: `);
       config.servePort = portInput ? parseInt(portInput, 10) : defaultPort;
 
-      const detectedIp = getExternalIp();
-      const defaultHost = existing?.publicHost && existing.publicHost !== 'localhost'
-        ? existing.publicHost
-        : detectedIp || 'localhost';
-      const hostInput = await prompt(rl, `Host público (IP ou domínio) [${defaultHost}]: `);
-      config.publicHost = hostInput || defaultHost;
+      const detectedIp = getLocalIp();
+      const ipHint = detectedIp ? ` (IP local detectado: ${detectedIp})` : '';
+      console.log(`Informe o IP ou domínio público desta máquina.${ipHint}`);
 
-      if (config.publicHost === 'localhost' || config.publicHost === '127.0.0.1') {
+      let publicHost = '';
+      while (!publicHost) {
+        publicHost = await prompt(rl, 'Host público: ');
+        if (!publicHost) {
+          console.log(color('   O host público é obrigatório para o modo marketplace.', ANSI.yellow));
+        }
+      }
+      config.publicHost = publicHost;
+
+      if (publicHost === 'localhost' || publicHost === '127.0.0.1') {
         console.log(color('⚠️  "localhost" só funciona para servidores na mesma máquina.', ANSI.yellow));
-        console.log(color('   Para acesso externo, use o IP ou domínio público.', ANSI.yellow));
       }
 
       const defaultName = existing?.botName || 'Monky Bot';
