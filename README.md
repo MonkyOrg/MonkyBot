@@ -22,41 +22,66 @@ npm install
 3. Clique **Criar**, dê um nome (ex.: "Monky Bot")
 4. **Copie o token** — ele só aparece uma vez!
 
-### 3. Configure
+### 3. Configure e inicie com o CLI
 
 ```bash
-cp .env.example .env
+npm run build
+monkybot setup      # Configura interativamente (servidor, token, modo)
+monkybot start      # Inicia em background via pm2
 ```
 
-Edite o `.env` com os dados do seu servidor:
-
-```env
-MONKY_SERVER_URL=ws://seu-servidor:3000
-MONKY_BOT_TOKEN=cole_o_token_aqui
-```
+O `setup` guia você pelo processo: escolhe o modo (manual ou marketplace), pede a URL do servidor e o token. Depois é só `monkybot start`.
 
 > 💡 A chave de segurança (Ed25519) é **gerada automaticamente** na primeira execução. Não precisa configurar nada.
 
-### 4. Execute
+### CLI — Gerenciamento de processo
+
+O Monky Bot vem com um CLI integrado que usa **pm2** para rodar em background, assim como o Monky CLI do servidor:
+
+```bash
+monkybot setup               # Configura o bot interativamente
+monkybot start               # Inicia em background via pm2
+monkybot stop                # Para o bot
+monkybot restart             # Reinicia aplicando a configuração atual
+monkybot restart --fresh     # Recria o processo pm2 do zero
+monkybot status              # Exibe estado (PID, uptime, memória, CPU)
+monkybot logs                # Exibe logs em tempo real (Ctrl+C para sair)
+monkybot logs --lines 100    # Últimas 100 linhas
+monkybot logs --no-follow    # Imprime logs recentes e sai
+monkybot config              # Exibe a configuração
+monkybot config set <k> <v>  # Altera uma configuração
+monkybot --version           # Versão instalada
+```
+
+A configuração fica salva em `~/.monkybot/config.json`. O pm2 garante que o bot reinicia automaticamente se cair.
+
+> 💡 **Sem precisar manter terminal aberto!** O bot roda como daemon em background.
+
+### Modo alternativo (desenvolvimento)
+
+Para desenvolvimento local sem pm2, você pode rodar diretamente:
 
 ```bash
 npm run dev
 ```
 
-Pronto! O bot conecta, registra os comandos, e os usuários já podem usar `/ping`, `/dado`, etc.
+Ou configurar via `.env` (veja `.env.example`).
 
 ## Modo Marketplace (múltiplos servidores)
 
 Se quiser que **qualquer servidor Monky** possa instalar o bot pela URL:
 
+Via CLI:
+```bash
+monkybot setup   # Escolha opção 2 (Marketplace)
+monkybot start
+```
+
+Ou manualmente via `.env`:
 ```env
 MONKY_SERVE=true
 MONKY_SERVE_PORT=7780
 MONKY_SERVE_PUBLIC_HOST=seu-ip-ou-dominio
-```
-
-```bash
-npm run dev
 ```
 
 O bot imprime a URL do manifest. Qualquer admin de servidor Monky pode colar essa URL em **Configurações → Bots → Instalar Bot via URL** para adicionar o bot automaticamente.
@@ -115,7 +140,16 @@ O bot é um **processo externo** — roda na sua máquina, VPS ou nuvem. Não te
 ```
 MonkyBot/
 ├── src/
-│   ├── index.ts          # Ponto de entrada + configuração
+│   ├── index.ts          # Ponto de entrada (runtime)
+│   ├── cli.ts            # CLI — gerenciamento de processo (monkybot start/stop/...)
+│   ├── cli/
+│   │   ├── constants.ts  # Cores ANSI, paths de config
+│   │   ├── config.ts     # Leitura/escrita de ~/.monkybot/config.json
+│   │   ├── pm2.ts        # Helpers de pm2 (start, stop, ecosystem)
+│   │   ├── process.ts    # Spawn cross-platform
+│   │   └── commands/
+│   │       ├── setup.ts      # Setup interativo
+│   │       └── lifecycle.ts  # start, stop, restart, status, logs, config
 │   ├── commands/
 │   │   ├── index.ts      # Registro de todos os comandos
 │   │   ├── ping.ts
