@@ -10,8 +10,19 @@ function prompt(rl: readline.Interface, question: string): Promise<string> {
   });
 }
 
-/** Tries to detect a non-loopback IPv4 address. */
+/** Tries to detect the public IP via an external service, with local fallback. */
 function getExternalIp(): string | null {
+  // Try public IP first (curl ifconfig.me)
+  try {
+    const { execSync } = require('child_process');
+    const publicIp = execSync('curl -fsSL --max-time 3 ifconfig.me', {
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'ignore'],
+    }).trim();
+    if (publicIp && /^\d+\.\d+\.\d+\.\d+$/.test(publicIp)) return publicIp;
+  } catch {}
+
+  // Fallback: local non-loopback interface
   const interfaces = os.networkInterfaces();
   for (const entries of Object.values(interfaces)) {
     if (!entries) continue;
