@@ -53,72 +53,114 @@ function main() {
     fs.copyFileSync(envExample, path.join(staging, '.env.example'));
   }
 
-  // Bundle @monky/bot-sdk from node_modules (it already includes @monky/shared).
-  // On dev machines this is a symlink to the workspace — dereference it.
+  // ---------------------------------------------------------------------------
+  // Bundle ALL transitive dependencies into node_modules/ so the globally
+  // installed package is fully self-contained. We resolve each package from
+  // the monorepo workspace (file: links) or local node_modules.
+  // ---------------------------------------------------------------------------
+
+  const monorepoRoot = fs.existsSync(path.join(ROOT, 'node_modules', '@monky', 'bot-sdk'))
+    ? (() => {
+        const real = fs.realpathSync(path.join(ROOT, 'node_modules', '@monky', 'bot-sdk'));
+        // e.g. C:\Projetos\Monky\packages\bot-sdk → C:\Projetos\Monky
+        return path.resolve(real, '..', '..');
+      })()
+    : null;
+
+  // Directories where we look for modules (order matters — first match wins).
+  const searchDirs = [
+    path.join(ROOT, 'node_modules'),
+    monorepoRoot ? path.join(monorepoRoot, 'node_modules') : null,
+    // Scoped packages may live adjacent in the monorepo (e.g. packages/shared).
+    monorepoRoot ? path.join(monorepoRoot, 'packages') : null,
+  ].filter(Boolean);
+
+  /**
+   * Recursively collect every production dependency name starting from a
+   * package.json. Returns a Set of package names (e.g. "ws", "@monky/shared").
+   */
+  function collectDeps(pkgJsonPath, visited = new Set()) {
+    if (!fs.existsSync(pkgJsonPath)) return visited;
+    const pkg = readJson(pkgJsonPath);
+    for (const dep of Object.keys(pkg.dependencies || {})) {
+      if (visited.has(dep)) continue;
+      visited.add(dep);
+      // Find the dependency's package.json to recurse.
+      const resolved = resolvePkgDir(dep);
+      if (resolved) {
+        collectDeps(path.join(resolved, 'package.json'), visited);
+      }
+    }
+    return visited;
+  }
+
+  /** Resolve a package name to its real directory on disk. */
+  function resolvePkgDir(name) {
+    // For scoped monorepo packages (e.g. @monky/shared), also check packages/<name>.
+    const segments = name.startsWith('@') ? [name] : [name];
+    // Also try the unscoped name in the monorepo packages/ dir.
+    if (name.startsWith('@monky/')) {
+      segments.push(name.replace('@monky/', ''));
+    }
+    for (const dir of searchDirs) {
+      for (const seg of segments) {
+        const candidate = path.join(dir, seg);
+        if (fs.existsSync(candidate)) {
+          return fs.realpathSync(candidate);
+        }
+      }
+    }
+    return null;
+  }
+
+  // Start from bot-sdk's package.json — this is the entry dependency.
   const sdkSrc = path.join(ROOT, 'node_modules', '@monky', 'bot-sdk');
-  if (fs.existsSync(sdkSrc)) {
-    const realSdkSrc = fs.realpathSync(sdkSrc);
-    const sdkDest = path.join(staging, 'node_modules', '@monky', 'bot-sdk');
-    fs.mkdirSync(sdkDest, { recursive: true });
-    // Copy dist + package.json only (skip node_modules, src, etc.)
-    const sdkDist = path.join(realSdkSrc, 'dist');
-    if (fs.existsSync(sdkDist)) {
-      fs.cpSync(sdkDist, path.join(sdkDest, 'dist'), { recursive: true });
-    }
-    const sdkPkg = path.join(realSdkSrc, 'package.json');
-    if (fs.existsSync(sdkPkg)) {
-      fs.copyFileSync(sdkPkg, path.join(sdkDest, 'package.json'));
-    }
+  const sdkRealDir = fs.existsSync(sdkSrc) ? fs.realpathSync(sdkSrc) : null;
+
+  const allDeps = new Set(['@monky/bot-sdk']);
+  if (sdkRealDir) {
+    collectDeps(path.join(sdkRealDir, 'package.json'), allDeps);
   }
 
-  // Bundle @monky/shared — may be in bot-sdk's node_modules or resolved via workspace.
-  const sharedCandidates = [
-    path.join(ROOT, 'node_modules', '@monky', 'shared'),
-    path.join(ROOT, 'node_modules', '@monky', 'bot-sdk', 'node_modules', '@monky', 'shared'),
-  ];
-  // In workspace setups, shared lives adjacent to bot-sdk in the monorepo.
-  if (fs.existsSync(sdkSrc)) {
-    const realSdk = fs.realpathSync(sdkSrc);
-    sharedCandidates.push(path.resolve(realSdk, '..', 'shared'));
-  }
-  for (const candidate of sharedCandidates) {
-    if (!fs.existsSync(candidate)) continue;
-    const realSharedSrc = fs.realpathSync(candidate);
-    const sharedDest = path.join(staging, 'node_modules', '@monky', 'shared');
-    if (fs.existsSync(sharedDest)) break; // already copied
-    fs.mkdirSync(sharedDest, { recursive: true });
-    const sharedDist = path.join(realSharedSrc, 'dist');
-    if (fs.existsSync(sharedDist)) {
-      fs.cpSync(sharedDist, path.join(sharedDest, 'dist'), { recursive: true });
-    }
-    const sharedPkgFile = path.join(realSharedSrc, 'package.json');
-    if (fs.existsSync(sharedPkgFile)) {
-      fs.copyFileSync(sharedPkgFile, path.join(sharedDest, 'package.json'));
-    }
-    break;
-  }
+  console.log(`[pack] Bundling ${allDeps.size} dependencies: ${[...allDeps].join(', ')}`);
 
-  // Bundle ws — transitive dep of @monky/bot-sdk. In the workspace the
-  // module lives at the monorepo root node_modules, not inside MonkyBot.
-  const wsCandidates = [
-    path.join(ROOT, 'node_modules', 'ws'),
-    path.join(ROOT, 'node_modules', '@monky', 'bot-sdk', 'node_modules', 'ws'),
-  ];
-  if (fs.existsSync(sdkSrc)) {
-    const realSdk = fs.realpathSync(sdkSrc);
-    // monorepo root node_modules
-    wsCandidates.push(path.resolve(realSdk, '..', '..', 'node_modules', 'ws'));
-  }
-  for (const candidate of wsCandidates) {
-    if (!fs.existsSync(candidate)) continue;
-    const realWsSrc = fs.realpathSync(candidate);
-    const wsDest = path.join(staging, 'node_modules', 'ws');
-    if (fs.existsSync(wsDest)) break;
-    fs.cpSync(realWsSrc, wsDest, { recursive: true });
-    break;
+  for (const dep of allDeps) {
+    const srcDir = resolvePkgDir(dep);
+    if (!srcDir) {
+      console.warn(`[pack] WARNING: could not find ${dep} — skipping`);
+      continue;
+    }
+
+    const destDir = path.join(staging, 'node_modules', dep);
+    if (fs.existsSync(destDir)) continue;
+    fs.mkdirSync(destDir, { recursive: true });
+
+    // For @monky/* packages, copy only dist + package.json (skip src, tests, node_modules).
+    if (dep.startsWith('@monky/')) {
+      const distDir = path.join(srcDir, 'dist');
+      if (fs.existsSync(distDir)) {
+        fs.cpSync(distDir, path.join(destDir, 'dist'), { recursive: true });
+      }
+      const pkgFile = path.join(srcDir, 'package.json');
+      if (fs.existsSync(pkgFile)) {
+        fs.copyFileSync(pkgFile, path.join(destDir, 'package.json'));
+      }
+    } else {
+      // Third-party package: copy everything except nested node_modules.
+      fs.cpSync(srcDir, destDir, {
+        recursive: true,
+        filter: (src) => {
+          // Only skip node_modules directories INSIDE the package itself.
+          const rel = path.relative(srcDir, src);
+          return !rel.split(path.sep).includes('node_modules');
+        },
+      });
+    }
   }
 
   // Build the publishable package.json.
+  const depEntries = {};
+  for (const dep of allDeps) depEntries[dep] = '*';
   const publishPkg = {
     name: '@monky/bot',
     version,
@@ -129,12 +171,8 @@ function main() {
     main: 'dist/index.js',
     bin: { monkybot: './dist/cli.js' },
     engines: { node: '>=18' },
-    dependencies: {
-      '@monky/bot-sdk': '*',
-      '@monky/shared': '*',
-      ws: '*',
-    },
-    bundleDependencies: ['@monky/bot-sdk', '@monky/shared', 'ws'],
+    dependencies: depEntries,
+    bundleDependencies: [...allDeps],
   };
 
   fs.writeFileSync(
