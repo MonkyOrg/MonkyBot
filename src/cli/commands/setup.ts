@@ -1,6 +1,7 @@
 import readline from 'readline';
+import os from 'os';
 import path from 'path';
-import { ANSI, color, CONFIG_FILE } from '../constants';
+import { ANSI, color, CONFIG_DIR, CONFIG_FILE } from '../constants';
 import { BotConfig, readConfig, writeConfig } from '../config';
 
 function prompt(rl: readline.Interface, question: string): Promise<string> {
@@ -34,9 +35,9 @@ export async function setupCommand(): Promise<void> {
     const modeChoice = await prompt(rl, 'Modo [1]: ');
     const mode: 'manual' | 'marketplace' = modeChoice === '2' ? 'marketplace' : 'manual';
 
-    // 2. Diretório do bot
-    const defaultDir = existing?.botDir || process.cwd();
-    const botDirInput = await prompt(rl, `Diretório do bot [${defaultDir}]: `);
+    // 2. Diretório de trabalho (onde ficam chaves .keys/ e dados)
+    const defaultDir = existing?.botDir || CONFIG_DIR;
+    const botDirInput = await prompt(rl, `Diretório de trabalho [${defaultDir}]: `);
     const botDir = botDirInput || defaultDir;
 
     const config: BotConfig = { mode, botDir: path.resolve(botDir) };

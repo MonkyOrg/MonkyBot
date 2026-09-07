@@ -23,16 +23,28 @@ function loadConfigOrDie() {
 
 function ensureBotBuilt(botDir: string): void {
   const entry = getBotEntryPath(botDir);
-  if (!fs.existsSync(entry)) {
-    console.log(color('⚠️  Bot não compilado. Compilando...', ANSI.yellow));
-    const result = runSync('npm', ['run', 'build'], { cwd: botDir, stdio: 'inherit' });
-    if (result.status !== 0) {
-      throw new Error(
-        `Falha ao compilar o bot. Execute manualmente: cd ${botDir} && npm run build`
-      );
-    }
-    console.log(color('✅ Bot compilado.', ANSI.green));
+  if (fs.existsSync(entry)) return; // already compiled or global install
+
+  // Only attempt compilation if botDir looks like a git clone (has package.json + src/)
+  const hasPackageJson = fs.existsSync(require('path').join(botDir, 'package.json'));
+  const hasSrc = fs.existsSync(require('path').join(botDir, 'src'));
+
+  if (!hasPackageJson || !hasSrc) {
+    throw new Error(
+      `Entrada do bot não encontrada: ${entry}\n` +
+      `Se instalou via script, o bot já deveria estar compilado.\n` +
+      `Tente reinstalar: curl -fsSL https://monkyorg.github.io/install-monkybot.sh | bash`
+    );
   }
+
+  console.log(color('⚠️  Bot não compilado. Compilando...', ANSI.yellow));
+  const result = runSync('npm', ['run', 'build'], { cwd: botDir, stdio: 'inherit' });
+  if (result.status !== 0) {
+    throw new Error(
+      `Falha ao compilar o bot. Execute manualmente: cd ${botDir} && npm run build`
+    );
+  }
+  console.log(color('✅ Bot compilado.', ANSI.green));
 }
 
 export function startCommand(): void {

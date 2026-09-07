@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { ANSI, color, PM2_PROCESS_NAME } from './constants';
 import { commandSucceeds, runSync } from './process';
-import { BotConfig } from './config';
+import { BotConfig, getBotEntryPath } from './config';
 
 export interface Pm2Process {
   name?: string;
@@ -74,7 +74,7 @@ function forSingleQuotes(value: string): string {
 }
 
 export function generateEcosystem(config: BotConfig): string {
-  const entryPath = forSingleQuotes(path.join(config.botDir, 'dist', 'index.js'));
+  const entryPath = forSingleQuotes(getBotEntryPath(config.botDir));
   const cwd = forSingleQuotes(config.botDir);
 
   const env: Record<string, string> = { NODE_ENV: 'production' };

@@ -15,7 +15,7 @@ export interface BotConfig {
   publicHost?: string;
   botName?: string;
 
-  /** Diretório de trabalho do bot (onde estão os comandos e chaves). */
+  /** Diretório de trabalho do bot (onde ficam as chaves .keys/ e dados). */
   botDir: string;
 }
 
@@ -43,8 +43,16 @@ export function deleteConfig(): void {
 
 /**
  * Returns the path to the bot entry script (dist/index.js).
- * The bot must be built before starting.
+ *
+ * When installed globally via tgz, the compiled code lives inside the
+ * npm package itself (next to cli.js). When running from a git clone,
+ * it's in the botDir's dist/ folder. We check both locations.
  */
 export function getBotEntryPath(botDir: string): string {
+  // 1. Package-relative: dist/index.js next to dist/cli.js (global install)
+  const packageEntry = path.resolve(__dirname, '..', 'index.js');
+  if (fs.existsSync(packageEntry)) return packageEntry;
+
+  // 2. botDir-relative: for git clone setups
   return path.join(botDir, 'dist', 'index.js');
 }
