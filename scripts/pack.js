@@ -98,6 +98,26 @@ function main() {
     break;
   }
 
+  // Bundle ws — transitive dep of @monky/bot-sdk. In the workspace the
+  // module lives at the monorepo root node_modules, not inside MonkyBot.
+  const wsCandidates = [
+    path.join(ROOT, 'node_modules', 'ws'),
+    path.join(ROOT, 'node_modules', '@monky', 'bot-sdk', 'node_modules', 'ws'),
+  ];
+  if (fs.existsSync(sdkSrc)) {
+    const realSdk = fs.realpathSync(sdkSrc);
+    // monorepo root node_modules
+    wsCandidates.push(path.resolve(realSdk, '..', '..', 'node_modules', 'ws'));
+  }
+  for (const candidate of wsCandidates) {
+    if (!fs.existsSync(candidate)) continue;
+    const realWsSrc = fs.realpathSync(candidate);
+    const wsDest = path.join(staging, 'node_modules', 'ws');
+    if (fs.existsSync(wsDest)) break;
+    fs.cpSync(realWsSrc, wsDest, { recursive: true });
+    break;
+  }
+
   // Build the publishable package.json.
   const publishPkg = {
     name: '@monky/bot',
@@ -112,8 +132,9 @@ function main() {
     dependencies: {
       '@monky/bot-sdk': '*',
       '@monky/shared': '*',
+      ws: '*',
     },
-    bundleDependencies: ['@monky/bot-sdk', '@monky/shared'],
+    bundleDependencies: ['@monky/bot-sdk', '@monky/shared', 'ws'],
   };
 
   fs.writeFileSync(
