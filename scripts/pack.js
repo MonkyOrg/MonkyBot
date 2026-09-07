@@ -59,17 +59,18 @@ function main() {
   // the monorepo workspace (file: links) or local node_modules.
   // ---------------------------------------------------------------------------
 
-  const monorepoRoot = fs.existsSync(path.join(ROOT, 'node_modules', '@monky', 'bot-sdk'))
-    ? (() => {
-        const real = fs.realpathSync(path.join(ROOT, 'node_modules', '@monky', 'bot-sdk'));
-        // e.g. C:\Projetos\Monky\packages\bot-sdk → C:\Projetos\Monky
-        return path.resolve(real, '..', '..');
-      })()
-    : null;
+  const sdkPath = path.join(ROOT, 'node_modules', '@monky', 'bot-sdk');
+  const sdkRealPath = fs.existsSync(sdkPath) ? fs.realpathSync(sdkPath) : null;
+  // Detect workspace symlink: realpath differs from the node_modules location.
+  const isWorkspaceLink = sdkRealPath && sdkRealPath !== sdkPath &&
+    !sdkRealPath.includes(path.join('node_modules', '@monky', 'bot-sdk'));
+  const monorepoRoot = isWorkspaceLink ? path.resolve(sdkRealPath, '..', '..') : null;
 
   // Directories where we look for modules (order matters — first match wins).
   const searchDirs = [
     path.join(ROOT, 'node_modules'),
+    // In CI, bundled deps of bot-sdk live inside its own node_modules.
+    sdkRealPath ? path.join(sdkRealPath, 'node_modules') : null,
     monorepoRoot ? path.join(monorepoRoot, 'node_modules') : null,
     // Scoped packages may live adjacent in the monorepo (e.g. packages/shared).
     monorepoRoot ? path.join(monorepoRoot, 'packages') : null,
@@ -114,12 +115,9 @@ function main() {
   }
 
   // Start from bot-sdk's package.json — this is the entry dependency.
-  const sdkSrc = path.join(ROOT, 'node_modules', '@monky', 'bot-sdk');
-  const sdkRealDir = fs.existsSync(sdkSrc) ? fs.realpathSync(sdkSrc) : null;
-
   const allDeps = new Set(['@monky/bot-sdk']);
-  if (sdkRealDir) {
-    collectDeps(path.join(sdkRealDir, 'package.json'), allDeps);
+  if (sdkRealPath) {
+    collectDeps(path.join(sdkRealPath, 'package.json'), allDeps);
   }
 
   console.log(`[pack] Bundling ${allDeps.size} dependencies: ${[...allDeps].join(', ')}`);
