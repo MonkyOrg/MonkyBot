@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { ANSI, color, PM2_PROCESS_NAME } from './constants';
+import { ANSI, color, CONFIG_DIR, PM2_PROCESS_NAME } from './constants';
 import { commandSucceeds, runSync } from './process';
 import { BotConfig, getBotEntryPath } from './config';
 
@@ -65,8 +65,8 @@ export function deleteBotProcess(): void {
   runSync('pm2', ['delete', PM2_PROCESS_NAME], { stdio: 'ignore' });
 }
 
-export function getEcosystemPath(botDir: string): string {
-  return path.join(botDir, 'ecosystem.config.cjs');
+export function getEcosystemPath(): string {
+  return path.join(CONFIG_DIR, 'ecosystem.config.cjs');
 }
 
 function forSingleQuotes(value: string): string {
@@ -109,7 +109,11 @@ ${envLines}
 }
 
 export function writeEcosystem(config: BotConfig): string {
-  const ecosystemPath = getEcosystemPath(config.botDir);
+  // Ensure botDir exists (it's the cwd for the process — .keys/ go there)
+  fs.mkdirSync(config.botDir, { recursive: true });
+  // Ecosystem lives in ~/.monkybot/, not botDir
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  const ecosystemPath = getEcosystemPath();
   fs.writeFileSync(ecosystemPath, generateEcosystem(config), 'utf8');
   return ecosystemPath;
 }
