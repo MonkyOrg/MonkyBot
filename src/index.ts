@@ -1,4 +1,4 @@
-import { MonkyBot } from '@monky/bot-sdk';
+import { BotClient } from '@monky/bot-sdk';
 import { registerAllCommands } from './commands';
 import { loadOrGenerateKeys } from './utils/keys';
 
@@ -27,7 +27,7 @@ async function main(): Promise<void> {
   // e reutilizadas nas seguintes. Salvas em .keys/
   const keys = loadOrGenerateKeys();
 
-  const bot = new MonkyBot({ publicKey: keys.publicKeyHex });
+  const bot = new BotClient({ publicKey: keys.publicKeyHex });
 
   // Registrar todos os comandos.
   registerAllCommands(bot);

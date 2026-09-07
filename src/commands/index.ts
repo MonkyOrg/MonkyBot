@@ -1,4 +1,4 @@
-import { MonkyBot } from '@monky/bot-sdk';
+import { BotClient } from '@monky/bot-sdk';
 import { pingCommand } from './ping';
 import { diceCommand } from './dice';
 import { coinCommand } from './coin';
@@ -9,7 +9,7 @@ import { helpCommand } from './help';
 /**
  * Registers all bot commands on the given MonkyBot instance.
  */
-export function registerAllCommands(bot: MonkyBot): void {
+export function registerAllCommands(bot: BotClient): void {
   bot.command(pingCommand);
   bot.command(diceCommand);
   bot.command(coinCommand);
