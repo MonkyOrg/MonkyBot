@@ -10,6 +10,18 @@ function prompt(rl: readline.Interface, question: string): Promise<string> {
   });
 }
 
+/** Tries to detect a non-loopback IPv4 address. */
+function getExternalIp(): string | null {
+  const interfaces = os.networkInterfaces();
+  for (const entries of Object.values(interfaces)) {
+    if (!entries) continue;
+    for (const entry of entries) {
+      if (entry.family === 'IPv4' && !entry.internal) return entry.address;
+    }
+  }
+  return null;
+}
+
 export async function setupCommand(): Promise<void> {
   const existing = readConfig();
 
@@ -66,15 +78,24 @@ export async function setupCommand(): Promise<void> {
       console.log();
       console.log(color('Modo Marketplace', ANSI.cyan));
       console.log('Qualquer servidor Monky poderá instalar o bot via URL.');
+      console.log('O host público precisa ser acessível pelos servidores que vão instalar o bot.');
       console.log();
 
       const defaultPort = existing?.servePort || 7780;
       const portInput = await prompt(rl, `Porta do manifest [${defaultPort}]: `);
       config.servePort = portInput ? parseInt(portInput, 10) : defaultPort;
 
-      const defaultHost = existing?.publicHost || 'localhost';
-      const hostInput = await prompt(rl, `Host público [${defaultHost}]: `);
+      const detectedIp = getExternalIp();
+      const defaultHost = existing?.publicHost && existing.publicHost !== 'localhost'
+        ? existing.publicHost
+        : detectedIp || 'localhost';
+      const hostInput = await prompt(rl, `Host público (IP ou domínio) [${defaultHost}]: `);
       config.publicHost = hostInput || defaultHost;
+
+      if (config.publicHost === 'localhost' || config.publicHost === '127.0.0.1') {
+        console.log(color('⚠️  "localhost" só funciona para servidores na mesma máquina.', ANSI.yellow));
+        console.log(color('   Para acesso externo, use o IP ou domínio público.', ANSI.yellow));
+      }
 
       const defaultName = existing?.botName || 'Monky Bot';
       const nameInput = await prompt(rl, `Nome do bot [${defaultName}]: `);

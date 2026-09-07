@@ -62,12 +62,19 @@ async function main(): Promise<void> {
 
     const addr = server.address();
     const port = typeof addr === 'object' && addr ? addr.port : config.servePort;
+    const host = config.servePublicHost;
+    const manifestUrl = `http://${host}:${port}/manifest`;
     console.log('');
-    console.log(`🌐 Manifest: http://${config.servePublicHost}:${port}/manifest`);
+    console.log(`🌐 Manifest: ${manifestUrl}`);
+    if (host === 'localhost' || host === '127.0.0.1') {
+      console.log('');
+      console.log('⚠️  Host "localhost" — outros servidores não conseguirão acessar.');
+      console.log('   Use o IP ou domínio público. Reconfigure com: monkybot setup');
+    }
     console.log('');
     console.log('   Para instalar em um servidor Monky:');
     console.log('   Configurações do Servidor → Bots → Instalar Bot via URL');
-    console.log(`   Cole: http://${config.servePublicHost}:${port}/manifest`);
+    console.log(`   Cole: ${manifestUrl}`);
     console.log('');
     console.log('⏳ Aguardando servidores...');
   } else if (config.serverUrl && config.token) {
