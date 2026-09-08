@@ -5,9 +5,13 @@ function checkSdk(root = path.resolve(__dirname, '..')) {
   const fromBot = createRequire(path.join(root, 'package.json'));
   const expected = fromBot('./package.json').monky.protocolVersion;
   const sdk = fromBot('@monky/bot-sdk');
-  if (sdk.PROTOCOL_VERSION !== expected || typeof sdk.BotClient?.prototype.close !== 'function') {
+  const hasPersistentRegistrations =
+    typeof Object.getOwnPropertyDescriptor(sdk.BotClient?.prototype ?? {}, 'registeredServerCount')?.get === 'function';
+  if (sdk.PROTOCOL_VERSION !== expected || typeof sdk.BotClient?.prototype.close !== 'function' ||
+      !hasPersistentRegistrations) {
     throw new Error(
       `MonkyBot requires the bot-sdk for Monky protocol ${expected}; found ${sdk.PROTOCOL_VERSION ?? 'unknown'}. ` +
+      'The SDK must also support persistent marketplace registrations. ' +
       'Use the matching Monky release (or build the matching local shared and bot-sdk workspaces).'
     );
   }

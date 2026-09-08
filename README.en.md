@@ -91,6 +91,28 @@ monkybot --version           # Installed version
 
 Configuration is stored in `~/.monkybot/config.json`. pm2 ensures the bot restarts automatically if it crashes.
 
+### Reconnection after restarting or updating
+
+In marketplace mode, authenticated registrations are saved in `registrations.json`
+inside `.keys` in the working directory (`botDir`). On startup, the bot restores
+its connections and commands without needing to be added again.
+
+Keep the same `botDir` during updates and back up the entire `.keys` directory.
+It contains keys and tokens: do not publish its files. Corrupt registration data
+or an incomplete identity stops startup without erasing the existing data.
+Saved registrations in the logs are not active connections; wait for the connected event.
+
+**Older registrations:** through version 2.0.0, marketplace registrations existed
+only in memory. If a restart already lost them, updating cannot recover them:
+the server stores only the token hash. After updating the bot, revoke the old
+entry in **Server Settings → Bots** and add it by URL again, once.
+This creates a new account; reapply any account-specific settings.
+Do not delete `.keys` during this recovery.
+
+Authentication failures are logged. If protocol versions differ, the bot retries
+while the server is updated; an invalid token requires correcting the registration.
+A failed photo update is reported but does not remove the commands.
+
 > 💡 **No need to keep a terminal open!** The bot runs as a background daemon.
 
 ### Alternative mode (development)
