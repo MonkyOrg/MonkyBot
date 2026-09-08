@@ -93,6 +93,28 @@ monkybot --version           # Versão instalada
 
 A configuração fica salva em `~/.monkybot/config.json`. O pm2 garante que o bot reinicia automaticamente se cair.
 
+### Reconexão após reiniciar ou atualizar
+
+No Marketplace, os vínculos autenticados são salvos em `registrations.json`, dentro
+de `.keys` no diretório de trabalho (`botDir`). Ao iniciar novamente, o bot recupera
+as conexões e os comandos sem precisar ser adicionado outra vez.
+
+Mantenha o mesmo `botDir` nas atualizações e faça backup da pasta `.keys` inteira.
+Ela contém chaves e tokens: não publique seus arquivos. Um arquivo corrompido ou
+uma identidade incompleta interrompe a inicialização, sem apagar os dados.
+`Cadastros salvos` nos logs não significa conectado; aguarde `Conectado ao servidor`.
+
+**Cadastros antigos:** até a versão 2.0.0, os vínculos do Marketplace existiam apenas
+na memória. Se já foram perdidos após reiniciar, atualizar não consegue recuperá-los:
+o servidor armazena somente o hash do token. Depois de atualizar o bot, revogue o
+cadastro antigo em **Configurações do Servidor → Bots** e adicione pela URL novamente,
+uma única vez. Isso cria um novo cadastro; reaplique eventuais configurações específicas.
+Não apague `.keys` para fazer essa recuperação.
+
+Falhas de autenticação aparecem nos logs. Com versões de protocolo diferentes, o
+bot tenta reconectar enquanto o servidor é atualizado; token inválido exige corrigir
+o vínculo. Uma falha ao atualizar a foto é informada, mas não remove os comandos.
+
 > 💡 **Sem precisar manter terminal aberto!** O bot roda como daemon em background.
 
 ### Modo alternativo (desenvolvimento)

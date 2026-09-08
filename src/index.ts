@@ -1,7 +1,7 @@
-import { BotClient } from '@monky/bot-sdk';
+import { BotClient, PROTOCOL_VERSION, ProtocolErrorCode } from '@monky/bot-sdk';
 import { registerAllCommands } from './commands';
 import { DEFAULT_BOT_NAME, loadBotAvatar } from './profile';
-import { loadOrGenerateKeys } from './utils/keys';
+import { loadOrGenerateKeys, REGISTRATIONS_PATH } from './utils/keys';
 
 // ── Configuration ────────────────────────────────────────────────────
 // Todas as variáveis de ambiente são opcionais — veja README.md para detalhes.
@@ -34,6 +34,7 @@ async function main(): Promise<void> {
     publicKey: keys.publicKeyHex,
     name: config.botName,
     avatarBase64,
+    registrationFile: config.serve ? REGISTRATIONS_PATH : undefined,
   });
 
   // Registrar todos os comandos.
@@ -52,8 +53,17 @@ async function main(): Promise<void> {
     console.log(`📥 Registrado no servidor "${info.serverName}" (${info.serverId})`);
   });
 
-  bot.on('error', (err: Error) => {
-    console.error('❌ Erro:', err.message);
+  bot.on('error', (err: Error, info?: { serverId: string }) => {
+    console.error(info ? `❌ Erro no vínculo ${info.serverId}:` : '❌ Erro:', err.message);
+  });
+
+  bot.on('auth_failed', (failure: unknown) => {
+    if (typeof failure === 'object' && failure !== null && 'code' in failure &&
+        failure.code === ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED) {
+      console.error(
+        `❌ O MonkyBot usa o protocolo ${PROTOCOL_VERSION}. Atualize o servidor Monky e o bot para versões compatíveis.`
+      );
+    }
   });
 
   const close = (): Promise<void> => bot.close().finally(() => {
@@ -92,6 +102,10 @@ async function main(): Promise<void> {
       const manifestUrl = `http://${urlHost}:${port}/manifest`;
       console.log('');
       console.log(`🌐 Manifest: ${manifestUrl}`);
+      console.log(`💾 Cadastros salvos: ${bot.registeredServerCount} (${REGISTRATIONS_PATH})`);
+      if (bot.registeredServerCount > 0) {
+        console.log('♻️  Reconectando aos servidores salvos. Aguarde a confirmação de conexão nos logs.');
+      }
       if (host === 'localhost' || host === '127.0.0.1') {
         console.log('');
         console.log('⚠️  Host local — outros servidores não conseguirão acessar.');
