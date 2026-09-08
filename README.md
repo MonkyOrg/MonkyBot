@@ -6,9 +6,12 @@ O **bot oficial de referência** do Monky — comandos utilitários, diversão e
 
 ## Compatibilidade
 
-Esta versão exige **protocolo Monky 8**. Atualize o aplicativo e o servidor Monky
-juntos antes de atualizar o bot; servidores com protocolo 7 não são compatíveis.
+Esta versão exige **protocolo Monky 9**. Atualize o aplicativo e o servidor Monky
+juntos antes de atualizar o bot; servidores com protocolos anteriores não são compatíveis.
 O SDK incluído no pacote é verificado no build e não precisa ser instalado à parte.
+
+A release do bot acompanha o canal do SDK usado no build: um SDK beta gera uma
+versão `-beta`, marcada como pré-release, sem substituir a versão stable.
 
 O nome padrão é **MonkyBot**, com o **logo oficial do Monky** incluído no pacote.
 Nome e avatar são sincronizados também em contas de bot já existentes, nos modos
@@ -162,8 +165,8 @@ O bot imprime a URL do manifest. Qualquer admin de servidor Monky pode colar ess
 | `/ping` | Verifica se o bot está respondendo |
 | `/dado [lados]` | Rola um dado (padrão: 6, máx: 100) |
 | `/moeda` | Cara ou coroa |
-| `/8ball [pergunta]` | Responde à pergunta completa; sem parâmetro, abre um formulário privado |
-| `/enquete` | Assistente privado para criar, revisar e confirmar uma enquete |
+| `/8ball <pergunta>` | Responde à pergunta completa obrigatória, em privado |
+| `/enquete` | Formulário privado que publica uma votação com encerramento automático |
 | `/ajuda` | Lista todos os comandos |
 
 Digite `/`, selecione o comando e preencha seus parâmetros nomeados. Por exemplo,
@@ -173,21 +176,38 @@ Respostas e formulários acompanham o idioma do cliente (**PT-BR ou inglês**).
 
 ### Conversas privadas e enquete guiada
 
-As respostas aparecem **somente no chat de quem chamou o comando**, sem interromper
-o canal. Formulários, prévias e correções também são privados.
+As respostas comuns aparecem **somente no chat de quem chamou o comando**, sem
+interromper o canal. O formulário de enquete é privado, mas seu envio publica a
+pergunta e os botões de votação para os participantes do canal.
 
 1. Execute `/enquete`, sem parâmetros separados por vírgula.
 2. Escreva a pergunta (até 200 caracteres) e de **2 a 10 opções diferentes**.
    Cada opção tem seu próprio campo, com até 80 caracteres; vírgulas podem fazer
    parte do texto de uma opção.
-3. Escolha **Somente para mim** (padrão) ou **Publicar no canal após confirmar**.
-4. Revise a prévia privada. Escolha **Editar enquete** para voltar sem perder os
-   valores, ou confirme o resultado.
-5. Só a escolha explícita de publicar **mais a confirmação** envia a enquete ao
-   canal. Cancelamento, expiração ou desconexão não publicam resultados.
+3. Informe uma **duração inteira** em minutos, horas ou dias (de 1 minuto a
+   30 dias), um **limite de 1 a 10.000 votantes**, ou ambos. Pelo menos um limite
+   é obrigatório.
+4. Clique em **Publicar enquete**. Não há prévia nem segunda confirmação.
+   Se faltar um limite ou a duração ultrapassar 30 dias, o bot explica o erro
+   e reabre o formulário com os dados preenchidos para você corrigir.
+   Cancelar o formulário antes de enviar não cria uma enquete.
+   Isso também funciona em canais privados: o servidor vincula a enquete à
+   invocação autorizada e revalida o acesso de quem a criou nas operações futuras.
+   Se essa pessoa perder acesso ou as permissões necessárias, o bot deixa de
+   receber as respostas e de publicar resultados até a autorização ser restaurada.
+5. Cada pessoa vota pelos botões e pode **trocar seu único voto enquanto a
+   enquete estiver aberta**. O limite conta pessoas diferentes, não cliques.
+6. A votação encerra no primeiro limite atingido: prazo ou quantidade de
+   votantes. O resultado público mostra contagens, percentuais, opção vencedora,
+   empate ou ausência de votos, no idioma de quem criou a enquete.
 
-Este comando cria a pergunta e a lista de opções. Ele **não implementa votação,
-contagem automática nem persistência de votos**.
+O servidor Monky persiste a pergunta, os votos e o encerramento; continua
+controlando o prazo e recusando votos tardios mesmo com o bot desligado. O bot
+recupera enquetes ao conectar e verifica pendências a cada 30 segundos. Falhas
+de consulta ou publicação aparecem nos logs e são tentadas novamente, sem
+duplicar o resultado já publicado. Se o bot estiver offline no encerramento, o
+resultado será publicado depois que ele se reconectar. Uma enquete apenas com
+limite de votantes permanece aberta até atingir esse limite.
 
 ## Adicionando novos comandos
 
@@ -254,7 +274,7 @@ global é instalado, parado ou reiniciado.
 A CI executa esse teste **antes de publicar**. A variável de repositório
 `MONKY_SDK_RELEASE` pode fixar a tag da release do Monky que fornece o SDK; sem ela,
 usa-se o SDK publicado mais recente, betas inclusive. Em ambos os casos, o build
-falha se o SDK não corresponder ao protocolo 8. Publique a release compatível do
+falha se o SDK não corresponder ao protocolo 9 ou não oferecer seletores duráveis. Publique a release compatível do
 Monky antes de publicar este bot.
 
 ## Como funciona

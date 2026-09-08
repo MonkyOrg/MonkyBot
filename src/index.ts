@@ -38,7 +38,7 @@ async function main(): Promise<void> {
   });
 
   // Registrar todos os comandos.
-  registerAllCommands(bot);
+  const disposeCommands = registerAllCommands(bot);
 
   // Eventos.
   bot.on('connected', (info: { serverId: string }) => {
@@ -66,10 +66,13 @@ async function main(): Promise<void> {
     }
   });
 
-  const close = (): Promise<void> => bot.close().finally(() => {
-    process.off('SIGINT', onSignal);
-    process.off('SIGTERM', onSignal);
-  });
+  const close = (): Promise<void> => {
+    disposeCommands();
+    return bot.close().finally(() => {
+      process.off('SIGINT', onSignal);
+      process.off('SIGTERM', onSignal);
+    });
+  };
   const onSignal = (): void => {
     void close().catch((error: unknown) => {
       console.error('❌ Erro ao encerrar:', error instanceof Error ? error.message : String(error));

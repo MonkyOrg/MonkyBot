@@ -56,32 +56,12 @@ export const eightBallCommand: CommandDefinition = {
       name: 'pergunta',
       description: 'Sua pergunta para a bola mágica',
       type: 'string',
-      required: false,
+      required: true,
     },
   ],
   handler: async (ctx) => {
     if (ctx.signal.aborted) return;
-    let question = ctx.args.pergunta;
-    if (question === undefined || question === '') {
-      const values = await ctx.prompt({
-        title: translate(ctx.locale, 'Pergunte à bola mágica', 'Ask the magic ball'),
-        description: translate(ctx.locale, 'Sua pergunta e a resposta ficam só no seu chat.', 'Your question and the answer stay in your chat.'),
-        submitLabel: translate(ctx.locale, 'Perguntar', 'Ask'),
-        fields: [{
-          name: 'pergunta',
-          type: 'text',
-          label: translate(ctx.locale, 'Sua pergunta', 'Your question'),
-          placeholder: translate(ctx.locale, 'O que você gostaria de saber?', 'What would you like to know?'),
-          required: true,
-          minLength: 1,
-          maxLength: 200,
-        }],
-      });
-      if (values === null || ctx.signal.aborted) return;
-      const submitted = values.pergunta;
-      if (typeof submitted !== 'string') return;
-      question = submitted;
-    }
+    const question = ctx.args.pergunta;
     if (typeof question !== 'string' || !question.trim() || question.length > 200) {
       ctx.reply(translate(ctx.locale,
         '⚠️ Escreva uma pergunta com até 200 caracteres.',
