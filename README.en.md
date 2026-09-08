@@ -6,9 +6,12 @@ The **official reference bot** for Monky — utility commands, fun and more.
 
 ## Compatibility
 
-This version requires **Monky protocol 8**. Update the Monky app and server
-together before updating the bot; protocol 7 servers are not compatible.
+This version requires **Monky protocol 9**. Update the Monky app and server
+together before updating the bot; earlier protocol versions are not compatible.
 The bundled SDK is checked during the build and needs no separate installation.
+
+The bot release follows the SDK channel used for the build: a beta SDK produces
+a `-beta` version marked as a prerelease, without replacing the stable version.
 
 The default name is **MonkyBot**, with the **official Monky logo** included in
 the package. Both manual and marketplace modes synchronize the name and avatar,
@@ -159,8 +162,8 @@ The bot prints the manifest URL. Any Monky server admin can paste it in **Server
 | `/ping` | Check whether the bot is responding |
 | `/dado [lados]` | Roll a die (default: 6, max: 100) |
 | `/moeda` | Coin flip |
-| `/8ball [pergunta]` | Answer the complete question; without a parameter, open a private form |
-| `/enquete` | Private wizard to create, review, and confirm a poll |
+| `/8ball <pergunta>` | Answer the required complete question privately |
+| `/enquete` | Private form that publishes voting with automatic closing |
 | `/ajuda` | List all commands |
 
 Type `/`, select a command, and fill its named parameters. For example, `lados`
@@ -170,21 +173,38 @@ client's language (**Brazilian Portuguese or English**).
 
 ### Private conversations and guided polls
 
-Replies appear **only in the invoking user's chat**, without interrupting the
-channel. Forms, previews, and corrections are private too.
+Ordinary replies appear **only in the invoking user's chat**, without
+interrupting the channel. The poll form is private, but submitting it publishes
+the question and voting buttons for channel participants.
 
 1. Run `/enquete`, without comma-separated parameters.
 2. Enter a question (up to 200 characters) and **2–10 different options**.
    Each option has its own field, up to 80 characters; commas can be part of an
    option's text.
-3. Choose **Only for me** (default) or **Publish to the channel after confirmation**.
-4. Review the private preview. Choose **Edit poll** to go back without losing your
-   values, or confirm the result.
-5. Only an explicit publishing choice **plus confirmation** posts the poll to the
-   channel. Cancellation, expiration, and disconnection never publish results.
+3. Set a **whole-number duration** in minutes, hours, or days (1 minute to
+   30 days), a **limit of 1–10,000 voters**, or both. At least one limit is
+   required.
+4. Click **Publish poll**. There is no preview or second confirmation.
+   If a limit is missing or the duration exceeds 30 days, the bot explains the
+   error and reopens the form with your entries preserved for correction.
+   Cancelling the form before submitting does not create a poll.
+   Private channels are supported: the server binds the poll to its authorized
+   invocation and rechecks the creator's access for future operations.
+   If that person loses access or the required permissions, the bot stops
+   receiving responses and publishing results until authorization is restored.
+5. Each person votes using the buttons and may **change their single vote while
+   voting is open**. The limit counts distinct people, not clicks.
+6. Voting closes at the first limit reached: duration or voter count.
+   The public result shows counts, percentages, the winning option, a tie, or no
+   votes, using the poll creator's language.
 
-This command creates the question and option list. It **does not implement voting,
-automatic tallies, or vote persistence**.
+The Monky server persists the question, votes, and closure; it continues enforcing
+expiry and rejecting late votes even when the bot is offline. The bot recovers
+polls on connection and checks for pending results every 30 seconds. List and
+publication failures are logged and retried without duplicating an already
+published result. If the bot is offline when voting closes, results are published
+after it reconnects. A poll with only a voter limit stays open until that limit
+is reached.
 
 ## Adding new commands
 
@@ -251,7 +271,7 @@ does not change global installations or stop/restart existing bot or pm2 process
 CI runs the smoke test **before publishing**. The repository variable
 `MONKY_SDK_RELEASE` can pin the Monky release tag providing the SDK; otherwise,
 the latest published SDK is used, including betas. Either way, the build fails
-unless the SDK matches protocol 8. Publish the compatible Monky release before
+unless the SDK matches protocol 9 and supports durable selectors. Publish the compatible Monky release before
 publishing this bot.
 
 ## How it works

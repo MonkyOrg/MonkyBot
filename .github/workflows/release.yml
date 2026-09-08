@@ -20,6 +20,7 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
+        id: sdk
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MONKY_SDK_RELEASE: ${{ vars.MONKY_SDK_RELEASE }}
@@ -30,16 +31,21 @@ jobs:
           if [ -n "$MONKY_SDK_RELEASE" ]; then
             SDK_ENDPOINT="repos/MonkyOrg/Monky/releases/tags/${MONKY_SDK_RELEASE}"
           fi
-          SDK_URL=$(gh api "$SDK_ENDPOINT" --jq '
+          SDK_METADATA=$(gh api "$SDK_ENDPOINT" --jq '
             (if type == "array" then . else [.] end)
-            | [.[] | select(.draft == false) | .assets[]
+            | [.[] | select(.draft == false)
+              | .prerelease as $prerelease | .assets[]
               | select(.name | startswith("monky-bot-sdk-"))
-              | select(.name | endswith(".tgz"))]
-            | .[0].browser_download_url // empty')
-          if [ -z "$SDK_URL" ]; then
+              | select(.name | endswith(".tgz"))
+              | {url: .browser_download_url, prerelease: $prerelease}]
+            | .[0] // empty')
+          if [ -z "$SDK_METADATA" ]; then
             echo "No published Monky bot-sdk artifact was found." >&2
             exit 1
           fi
+          SDK_URL=$(printf '%s' "$SDK_METADATA" | jq -er '.url')
+          SDK_PRERELEASE=$(printf '%s' "$SDK_METADATA" | jq -er '.prerelease | tostring')
+          echo "prerelease=$SDK_PRERELEASE" >> "$GITHUB_OUTPUT"
           npm pkg set "dependencies.@monky/bot-sdk=$SDK_URL"
           npm install --ignore-scripts --no-audit --no-fund
 
@@ -51,6 +57,8 @@ jobs:
 
       - name: Determine version
         id: version
+        env:
+          SDK_PRERELEASE: ${{ steps.sdk.outputs.prerelease }}
         run: |
           # Get version from package.json
           VERSION=$(node -e "console.log(require('./package.json').version)")
@@ -93,6 +101,12 @@ jobs:
             
             VERSION="${MAJOR}.${MINOR}.${PATCH}"
           fi
+
+          case "$SDK_PRERELEASE" in
+            true) VERSION="${VERSION}-beta" ;;
+            false) ;;
+            *) echo "Missing SDK release channel." >&2; exit 1 ;;
+          esac
           
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION"
@@ -147,6 +161,7 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SDK_PRERELEASE: ${{ steps.sdk.outputs.prerelease }}
         run: |
           VERSION="v${{ steps.version.outputs.version }}"
           TGZ="release/monky-bot-${{ steps.version.outputs.version }}.tgz"
@@ -157,7 +172,11 @@ jobs:
             exit 0
           fi
           
-          gh release create "$VERSION" \
+          RELEASE_FLAGS=()
+          if [ "$SDK_PRERELEASE" = true ]; then
+            RELEASE_FLAGS+=(--prerelease --latest=false)
+          fi
+          gh release create "$VERSION" "${RELEASE_FLAGS[@]}" \
             --title "Monky Bot $VERSION" \
             --notes "${{ steps.notes.outputs.body }}" \
             "$TGZ"
