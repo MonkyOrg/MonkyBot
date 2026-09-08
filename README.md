@@ -116,7 +116,7 @@ Veja `.env.example`. `MONKY_BOT_NAME` vale para ambos os modos e
 
 ## Modo Marketplace (múltiplos servidores)
 
-Se quiser que **qualquer servidor Monky** possa instalar o bot pela URL:
+Se quiser que **qualquer servidor Monky** possa adicionar o bot pela URL:
 
 Via CLI:
 ```bash

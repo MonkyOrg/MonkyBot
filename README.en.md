@@ -113,7 +113,7 @@ controls the listening address (default: `0.0.0.0`).
 
 ## Marketplace Mode (multiple servers)
 
-If you want **any Monky server** to install the bot via URL:
+If you want **any Monky server** to add the bot via URL:
 
 Via CLI:
 ```bash
