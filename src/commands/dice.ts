@@ -1,4 +1,5 @@
-import { CommandDefinition } from '@monky/bot-sdk';
+import type { CommandDefinition } from '@monky/bot-sdk';
+import { translate } from './i18n';
 
 export const diceCommand: CommandDefinition = {
   name: 'dado',
@@ -7,13 +8,24 @@ export const diceCommand: CommandDefinition = {
     {
       name: 'lados',
       description: 'Número de lados do dado (padrão: 6)',
-      type: 'string',
+      type: 'integer',
       required: false,
+      min: 2,
+      max: 100,
     },
   ],
   handler: (ctx) => {
-    const sides = Math.max(2, Math.min(100, parseInt(ctx.args.lados, 10) || 6));
+    if (ctx.signal.aborted) return;
+    const sides = ctx.args.lados ?? 6;
+    if (typeof sides !== 'number' || !Number.isInteger(sides) || sides < 2 || sides > 100) {
+      ctx.reply(translate(ctx.locale,
+        '⚠️ Escolha um número inteiro de lados entre 2 e 100.',
+        '⚠️ Choose a whole number of sides between 2 and 100.'));
+      return;
+    }
     const result = Math.floor(Math.random() * sides) + 1;
-    ctx.reply(`🎲 Rolando d${sides}... **${result}**!`);
+    ctx.reply(translate(ctx.locale,
+      `🎲 Rolando d${sides}... **${result}**!`,
+      `🎲 Rolling d${sides}... **${result}**!`));
   },
 };

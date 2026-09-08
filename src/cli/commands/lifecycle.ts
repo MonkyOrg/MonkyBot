@@ -10,6 +10,7 @@ import {
   deleteBotProcess,
 } from '../pm2';
 import { runSync } from '../process';
+import { DEFAULT_BOT_NAME } from '../../profile';
 
 function loadConfigOrDie() {
   const config = readConfig();
@@ -171,12 +172,12 @@ export function statusCommand(): void {
   console.log(color('Configuração:', ANSI.bold));
   console.log(`  Modo:      ${config.mode}`);
   console.log(`  Bot dir:   ${config.botDir}`);
+  console.log(`  Bot name:  ${config.botName || DEFAULT_BOT_NAME}`);
   if (config.mode === 'manual') {
     console.log(`  Servidor:  ${config.serverUrl}`);
   } else {
     console.log(`  Porta:     ${config.servePort}`);
     console.log(`  Host:      ${config.publicHost}`);
-    console.log(`  Bot name:  ${config.botName}`);
   }
   console.log(`  Config:    ${CONFIG_FILE}`);
 }

@@ -4,6 +4,21 @@ The **official reference bot** for Monky — utility commands, fun and more.
 
 > 📖 To create your **own** bot from scratch, see the [Bot Documentation](https://monkyorg.github.io/Monky/en/bots).
 
+## Compatibility
+
+This version requires **Monky protocol 8**. Update the Monky app and server
+together before updating the bot; protocol 7 servers are not compatible.
+The bundled SDK is checked during the build and needs no separate installation.
+
+The default name is **MonkyBot**, with the **official Monky logo** included in
+the package. Both manual and marketplace modes synchronize the name and avatar,
+including existing bot accounts. To customize the name:
+
+```bash
+monkybot config set botName "My MonkyBot"
+monkybot restart
+```
+
 ## Quick Start
 
 ### Option A: Install via script (recommended)
@@ -26,25 +41,32 @@ If you want to modify commands or create your own:
 ```bash
 git clone https://github.com/MonkyOrg/MonkyBot.git
 cd MonkyBot
-npm install
 ```
+
+For development, `file:../Monky/packages/bot-sdk` expects a sibling Monky checkout
+using the same protocol, with `@monky/shared` and `@monky/bot-sdk` already built.
+Then run `npm install` in this repository. Alternatively, replace that dependency
+with the **bot-sdk** tarball URL from a compatible Monky release using
+`npm install "<tarball URL>"`. Verify compatibility with `npm run check:sdk`.
 
 ### 2. Create the bot on the server
 
 1. Open the Monky app
 2. Go to **Server Settings → Bots**
-3. Click **Create**, give it a name (e.g., "Monky Bot")
+3. Enter a name (e.g., "MonkyBot") and click **Create**
 4. **Copy the token** — it's only shown once!
 
 ### 3. Configure and start with the CLI
 
 ```bash
 npm run build
-monkybot setup      # Interactive setup (server, token, mode)
-monkybot start      # Start in background via pm2
+npm run cli -- setup      # Configure the local checkout
+npm run cli -- start      # Start in background via pm2
 ```
 
-The `setup` wizard walks you through: choose the mode (manual or marketplace), enter the server URL and token. Then just `monkybot start`.
+The `setup` wizard lets you choose manual or marketplace mode, enter the server
+URL and token in manual mode, and set the bot name in either mode. For a global
+installation, use `monkybot setup` and `monkybot start`.
 
 > 💡 The security key (Ed25519) is **automatically generated** on first run. No manual setup needed.
 
@@ -79,11 +101,19 @@ For local development without pm2, you can run directly:
 npm run dev
 ```
 
-Or configure via `.env` (see `.env.example`).
+Variables must be present in the process environment; `npm run dev` and `npm start`
+do not load `.env` automatically. With Node.js 20.6 or newer, you can also use:
+
+```bash
+node --env-file=.env dist/index.js
+```
+
+See `.env.example`. `MONKY_BOT_NAME` applies to both modes, and `MONKY_SERVE_HOST`
+controls the listening address (default: `0.0.0.0`).
 
 ## Marketplace Mode (multiple servers)
 
-If you want **any Monky server** to install the bot via URL:
+If you want **any Monky server** to add the bot via URL:
 
 Via CLI:
 ```bash
@@ -91,25 +121,48 @@ monkybot setup   # Choose option 2 (Marketplace)
 monkybot start
 ```
 
-Or manually via `.env`:
+Or set these environment variables (or load `.env` as shown above):
 ```env
 MONKY_SERVE=true
 MONKY_SERVE_PORT=7780
 MONKY_SERVE_PUBLIC_HOST=your-ip-or-domain
 ```
 
-The bot prints the manifest URL. Any Monky server admin can paste it in **Settings → Bots → Install Bot from URL** to add the bot automatically.
+The bot prints the manifest URL. Any Monky server admin can paste it in **Server Settings → Bots → Add Bot from URL** to add the bot automatically.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `/ping` | Responds with pong and latency |
-| `/dado [sides]` | Roll a dice (default: 6, max: 100) |
+| `/ping` | Check whether the bot is responding |
+| `/dado [lados]` | Roll a die (default: 6, max: 100) |
 | `/moeda` | Coin flip |
-| `/8ball <question>` | Magic 8-ball |
-| `/enquete <question> [options]` | Quick poll (comma-separated options) |
+| `/8ball [pergunta]` | Answer the complete question; without a parameter, open a private form |
+| `/enquete` | Private wizard to create, review, and confirm a poll |
 | `/ajuda` | List all commands |
+
+Type `/`, select a command, and fill its named parameters. For example, `lados`
+in `/dado` is an **integer from 2 to 100**, not text; questions retain their spaces.
+Command names stay the same in every language. Replies and forms follow the
+client's language (**Brazilian Portuguese or English**).
+
+### Private conversations and guided polls
+
+Replies appear **only in the invoking user's chat**, without interrupting the
+channel. Forms, previews, and corrections are private too.
+
+1. Run `/enquete`, without comma-separated parameters.
+2. Enter a question (up to 200 characters) and **2–10 different options**.
+   Each option has its own field, up to 80 characters; commas can be part of an
+   option's text.
+3. Choose **Only for me** (default) or **Publish to the channel after confirmation**.
+4. Review the private preview. Choose **Edit poll** to go back without losing your
+   values, or confirm the result.
+5. Only an explicit publishing choice **plus confirmation** posts the poll to the
+   channel. Cancellation, expiration, and disconnection never publish results.
+
+This command creates the question and option list. It **does not implement voting,
+automatic tallies, or vote persistence**.
 
 ## Adding new commands
 
@@ -133,6 +186,52 @@ import { greetCommand } from './greet';
 bot.command(greetCommand);
 ```
 
+For multiple conversational steps, use `await ctx.prompt(form)` as often as
+needed. Each form returns typed values (`string`, `number`, `boolean`, or
+`string[]`), or `null` on cancellation, timeout, or disconnection:
+
+```ts
+const values = await ctx.prompt({
+  title: ctx.locale === 'en' ? 'Your name' : 'Seu nome',
+  fields: [{
+    name: 'nome',
+    label: ctx.locale === 'en' ? 'Name' : 'Nome',
+    type: 'text',
+    required: true,
+    maxLength: 50,
+  }],
+});
+if (values === null || ctx.signal.aborted) return;
+if (typeof values.nome !== 'string') return;
+ctx.reply(`👋 ${values.nome}`);
+```
+
+Place this snippet inside `handler: async (ctx) => { ... }`. `ctx.reply` and
+`ctx.replyEphemeral` are private; **`ctx.publish` is public** and should only follow
+an explicit choice and confirmation. Keep conversation state local to each
+invocation.
+
+## Validation and release package
+
+```bash
+npm run check:sdk
+npm test
+npm run pack -- 2.0.0
+npm run smoke:pack -- release/monky-bot-2.0.0.tgz
+```
+
+The tarball smoke test installs **offline, with an empty cache and an isolated
+local prefix**, runs CLI `--version`, and starts the packaged bot to request
+`/manifest`, including the official logo. Module resolution outside the installation
+is rejected so checkout dependencies cannot mask packaging failures. The test
+does not change global installations or stop/restart existing bot or pm2 processes.
+
+CI runs the smoke test **before publishing**. The repository variable
+`MONKY_SDK_RELEASE` can pin the Monky release tag providing the SDK; otherwise,
+the latest published SDK is used, including betas. Either way, the build fails
+unless the SDK matches protocol 8. Publish the compatible Monky release before
+publishing this bot.
+
 ## How it works
 
 ```
@@ -142,9 +241,9 @@ Monky Server (routes the message)
         ↓
 Monky Bot (processes) → ctx.reply('🏓 Pong!')
         ↓
-Monky Server (delivers to channel)
+Monky Server (delivers only to the caller)
         ↓
-User sees the response
+User sees the private reply in their own chat
 ```
 
 The bot is an **external process** — it runs on your machine, VPS or cloud. It has no access to the server's database or files. All communication goes through Monky's public protocol via WebSocket.
@@ -155,6 +254,7 @@ The bot is an **external process** — it runs on your machine, VPS or cloud. It
 MonkyBot/
 ├── src/
 │   ├── index.ts          # Entry point (runtime)
+│   ├── profile.ts        # Default name and bundled official avatar
 │   ├── cli.ts            # CLI — process management (monkybot start/stop/...)
 │   ├── cli/
 │   │   ├── constants.ts  # ANSI colors, config paths
@@ -174,6 +274,10 @@ MonkyBot/
 │   │   └── help.ts
 │   └── utils/
 │       └── keys.ts       # Ed25519 key auto-generation
+├── assets/
+│   └── monky-logo.png    # Official Monky logo
+├── tests/               # Command and packaging tests (node:test)
+├── scripts/             # Packaging and offline tarball smoke test
 ├── .env.example
 ├── .keys/                # Auto-generated (not committed)
 │   ├── private.pem

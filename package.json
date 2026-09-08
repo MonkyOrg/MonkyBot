@@ -11,11 +11,20 @@
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "cli": "node dist/cli.js",
-    "pack": "node scripts/pack.js"
+    "pack": "node scripts/pack.js",
+    "check:sdk": "node scripts/check-sdk.js",
+    "test": "npm run build && node --test",
+    "smoke:pack": "node scripts/smoke-pack.js"
   },
   "keywords": ["monky", "bot", "discord-like"],
   "author": "MonkyOrg",
   "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "monky": {
+    "protocolVersion": 8
+  },
   "dependencies": {
     "@monky/bot-sdk": "file:../Monky/packages/bot-sdk"
   },

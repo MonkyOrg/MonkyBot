@@ -6,6 +6,9 @@ export interface BotConfig {
   /** Modo: 'manual' (um servidor) ou 'marketplace' (serve manifest). */
   mode: 'manual' | 'marketplace';
 
+  /** Nome sincronizado com o perfil do bot em ambos os modos. */
+  botName?: string;
+
   // ── Modo manual ──
   serverUrl?: string;
   botToken?: string;
@@ -13,7 +16,6 @@ export interface BotConfig {
   // ── Modo marketplace ──
   servePort?: number;
   publicHost?: string;
-  botName?: string;
 
   /** Diretório de trabalho do bot (onde ficam as chaves .keys/ e dados). */
   botDir: string;
