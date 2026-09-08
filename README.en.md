@@ -10,8 +10,9 @@ This version requires **Monky protocol 9**. Update the Monky app and server
 together before updating the bot; earlier protocol versions are not compatible.
 The bundled SDK is checked during the build and needs no separate installation.
 
-The bot release follows the SDK channel used for the build: a beta SDK produces
-a `-beta` version marked as a prerelease, without replacing the stable version.
+Every push to `main` produces a `-beta` prerelease without replacing stable,
+regardless of the SDK channel. A stable release is published only through
+explicit promotion of a beta.
 
 The default name is **MonkyBot**, with the **official Monky logo** included in
 the package. Both manual and marketplace modes synchronize the name and avatar,
@@ -90,9 +91,55 @@ monkybot logs --no-follow    # Print recent logs and exit
 monkybot config              # Show current config
 monkybot config set <k> <v>  # Change a setting
 monkybot --version           # Installed version
+monkybot update              # Update to the latest stable
+monkybot update --beta       # Include betas and stable; install the newest version
+monkybot update --beta --check # Check the beta channel without installing
+monkybot update --beta --yes # Update without confirmation
+monkybot autoupdate on 04:00 # Follow the installed version's channel
+monkybot autoupdate on 04:00 --beta # Include betas even on a stable installation
+monkybot autoupdate off     # Disable automatic updates
 ```
 
 Configuration is stored in `~/.monkybot/config.json`. pm2 ensures the bot restarts automatically if it crashes.
+
+### Beta and stable updates
+
+`update` checks stable only. `update --beta` includes betas and stable releases,
+selecting by semantic version rather than GitHub publication order.
+A stable release supersedes the beta with the same number (`3.0.1` > `3.0.1-beta`).
+Neither command reinstalls an equal or older version, even with `--yes`.
+`--check` only queries and never installs or restarts the bot.
+
+After installation, the CLI offers to restart the bot if it is running;
+`--yes` also confirms that restart. The configuration, `botDir`, and `.keys`
+directory remain unchanged. Update the client and server to a compatible protocol.
+
+Auto-update reads the installed version on every run: a beta installation
+checks betas; a stable installation checks stable. With
+`autoupdate on [HH:MM] --beta`, the beta channel stays enabled even after
+promotion to stable. After updating an older CLI, run `autoupdate on` again
+with your preferred time and channel to replace the old daemon.
+
+**First entry into the beta channel with an older CLI:** versions through
+`3.0.0-beta` do not recognize `update --beta`. Install the desired beta's `.tgz`
+URL directly, available in its [release notes](https://github.com/MonkyOrg/MonkyBot/releases),
+using `npm install -g "<package URL>"`, then run `monkybot restart`.
+If the old auto-updater is enabled, disable it first with
+`monkybot autoupdate off`; re-enable it afterward using the updated CLI.
+Do not repeat setup or delete `.keys`.
+
+### Publishing and promotion (maintainers)
+
+A push to `main`, or a manual run of the **Release** workflow with an empty
+`promote_tag`, publishes a beta. Numbering starts from the latest release,
+including betas; conventional commits determine patch, minor, or major bumps.
+
+To promote, run **Release** with `promote_tag` set to the published, validated
+beta tag. Promotion preserves its number (`v3.0.1-beta` → `v3.0.1`) and the
+contents of that beta's package and SDK, changing the root package version;
+it does not include later `main` code or replace the SDK.
+The Monky SDK does not need to be promoted separately to preserve that package.
+Promotion is explicit and is never triggered by an ordinary push.
 
 ### Reconnection after restarting or updating
 

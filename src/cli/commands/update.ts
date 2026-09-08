@@ -1,21 +1,16 @@
 import fs from 'fs';
 import path from 'path';
-import { ANSI, color, PM2_PROCESS_NAME } from '../constants';
+import { ANSI, color } from '../constants';
 import { readConfig } from '../config';
 import {
   requirePm2,
   isPm2Available,
   isBotRunning,
-  findBotProcess,
   ensurePm2,
   writeEcosystem,
-  getEcosystemPath,
 } from '../pm2';
 import { runSync } from '../process';
-
-const GITHUB_REPO = 'MonkyOrg/MonkyBot';
-const RELEASES_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20`;
-const LATEST_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+import { compareVersions, fetchLatestRelease, parseVersion } from '../updateReleases';
 
 // ── Version helpers ──────────────────────────────────────────────────
 
@@ -26,110 +21,46 @@ function readPackagedVersion(): string {
   ];
   for (const pkg of candidates) {
     if (!fs.existsSync(pkg)) continue;
-    try {
-      const parsed = JSON.parse(fs.readFileSync(pkg, 'utf8'));
-      if (parsed.version && parsed.version !== '0.0.0') return parsed.version;
-    } catch {}
+    const parsed: unknown = JSON.parse(fs.readFileSync(pkg, 'utf8'));
+    if (typeof parsed === 'object' && parsed !== null && 'version' in parsed &&
+        typeof parsed.version === 'string' && parseVersion(parsed.version)) return parsed.version;
+    throw new Error(`Versão inválida no pacote: ${pkg}`);
   }
-  return '0.0.0';
-}
-
-interface Semver {
-  major: number;
-  minor: number;
-  patch: number;
-}
-
-function parseSemver(v: string): Semver {
-  const clean = String(v || '').replace(/^v/, '').split('-')[0];
-  const [major = 0, minor = 0, patch = 0] = clean.split('.').map((n) => parseInt(n, 10) || 0);
-  return { major, minor, patch };
-}
-
-function compareVersions(local: string, remote: string): number {
-  const a = parseSemver(local);
-  const b = parseSemver(remote);
-  if (a.major !== b.major) return b.major - a.major;
-  if (a.minor !== b.minor) return b.minor - a.minor;
-  if (a.patch !== b.patch) return b.patch - a.patch;
-  return 0;
-}
-
-// ── GitHub API ───────────────────────────────────────────────────────
-
-interface ReleaseInfo {
-  version: string;
-  tgzUrl: string;
-  htmlUrl: string;
-}
-
-async function fetchLatestRelease(): Promise<ReleaseInfo | null> {
-  try {
-    const https = await import('https');
-    return new Promise((resolve) => {
-      const req = https.get(
-        LATEST_URL,
-        { headers: { 'User-Agent': 'monkybot-cli', Accept: 'application/vnd.github.v3+json' } },
-        (res) => {
-          if (res.statusCode !== 200) { resolve(null); return; }
-          let data = '';
-          res.on('data', (chunk: string) => { data += chunk; });
-          res.on('end', () => {
-            try {
-              const release = JSON.parse(data);
-              const version = (release.tag_name || '').replace(/^v/, '');
-              const asset = (release.assets || []).find(
-                (a: { name?: string }) => a.name?.includes('monky-bot') && a.name?.endsWith('.tgz')
-              );
-              if (!asset) { resolve(null); return; }
-              resolve({
-                version,
-                tgzUrl: asset.browser_download_url,
-                htmlUrl: release.html_url || '',
-              });
-            } catch { resolve(null); }
-          });
-        }
-      );
-      req.on('error', () => resolve(null));
-      req.setTimeout(10000, () => { req.destroy(); resolve(null); });
-    });
-  } catch { return null; }
+  throw new Error('Não foi possível determinar a versão instalada.');
 }
 
 // ── Update command ───────────────────────────────────────────────────
 
 export async function updateCommand(args: string[]): Promise<void> {
+  const invalid = args.find((arg) => !['--check', '--yes', '-y', '--beta'].includes(arg));
+  if (invalid) throw new Error(`Opção desconhecida: ${invalid}`);
   const checkOnly = args.includes('--check');
   const assumeYes = args.includes('--yes') || args.includes('-y');
+  const includeBeta = args.includes('--beta');
 
   const local = readPackagedVersion();
   console.log(color(`Versão local: ${local}`, ANSI.dim));
-  console.log(color('Verificando atualizações...', ANSI.dim));
+  console.log(color(`Verificando atualizações (${includeBeta ? 'beta' : 'stable'})...`, ANSI.dim));
 
-  const latest = await fetchLatestRelease();
+  const latest = await fetchLatestRelease(includeBeta);
   if (!latest) {
-    console.log(color('⚠️  Não foi possível verificar atualizações.', ANSI.yellow));
-    console.log(color('Verifique sua conexão ou acesse:', ANSI.dim));
-    console.log(`https://github.com/${GITHUB_REPO}/releases`);
+    console.log(color('Nenhuma release instalável disponível neste canal.', ANSI.yellow));
     return;
   }
 
-  const hasUpdate = compareVersions(local, latest.version) > 0;
+  const comparison = compareVersions(latest.version, local);
+  const hasUpdate = comparison > 0;
 
   if (hasUpdate) {
     console.log(color(`🆕 Nova versão disponível: ${latest.version}`, ANSI.green));
     if (latest.htmlUrl) console.log(`   ${latest.htmlUrl}`);
+  } else if (comparison < 0) {
+    console.log(color(`A versão ${latest.version} deste canal é anterior à instalada. Downgrade bloqueado.`, ANSI.yellow));
   } else {
     console.log(color('✅ Você já está na versão mais recente.', ANSI.green));
   }
 
-  if (checkOnly) return;
-
-  if (!hasUpdate && !assumeYes) {
-    const shouldForce = await promptYesNo('Reinstalar a versão atual?', false);
-    if (!shouldForce) return;
-  }
+  if (checkOnly || !hasUpdate) return;
 
   if (hasUpdate && !assumeYes) {
     const accepted = await promptYesNo(`Atualizar para ${latest.version}?`, true);
@@ -147,8 +78,7 @@ export async function updateCommand(args: string[]): Promise<void> {
 
   const installResult = runSync('npm', ['install', '-g', latest.tgzUrl], { stdio: 'inherit' });
   if (installResult.status !== 0) {
-    console.log(color('❌ Falha ao instalar a atualização.', ANSI.red));
-    return;
+    throw new Error('Falha ao instalar a atualização.', { cause: installResult.error });
   }
 
   console.log();
@@ -158,12 +88,13 @@ export async function updateCommand(args: string[]): Promise<void> {
   if (isPm2Available() && isBotRunning()) {
     if (assumeYes || (await promptYesNo('Reiniciar o bot para aplicar?', true))) {
       const config = readConfig();
-      if (config) {
-        const ecosystemPath = writeEcosystem(config);
-        runSync('pm2', ['startOrRestart', ecosystemPath], { stdio: 'inherit' });
-        runSync('pm2', ['save'], { stdio: 'ignore' });
-        console.log(color('🔄 Bot reiniciado.', ANSI.green));
-      }
+      if (!config) throw new Error('Pacote atualizado, mas não foi possível ler a configuração para reiniciar.');
+      const ecosystemPath = writeEcosystem(config);
+      const restart = runSync('pm2', ['startOrRestart', ecosystemPath], { stdio: 'inherit' });
+      if (restart.status !== 0) throw new Error('Pacote atualizado, mas o reinício do bot falhou.', { cause: restart.error });
+      const saved = runSync('pm2', ['save'], { stdio: 'ignore' });
+      if (saved.status !== 0) throw new Error('Bot reiniciado, mas não foi possível salvar o estado do pm2.');
+      console.log(color('🔄 Bot reiniciado.', ANSI.green));
     }
   }
 }
@@ -192,12 +123,16 @@ export function isAutoUpdateEnabled(): boolean {
   } catch { return false; }
 }
 
-function generateUpdaterScript(cliEntry: string, schedule: string): string {
+export function generateUpdaterScript(cliEntry: string, schedule: string, includeBeta = false): string {
   return `// Monky Bot auto-updater — gerado por "monkybot autoupdate on"
 const { spawnSync } = require('child_process');
+const fs = require('fs');
+const { parseVersion } = require(${JSON.stringify(path.join(path.dirname(cliEntry), 'cli', 'updateReleases.js'))});
 
 const CLI = ${JSON.stringify(cliEntry)};
+const PACKAGE_FILE = ${JSON.stringify(path.resolve(path.dirname(cliEntry), '..', 'package.json'))};
 const SCHEDULE = ${JSON.stringify(schedule)};
+const INCLUDE_BETA = ${JSON.stringify(includeBeta)};
 
 function getMsUntilNextRun() {
   const parts = SCHEDULE.split(':').map(Number);
@@ -213,7 +148,15 @@ function getMsUntilNextRun() {
 function check() {
   console.log('[' + new Date().toISOString() + '] [monkybot-updater] Verificando atualizações...');
   try {
-    spawnSync(process.execPath, [CLI, 'update', '--yes'], { stdio: 'inherit' });
+    const version = parseVersion(JSON.parse(fs.readFileSync(PACKAGE_FILE, 'utf8')).version);
+    if (!version) throw new Error('Versão instalada inválida.');
+    const beta = INCLUDE_BETA || version.beta !== null;
+    console.log('[monkybot-updater] Canal: ' + (beta ? 'beta' : 'stable'));
+    const args = [CLI, 'update', '--yes'];
+    if (beta) args.push('--beta');
+    const result = spawnSync(process.execPath, args, { stdio: 'inherit' });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error('Atualização falhou (status ' + result.status + ').');
   } catch (err) {
     console.error('[monkybot-updater] Erro:', err);
   }
@@ -234,6 +177,7 @@ schedule();
 
 export async function autoUpdateCommand(args: string[]): Promise<void> {
   const action = args[0]; // 'on', 'off', 'status'
+  if (action !== 'on' && args.length > 1) throw new Error('Opções extras não são aceitas neste subcomando.');
 
   if (!action || action === 'status') {
     const enabled = isAutoUpdateEnabled();
@@ -262,15 +206,19 @@ export async function autoUpdateCommand(args: string[]): Promise<void> {
   }
 
   if (action === 'on') {
+    const options = args.slice(1).filter((arg) => arg !== '--beta');
+    const schedule = options[0] || '04:00';
+    if (options.length > 1 || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(schedule)) {
+      throw new Error('Uso: monkybot autoupdate on [HH:MM] [--beta] (horário entre 00:00 e 23:59).');
+    }
+    const includeBeta = args.includes('--beta');
     ensurePm2();
-
-    const schedule = args[1] || '04:00'; // Default: 4am daily
     const cliEntry = getCliEntryPath();
     const scriptPath = getAutoUpdateScriptPath();
 
     // Write updater script
     fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
-    fs.writeFileSync(scriptPath, generateUpdaterScript(cliEntry, schedule), 'utf8');
+    fs.writeFileSync(scriptPath, generateUpdaterScript(cliEntry, schedule, includeBeta), 'utf8');
 
     // Remove existing and start fresh
     runSync('pm2', ['delete', UPDATER_PM2_NAME], { stdio: 'ignore' });
@@ -283,13 +231,13 @@ export async function autoUpdateCommand(args: string[]): Promise<void> {
     console.log();
     console.log(color('✅ Auto-update ativado!', ANSI.green));
     console.log(`   Horário: ${schedule} (diariamente)`);
+    console.log(`   Canal: ${includeBeta ? 'beta' : 'acompanha a versão instalada'}`);
     console.log(`   Script: ${scriptPath}`);
     console.log(color('Para desativar: monkybot autoupdate off', ANSI.dim));
     return;
   }
 
-  console.log(color(`Subcomando desconhecido: ${action}`, ANSI.red));
-  console.log('Uso: monkybot autoupdate [on [HH:MM] | off | status]');
+  throw new Error(`Subcomando desconhecido: ${action}. Uso: monkybot autoupdate [on [HH:MM] [--beta] | off | status]`);
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
