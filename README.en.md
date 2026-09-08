@@ -6,7 +6,7 @@ The **official reference bot** for Monky — utility commands, fun and more.
 
 ## Compatibility
 
-This version requires **Monky protocol 9**. Update the Monky app and server
+This version requires **Monky protocol 10**. Update the Monky app and server
 together before updating the bot; earlier protocol versions are not compatible.
 The bundled SDK is checked during the build and needs no separate installation.
 
@@ -318,7 +318,7 @@ does not change global installations or stop/restart existing bot or pm2 process
 CI runs the smoke test **before publishing**. The repository variable
 `MONKY_SDK_RELEASE` can pin the Monky release tag providing the SDK; otherwise,
 the latest published SDK is used, including betas. Either way, the build fails
-unless the SDK matches protocol 9 and supports durable selectors. Publish the compatible Monky release before
+unless the SDK matches protocol 10 and supports durable selectors. Publish the compatible Monky release before
 publishing this bot.
 
 ## How it works

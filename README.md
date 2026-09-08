@@ -6,7 +6,7 @@ O **bot oficial de referência** do Monky — comandos utilitários, diversão e
 
 ## Compatibilidade
 
-Esta versão exige **protocolo Monky 9**. Atualize o aplicativo e o servidor Monky
+Esta versão exige **protocolo Monky 10**. Atualize o aplicativo e o servidor Monky
 juntos antes de atualizar o bot; servidores com protocolos anteriores não são compatíveis.
 O SDK incluído no pacote é verificado no build e não precisa ser instalado à parte.
 
@@ -321,7 +321,7 @@ global é instalado, parado ou reiniciado.
 A CI executa esse teste **antes de publicar**. A variável de repositório
 `MONKY_SDK_RELEASE` pode fixar a tag da release do Monky que fornece o SDK; sem ela,
 usa-se o SDK publicado mais recente, betas inclusive. Em ambos os casos, o build
-falha se o SDK não corresponder ao protocolo 9 ou não oferecer seletores duráveis. Publique a release compatível do
+falha se o SDK não corresponder ao protocolo 10 ou não oferecer seletores duráveis. Publique a release compatível do
 Monky antes de publicar este bot.
 
 ## Como funciona

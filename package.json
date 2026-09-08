@@ -23,7 +23,7 @@
     "node": ">=18"
   },
   "monky": {
-    "protocolVersion": 9
+    "protocolVersion": 10
   },
   "dependencies": {
     "@monky/bot-sdk": "file:../Monky/packages/bot-sdk"
