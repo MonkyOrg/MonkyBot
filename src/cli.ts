@@ -35,7 +35,7 @@ ${color('COMANDOS', ANSI.bold)}
   restart                Reinicia o bot aplicando a configuração atual
   status                 Exibe o estado do bot (PID, uptime, memória)
   logs                   Exibe os logs do bot em tempo real
-  update                 Atualiza o Monky Bot para a última versão
+  update                 Atualiza o Monky Bot para a última stable
   autoupdate             Gerencia atualização automática
   config                 Exibe a configuração atual
   config set <k> <v>     Altera uma configuração
@@ -49,8 +49,10 @@ ${color('OPÇÕES POR COMANDO', ANSI.bold)}
   logs        --lines <n>   Número de linhas iniciais (padrão: 50)
   logs        --no-follow   Imprime os logs recentes e sai
   update      --check       Apenas verifica, sem instalar
+  update      --beta        Inclui betas e stable, escolhendo a versão mais nova
   update      --yes         Atualiza sem pedir confirmação
   autoupdate  on [HH:MM]   Ativa verificação diária (padrão: 04:00)
+  autoupdate  on --beta    Inclui betas mesmo quando a instalação é stable
   autoupdate  off           Desativa
   autoupdate  status        Mostra se está ativo
 
@@ -59,6 +61,7 @@ ${color('EXEMPLOS', ANSI.bold)}
   monkybot start                     Inicia o bot em background
   monkybot update                    Atualiza para a última versão
   monkybot update --check            Verifica se há atualizações
+  monkybot update --beta             Atualiza incluindo versões beta
   monkybot autoupdate on 03:00       Ativa auto-update diário às 3h
   monkybot logs --lines 100          Exibe as últimas 100 linhas de log
 

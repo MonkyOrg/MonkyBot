@@ -3,6 +3,18 @@ name: Release
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      promote_tag:
+        description: 'Published beta tag to promote unchanged (e.g. v1.8.0-beta). Empty builds a beta.'
+        required: false
+        default: ''
+        type: string
+
+# Serialize both channels so concurrent runs cannot reuse versions or regress latest.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -19,164 +31,58 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install dependencies
-        id: sdk
+      - name: Resolve release and download promotion artifact
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMOTE_TAG: ${{ inputs.promote_tag }}
+        run: node scripts/release.js prepare
+
+      - name: Install dependencies for beta
+        if: steps.release.outputs.promotion != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MONKY_SDK_RELEASE: ${{ vars.MONKY_SDK_RELEASE }}
         run: |
-          # Pin a release with the repository variable when needed. Otherwise
-          # use the latest published SDK, including compatible Monky betas.
+          set -euo pipefail
           SDK_ENDPOINT="repos/MonkyOrg/Monky/releases?per_page=30"
           if [ -n "$MONKY_SDK_RELEASE" ]; then
             SDK_ENDPOINT="repos/MonkyOrg/Monky/releases/tags/${MONKY_SDK_RELEASE}"
           fi
-          SDK_METADATA=$(gh api "$SDK_ENDPOINT" --jq '
+          SDK_URL=$(gh api "$SDK_ENDPOINT" --jq '
             (if type == "array" then . else [.] end)
-            | [.[] | select(.draft == false)
-              | .prerelease as $prerelease | .assets[]
+            | [.[] | select(.draft == false) | .assets[]
               | select(.name | startswith("monky-bot-sdk-"))
-              | select(.name | endswith(".tgz"))
-              | {url: .browser_download_url, prerelease: $prerelease}]
+              | select(.name | endswith(".tgz")) | .browser_download_url]
             | .[0] // empty')
-          if [ -z "$SDK_METADATA" ]; then
+          if [ -z "$SDK_URL" ]; then
             echo "No published Monky bot-sdk artifact was found." >&2
             exit 1
           fi
-          SDK_URL=$(printf '%s' "$SDK_METADATA" | jq -er '.url')
-          SDK_PRERELEASE=$(printf '%s' "$SDK_METADATA" | jq -er '.prerelease | tostring')
-          echo "prerelease=$SDK_PRERELEASE" >> "$GITHUB_OUTPUT"
           npm pkg set "dependencies.@monky/bot-sdk=$SDK_URL"
           npm install --ignore-scripts --no-audit --no-fund
 
       - name: Verify SDK protocol compatibility
+        if: steps.release.outputs.promotion != 'true'
         run: npm run check:sdk
 
-      - name: Build and test
+      - name: Build and test beta
+        if: steps.release.outputs.promotion != 'true'
         run: npm test
 
-      - name: Determine version
-        id: version
+      - name: Pack beta tarball
+        if: steps.release.outputs.promotion != 'true'
         env:
-          SDK_PRERELEASE: ${{ steps.sdk.outputs.prerelease }}
-        run: |
-          # Get version from package.json
-          VERSION=$(node -e "console.log(require('./package.json').version)")
-          
-          # Check commit messages since last tag for version bumps
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          
-          if [ -n "$LAST_TAG" ]; then
-            LAST_VERSION=${LAST_TAG#v}
-            IFS='.' read -r MAJOR MINOR PATCH <<< "${LAST_VERSION%-*}"
-            
-            # Scan commits since last tag
-            HAS_FEAT=false
-            HAS_FIX=false
-            HAS_BREAKING=false
-            
-            while IFS= read -r msg; do
-              if echo "$msg" | grep -qiE '^(feat!|BREAKING CHANGE|major)'; then
-                HAS_BREAKING=true
-              elif echo "$msg" | grep -qiE '^feat'; then
-                HAS_FEAT=true
-              elif echo "$msg" | grep -qiE '^fix'; then
-                HAS_FIX=true
-              fi
-            done <<< "$(git log ${LAST_TAG}..HEAD --pretty=format:'%s')"
-            
-            if [ "$HAS_BREAKING" = true ]; then
-              MAJOR=$((MAJOR + 1))
-              MINOR=0
-              PATCH=0
-            elif [ "$HAS_FEAT" = true ]; then
-              MINOR=$((MINOR + 1))
-              PATCH=0
-            elif [ "$HAS_FIX" = true ]; then
-              PATCH=$((PATCH + 1))
-            else
-              # Default: patch bump for any change
-              PATCH=$((PATCH + 1))
-            fi
-            
-            VERSION="${MAJOR}.${MINOR}.${PATCH}"
-          fi
+          VERSION: ${{ steps.release.outputs.version }}
+        run: node scripts/pack.js "$VERSION"
 
-          case "$SDK_PRERELEASE" in
-            true) VERSION="${VERSION}-beta" ;;
-            false) ;;
-            *) echo "Missing SDK release channel." >&2; exit 1 ;;
-          esac
-          
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Version: $VERSION"
+      # Promotion uses the published beta's complete dependency tree, not today's SDK.
+      - name: Smoke test the offline installed target tarball
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: npm run smoke:pack -- "release/monky-bot-${VERSION}.tgz"
 
-      - name: Pack tarball
-        run: node scripts/pack.js "${{ steps.version.outputs.version }}"
-
-      - name: Smoke test the offline installed tarball
-        run: npm run smoke:pack -- "release/monky-bot-${{ steps.version.outputs.version }}.tgz"
-
-      - name: Generate release notes
-        id: notes
-        run: |
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          
-          {
-            echo "body<<RELEASE_BODY_EOF"
-            echo "## 🤖 Monky Bot v${{ steps.version.outputs.version }}"
-            echo ""
-            echo "### Instalação rápida"
-            echo ""
-            echo '```bash'
-            echo 'curl -fsSL https://monkyorg.github.io/install-monkybot.sh | bash'
-            echo '```'
-            echo ""
-            echo "### Primeiros passos"
-            echo ""
-            echo '```bash'
-            echo 'monkybot setup   # Configura servidor e token'
-            echo 'monkybot start   # Inicia em background'
-            echo '```'
-            echo ""
-            
-            if [ -n "$LAST_TAG" ]; then
-              echo "### Mudanças desde $LAST_TAG"
-              echo ""
-              git log ${LAST_TAG}..HEAD --pretty=format:'- %s' | head -50
-              echo ""
-            fi
-            
-            echo ""
-            echo "### Artefatos"
-            echo ""
-            echo "| Artefato | Descrição |"
-            echo "|----------|-----------|"
-            echo "| \`monky-bot-${{ steps.version.outputs.version }}.tgz\` | Pacote instalável via npm |"
-            echo ""
-            echo "📖 [Documentação](https://monkyorg.github.io/Monky/bots)"
-            echo "RELEASE_BODY_EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Create release
+      - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SDK_PRERELEASE: ${{ steps.sdk.outputs.prerelease }}
-        run: |
-          VERSION="v${{ steps.version.outputs.version }}"
-          TGZ="release/monky-bot-${{ steps.version.outputs.version }}.tgz"
-          
-          # Check if tag already exists
-          if git rev-parse "$VERSION" >/dev/null 2>&1; then
-            echo "Tag $VERSION already exists, skipping release"
-            exit 0
-          fi
-          
-          RELEASE_FLAGS=()
-          if [ "$SDK_PRERELEASE" = true ]; then
-            RELEASE_FLAGS+=(--prerelease --latest=false)
-          fi
-          gh release create "$VERSION" "${RELEASE_FLAGS[@]}" \
-            --title "Monky Bot $VERSION" \
-            --notes "${{ steps.notes.outputs.body }}" \
-            "$TGZ"
+        run: node scripts/release.js publish
