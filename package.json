@@ -16,21 +16,25 @@
     "test": "npm run build && node --test",
     "smoke:pack": "node scripts/smoke-pack.js"
   },
-  "keywords": ["monky", "bot", "discord-like"],
+  "keywords": [
+    "monky",
+    "bot",
+    "discord-like"
+  ],
   "author": "MonkyOrg",
   "license": "MIT",
   "engines": {
     "node": ">=18"
   },
   "monky": {
-    "protocolVersion": 10
+    "protocolVersion": 14
   },
   "dependencies": {
-    "@monky/bot-sdk": "file:../Monky/packages/bot-sdk"
+    "@monky/bot-sdk": "file:vendor/monky-bot-sdk-16.0.1-beta.tgz"
   },
   "devDependencies": {
-    "typescript": "^5.5.0",
+    "@types/node": "^20.0.0",
     "ts-node": "^10.9.0",
-    "@types/node": "^20.0.0"
+    "typescript": "^5.5.0"
   }
 }

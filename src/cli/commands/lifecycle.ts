@@ -11,6 +11,7 @@ import {
 } from '../pm2';
 import { runSync } from '../process';
 import { DEFAULT_BOT_NAME } from '../../profile';
+import { getManifestUrl } from '../../utils/manifest';
 
 function loadConfigOrDie() {
   const config = readConfig();
@@ -50,6 +51,9 @@ function ensureBotBuilt(botDir: string): void {
 
 export function startCommand(): void {
   const config = loadConfigOrDie();
+  const manifestUrl = config.mode === 'marketplace'
+    ? getManifestUrl(config.publicHost, config.servePort)
+    : undefined;
   ensurePm2();
   ensureBotBuilt(config.botDir);
 
@@ -74,7 +78,7 @@ export function startCommand(): void {
   if (config.mode === 'manual') {
     console.log(`   Servidor: ${config.serverUrl}`);
   } else {
-    console.log(`   Manifest: http://${config.publicHost}:${config.servePort}/manifest`);
+    console.log(`   Manifest: ${manifestUrl}`);
   }
   console.log();
   console.log(color('Comandos úteis:', ANSI.bold));

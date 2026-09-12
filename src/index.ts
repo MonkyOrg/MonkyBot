@@ -1,7 +1,8 @@
-import { BotClient, PROTOCOL_VERSION, ProtocolErrorCode } from '@monky/bot-sdk';
+import { BotClient, PROTOCOL_VERSION, ProtocolErrorCode, validateBotPublicHost } from '@monky/bot-sdk';
 import { registerAllCommands } from './commands';
 import { DEFAULT_BOT_NAME, loadBotAvatar } from './profile';
 import { loadOrGenerateKeys, REGISTRATIONS_PATH } from './utils/keys';
+import { getManifestUrl } from './utils/manifest';
 
 // ── Configuration ────────────────────────────────────────────────────
 // Todas as variáveis de ambiente são opcionais — veja README.md para detalhes.
@@ -89,34 +90,33 @@ async function main(): Promise<void> {
       if (!Number.isInteger(config.servePort) || config.servePort < 0 || config.servePort > 65535) {
         throw new Error('MONKY_SERVE_PORT deve ser um número inteiro entre 0 e 65535.');
       }
+      const host = validateBotPublicHost(config.servePublicHost);
       const server = await bot.serve({
         name: config.botName,
         icon: avatarBase64,
         description: 'O bot oficial de referência do Monky — comandos utilitários, diversão e mais.',
         port: config.servePort,
         host: config.serveHost,
-        publicHost: config.servePublicHost,
+        publicHost: host,
       });
 
       const addr = server.address();
       const port = typeof addr === 'object' && addr ? addr.port : config.servePort;
-      const host = config.servePublicHost;
-      const urlHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
-      const manifestUrl = `http://${urlHost}:${port}/manifest`;
+      const manifestUrl = getManifestUrl(host, port);
       console.log('');
       console.log(`🌐 Manifest: ${manifestUrl}`);
       console.log(`💾 Cadastros salvos: ${bot.registeredServerCount} (${REGISTRATIONS_PATH})`);
       if (bot.registeredServerCount > 0) {
         console.log('♻️  Reconectando aos servidores salvos. Aguarde a confirmação de conexão nos logs.');
       }
-      if (host === 'localhost' || host === '127.0.0.1') {
+      if (['localhost', '127.0.0.1', '::1', '[::1]'].includes(host.toLowerCase())) {
         console.log('');
         console.log('⚠️  Host local — outros servidores não conseguirão acessar.');
         console.log('   Use o IP ou domínio público. Reconfigure com: monkybot setup');
       }
       console.log('');
-      console.log('   Para adicionar a um servidor Monky:');
-      console.log('   Configurações do Servidor → Bots → Adicionar Bot via URL');
+      console.log('   Para vincular a um servidor Monky:');
+      console.log('   Cole a URL do manifest em Configurações do Servidor → Bots');
       console.log(`   Cole: ${manifestUrl}`);
       console.log('');
       console.log('⏳ Aguardando servidores...');
@@ -126,24 +126,24 @@ async function main(): Promise<void> {
     } else {
       console.log('⚙️  Nenhuma configuração encontrada. Escolha um modo:');
       console.log('');
-      console.log('  📌 Modo Manual (um servidor):');
-      console.log('     Defina as variáveis de ambiente:');
-      console.log('       MONKY_SERVER_URL=ws://seu-servidor:3000');
-      console.log('       MONKY_BOT_TOKEN=token_do_bot');
-      console.log('');
-      console.log('     Para obter o token:');
-      console.log('     1. No app Monky → Configurações do Servidor → Bots');
-      console.log('     2. Digite um nome ao bot e clique "Criar"');
-      console.log('     3. Copie o token exibido (só aparece uma vez!)');
-      console.log('');
-      console.log('  🌐 Modo Marketplace (múltiplos servidores):');
+      console.log('  🌐 Instalação por URL (recomendado):');
       console.log('     Defina as variáveis de ambiente:');
       console.log('       MONKY_SERVE=true');
       console.log('       MONKY_SERVE_PORT=7780');
       console.log('       MONKY_SERVE_PUBLIC_HOST=seu-ip-ou-dominio');
       console.log('');
-      console.log('     Qualquer servidor Monky pode adicionar o bot');
-      console.log('     colando a URL do manifest nas configurações.');
+      console.log('     Vincule o bot colando a URL do manifest nas configurações.');
+      console.log('     Nome e avatar são fornecidos pelo bot.');
+      console.log('');
+      console.log('  📌 Conexão manual por token (avançado):');
+      console.log('     Defina as variáveis de ambiente:');
+      console.log('       MONKY_SERVER_URL=ws://seu-servidor:3000');
+      console.log('       MONKY_BOT_TOKEN=token_do_bot');
+      console.log('');
+      console.log('     Para obter o token:');
+      console.log('     1. No app Monky → Configurações do Servidor → Bots → Avançado');
+      console.log('     2. Gere um vínculo/token, sem definir nome ou avatar no cliente');
+      console.log('     3. Copie o token exibido (só aparece uma vez!)');
       console.log('');
       console.log('  📖 Docs: https://monkyorg.github.io/Monky/bots');
       process.exitCode = 1;
