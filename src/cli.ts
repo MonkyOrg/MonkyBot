@@ -29,7 +29,7 @@ ${color('USO', ANSI.bold)}
   monkybot <comando> [opções]
 
 ${color('COMANDOS', ANSI.bold)}
-  setup                  Configura o bot interativamente (servidor, token, modo)
+  setup                  Configura o bot interativamente (URL recomendado ou token manual avançado)
   start                  Inicia o bot em background via pm2
   stop                   Para o bot
   restart                Reinicia o bot aplicando a configuração atual
@@ -57,7 +57,7 @@ ${color('OPÇÕES POR COMANDO', ANSI.bold)}
   autoupdate  status        Mostra se está ativo
 
 ${color('EXEMPLOS', ANSI.bold)}
-  monkybot setup                     Configura o bot pela primeira vez
+  monkybot setup                     Configura a instalação por URL (recomendado) ou o token manual
   monkybot start                     Inicia o bot em background
   monkybot update                    Atualiza para a última versão
   monkybot update --check            Verifica se há atualizações
@@ -66,7 +66,7 @@ ${color('EXEMPLOS', ANSI.bold)}
   monkybot logs --lines 100          Exibe as últimas 100 linhas de log
 
 ${color('PRIMEIROS PASSOS', ANSI.bold)}
-  1. monkybot setup     — Configure servidor e token
+  1. monkybot setup     — Escolha URL (recomendado) ou token manual (avançado)
   2. monkybot start     — Inicie em background
   3. monkybot status    — Verifique que está rodando
   4. monkybot logs      — Acompanhe os logs

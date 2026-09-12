@@ -6,7 +6,7 @@ The **official reference bot** for Monky — utility commands, fun and more.
 
 ## Compatibility
 
-This version requires **Monky protocol 10**. Update the Monky app and server
+This version requires **Monky protocol 14**. Update the Monky app and server
 together before updating the bot; earlier protocol versions are not compatible.
 The bundled SDK is checked during the build and needs no separate installation.
 
@@ -23,6 +23,9 @@ monkybot config set botName "My MonkyBot"
 monkybot restart
 ```
 
+The client only links the bot, adjusts its behavior settings, and unlinks it.
+The bot owns its name and avatar; administrators cannot edit them in the client.
+
 ## Quick Start
 
 ### Option A: Install via script (recommended)
@@ -34,7 +37,7 @@ curl -fsSL https://monkyorg.github.io/install-monkybot.sh | bash
 This installs the `monkybot` command globally. Then:
 
 ```bash
-monkybot setup      # Interactive setup (server, token, mode)
+monkybot setup      # Interactive setup (URL installation recommended; manual token advanced)
 monkybot start      # Start in background via pm2
 ```
 
@@ -47,30 +50,37 @@ git clone https://github.com/MonkyOrg/MonkyBot.git
 cd MonkyBot
 ```
 
-For development, `file:../Monky/packages/bot-sdk` expects a sibling Monky checkout
-using the same protocol, with `@monky/shared` and `@monky/bot-sdk` already built.
-Then run `npm install` in this repository. Alternatively, replace that dependency
-with the **bot-sdk** tarball URL from a compatible Monky release using
-`npm install "<tarball URL>"`. Verify compatibility with `npm run check:sdk`.
+The checkout includes the SDK from **Monky v16.0.1-beta** in `vendor`, pinned in
+`package-lock.json`; it does not depend on another local Monky checkout.
+See [vendor/README.md](vendor/README.md) for dependency update instructions.
 
-### 2. Create the bot on the server
-
-1. Open the Monky app
-2. Go to **Server Settings → Bots**
-3. Enter a name (e.g., "MonkyBot") and click **Create**
-4. **Copy the token** — it's only shown once!
-
-### 3. Configure and start with the CLI
+### Configure and start with the CLI
 
 ```bash
+npm ci
+npm run check:sdk
 npm run build
 npm run cli -- setup      # Configure the local checkout
 npm run cli -- start      # Start in background via pm2
 ```
 
-The `setup` wizard lets you choose manual or marketplace mode, enter the server
-URL and token in manual mode, and set the bot name in either mode. For a global
-installation, use `monkybot setup` and `monkybot start`.
+The `setup` wizard offers **URL installation — recommended** first and
+**manual token connection** as the advanced option. In manual mode it asks for
+the server URL and token; in both modes it keeps the current `botDir` and bot
+name as the defaults when reconfiguring. For a global installation, use
+`monkybot setup` and `monkybot start`.
+
+### Link to the server
+
+**By URL (recommended):** start the bot, copy the manifest URL printed by the
+CLI, and paste it in **Server Settings → Bots** in Monky. The server obtains
+the bot's identity and exchanges credentials automatically. The URL must be
+reachable from the Monky server.
+
+**Manual (advanced):** when the server cannot reach an HTTP endpoint on the bot,
+generate a link/token in **Server Settings → Bots → Advanced**. Copy the token,
+shown only once, and choose manual mode in `setup`. The link waits for the bot
+to connect and announce its name and avatar. No client profile fields are needed.
 
 > 💡 The security key (Ed25519) is **automatically generated** on first run. No manual setup needed.
 
@@ -79,7 +89,7 @@ installation, use `monkybot setup` and `monkybot start`.
 Monky Bot includes a built-in CLI that uses **pm2** for background process management, just like the Monky server CLI:
 
 ```bash
-monkybot setup               # Interactive bot configuration
+monkybot setup               # URL setup (recommended) or advanced manual token setup
 monkybot start               # Start in background via pm2
 monkybot stop                # Stop the bot
 monkybot restart             # Restart with current config
@@ -183,13 +193,13 @@ node --env-file=.env dist/index.js
 See `.env.example`. `MONKY_BOT_NAME` applies to both modes, and `MONKY_SERVE_HOST`
 controls the listening address (default: `0.0.0.0`).
 
-## Marketplace Mode (multiple servers)
+## URL Installation (Marketplace, recommended)
 
 If you want **any Monky server** to add the bot via URL:
 
 Via CLI:
 ```bash
-monkybot setup   # Choose option 2 (Marketplace)
+monkybot setup   # Choose option 1 (URL installation — recommended)
 monkybot start
 ```
 
@@ -200,7 +210,9 @@ MONKY_SERVE_PORT=7780
 MONKY_SERVE_PUBLIC_HOST=your-ip-or-domain
 ```
 
-The bot prints the manifest URL. Any Monky server admin can paste it in **Server Settings → Bots → Add Bot from URL** to add the bot automatically.
+The bot prints the manifest URL. An administrator with bot-management permission
+can paste it in **Server Settings → Bots** to link the bot. Its name and avatar
+come from the bot; the client does not create or edit its profile.
 
 ## Commands
 
@@ -318,7 +330,7 @@ does not change global installations or stop/restart existing bot or pm2 process
 CI runs the smoke test **before publishing**. The repository variable
 `MONKY_SDK_RELEASE` can pin the Monky release tag providing the SDK; otherwise,
 the latest published SDK is used, including betas. Either way, the build fails
-unless the SDK matches protocol 10 and supports durable selectors. Publish the compatible Monky release before
+unless the SDK matches protocol 14 and supports durable selectors. Publish the compatible Monky release before
 publishing this bot.
 
 ## How it works
