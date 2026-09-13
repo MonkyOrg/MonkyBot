@@ -96,7 +96,7 @@ async function main(): Promise<void> {
       break;
 
     case 'start':
-      startCommand();
+      await startCommand();
       break;
 
     case 'stop':
@@ -104,7 +104,7 @@ async function main(): Promise<void> {
       break;
 
     case 'restart':
-      restartCommand(rest);
+      await restartCommand(rest);
       break;
 
     case 'status':
@@ -116,7 +116,7 @@ async function main(): Promise<void> {
       break;
 
     case 'config':
-      configCommand(rest);
+      await configCommand(rest);
       break;
 
     case 'update':

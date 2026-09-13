@@ -115,6 +115,50 @@ monkybot autoupdate off     # Desativa a atualização automática
 
 A configuração fica salva em `~/.monkybot/config.json`. O pm2 garante que o bot reinicia automaticamente se cair.
 
+### Porta exclusiva do manifest
+
+Cada bot na mesma máquina precisa de uma **porta livre exclusiva** para instalar
+por URL. `7780` é apenas o padrão, não uma porta reservada. Por exemplo, se outro
+bot já usa `7780`, escolha outra porta livre para o MonkyBot no setup. `/manifest`
+é um endpoint do processo que escuta nessa porta, **não um arquivo compartilhado**:
+usar a URL de outro processo vincula aquele bot, não este.
+
+O CLI testa um bind TCP local no endereço de escuta do runtime: `0.0.0.0` por
+padrão, ou `MONKY_SERVE_HOST` quando definido no ambiente do CLI. No start/restart
+(inclusive update), sem override no shell, o host anterior do próprio processo
+gerenciado no pm2 é preservado; só na ausência dele vale o padrão. Assim um bind
+em `127.0.0.1` não muda para `0.0.0.0` por falta da variável no shell.
+O probe e o ecosystem recebem o mesmo host resolvido e a porta testada. O socket
+de teste é fechado imediatamente; o CLI não consulta o host público, não identifica o dono
+pela resposta do manifest e **não verifica firewall ou acesso externo**.
+
+- **Setup:** uma porta ocupada gera a mensagem “A porta X já está em uso por um
+  bot ou outro serviço; escolha outra porta. Se for este bot, execute monkybot stop
+  antes de continuar.” Só a porta é perguntada novamente, sem refazer as outras
+  respostas. Ela é revalidada antes de salvar. Cancelar ou não obter uma porta
+  válida mantém a configuração anterior e `.keys` intactas.
+- **Reconfigurar o próprio bot:** execute `monkybot stop` **antes** de refazer o
+  setup na mesma porta. O setup e `config set` não param serviços automaticamente
+  nem escolhem outra porta por você.
+- **Configuração:** o teste ocorre somente ao habilitar Marketplace ou mudar sua
+  porta efetiva. Em caso de conflito, nada é salvo. Alterar `publicHost` ou
+  `botName`, repetir o mesmo `mode`/`servePort` e usar o modo manual não testa a
+  porta nem para o bot. O host e a porta continuam sendo validados nas chaves pertinentes.
+- **Start/restart:** o start de um bot parado ou não registrado testa a porta antes
+  de instalar pm2 ou gerar o ecosystem; se o bot já está online e identificado,
+  continua idempotente. O restart para somente o processo identificado deste bot,
+  por ID do pm2, confirma o sucesso dessa parada e testa o bind antes de iniciar.
+  Se a porta continuar ocupada, o bot fica parado e nenhum outro serviço é encerrado.
+  O reinício via update/auto-update usa o mesmo caminho.
+  Falhas ao consultar o inventário do pm2 interrompem a operação; não são tratadas
+  como ausência do bot e a resposta bruta de `jlist` não é exibida.
+
+Erros de permissão (`EACCES`) e outros erros de bind também interrompem a operação
+com o endereço e o motivo; não são tratados como porta livre. O teste é pontual,
+**não reserva a porta até o runtime iniciar**: outro processo ainda pode ocupá-la
+nesse intervalo. Confira os logs após iniciar e libere o acesso de rede necessário
+se o servidor Monky estiver em outra máquina.
+
 ### Atualizações beta e stable
 
 `update` consulta apenas a stable. `update --beta` inclui betas e versões stable,
