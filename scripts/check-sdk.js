@@ -9,11 +9,13 @@ function checkSdk(root = path.resolve(__dirname, '..')) {
     typeof Object.getOwnPropertyDescriptor(sdk.BotClient?.prototype ?? {}, 'registeredServerCount')?.get === 'function';
   const hasSelectors = ['createSelector', 'listSelectors', 'updateSelector', 'closeSelector', 'finalizeSelector']
     .every((method) => typeof sdk.BotClient?.prototype[method] === 'function');
+  const hasVoiceAndScreens = ['joinVoice', 'getVoiceConnection', 'leaveVoice', 'createScreen', 'updateScreen', 'closeScreen', 'listScreens']
+    .every((method) => typeof sdk.BotClient?.prototype[method] === 'function');
   if (sdk.PROTOCOL_VERSION !== expected || typeof sdk.BotClient?.prototype.close !== 'function' ||
-      !hasPersistentRegistrations || !hasSelectors) {
+      !hasPersistentRegistrations || !hasSelectors || !hasVoiceAndScreens) {
     throw new Error(
       `MonkyBot requires the bot-sdk for Monky protocol ${expected}; found ${sdk.PROTOCOL_VERSION ?? 'unknown'}. ` +
-      'The SDK must also support persistent marketplace registrations and durable selectors. ' +
+      'The SDK must also support persistent marketplace registrations, durable selectors, voice and screens. ' +
       'Use the matching Monky release (or build the matching local shared and bot-sdk workspaces).'
     );
   }

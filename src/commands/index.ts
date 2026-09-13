@@ -5,16 +5,26 @@ import { coinCommand } from './coin';
 import { eightBallCommand } from './eightball';
 import { pollCommand, registerPollCommand } from './poll';
 import { helpCommand } from './help';
+import { musicDefinitions, registerMusicCommands } from './music';
+import { ticTacToeDefinition, registerTicTacToe } from './ticTacToe';
 
-export const commands: readonly CommandDefinition[] = [
+const basicCommands: readonly CommandDefinition[] = [
   pingCommand, diceCommand, coinCommand, eightBallCommand, pollCommand, helpCommand,
 ];
+export const commands: readonly Omit<CommandDefinition, 'handler'>[] = [
+  ...basicCommands, ...musicDefinitions, ticTacToeDefinition,
+];
 
-export function registerAllCommands(bot: BotClient): () => void {
-  for (const command of commands) {
+export function registerAllCommands(bot: BotClient): () => Promise<void> {
+  for (const command of basicCommands) {
     if (command !== pollCommand) bot.command(command);
   }
-  const dispose = registerPollCommand(bot);
+  const disposePoll = registerPollCommand(bot);
+  const disposeMusic = registerMusicCommands(bot);
+  const disposeGames = registerTicTacToe(bot);
   console.log(`📋 ${commands.length} comandos registrados.`);
-  return dispose;
+  return async () => {
+    disposePoll();
+    await Promise.all([disposeMusic(), disposeGames()]);
+  };
 }

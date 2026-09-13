@@ -1,0 +1,256 @@
+import type {
+  BotClient, CommandAudioPreviewContext, CommandAudioPreviewData,
+  CommandAutocompleteContext, CommandContext, CommandDefinition,
+} from '@monky/bot-sdk';
+import { LIMITS } from '@monky/bot-sdk';
+import { MusicQueues, type MusicActor, type MusicNotice } from '../music/queue';
+import { MusicError, aborted, musicError } from '../music/errors';
+import { IncompleteAudioError, MUSIC_PREVIEW_DURATION_MS, musicInput, videoUrl, YouTubeSource, type MusicSource, type Track } from '../music/source';
+import { bounded } from '../music/process';
+import { translate } from './i18n';
+import { defaultMusicIdleSeconds, musicIdleMilliseconds, musicSettingsDefinition } from '../music/settings';
+
+export const musicDefinitions: Omit<CommandDefinition, 'handler'>[] = [
+  { name: 'play', voiceRequirement: 'same-bot-channel', description: 'Busca pelo nome ou adiciona um vídeo individual do YouTube à fila.',
+    options: [{ name: 'busca', description: 'Nome ou link de vídeo individual do YouTube', type: 'string', required: true, autocomplete: true }] },
+  { name: 'queue', voiceRequirement: 'same-bot-channel', description: 'Mostra a faixa atual e a fila de próximas faixas.' },
+  { name: 'nowplaying', voiceRequirement: 'same-bot-channel', description: 'Mostra a faixa atual e a posição da reprodução.' },
+  { name: 'pause', voiceRequirement: 'same-bot-channel', description: 'Pausa a faixa atual sem perder a posição.' },
+  { name: 'resume', voiceRequirement: 'same-bot-channel', description: 'Retoma a faixa pausada na mesma posição.' },
+  { name: 'skip', voiceRequirement: 'same-bot-channel', description: 'Pula a faixa atual e avança para a próxima.' },
+  { name: 'stop', voiceRequirement: 'same-bot-channel', description: 'Para a reprodução e limpa a fila.' },
+  { name: 'leave', voiceRequirement: 'same-bot-channel', description: 'Para, limpa a fila e desconecta da sala de voz.' },
+  { name: 'remove', voiceRequirement: 'same-bot-channel', description: 'Remove uma posição da fila de próximas faixas.',
+    options: [{ name: 'position', description: 'Posição na fila de próximas faixas', type: 'integer', required: true, min: 1, max: 50 }] },
+  { name: 'clear', voiceRequirement: 'same-bot-channel', description: 'Limpa apenas as próximas faixas; não interrompe a atual.' },
+];
+
+async function actor(ctx: CommandContext): Promise<MusicActor> {
+  const voiceChannelId = await ctx.getVoiceChannel();
+  return {
+    serverId: ctx.serverId, voiceChannelId, textChannelId: ctx.channelId,
+    locale: ctx.locale, invocationId: ctx.invocationId,
+  };
+}
+function time(seconds: number): string {
+  return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+}
+function label(track: Track): string {
+  return `${track.title} (${time(track.duration)})`;
+}
+
+function replyLines(ctx: CommandContext, text: string): void {
+  let part = '';
+  for (const line of text.split('\n')) {
+    if (line.length > LIMITS.MAX_MESSAGE_LENGTH) throw new MusicError('unavailable');
+    const next = part ? `${part}\n${line}` : line;
+    if (next.length > LIMITS.MAX_MESSAGE_LENGTH) {
+      ctx.reply(part);
+      part = line;
+    } else part = next;
+  }
+  if (part.trim()) ctx.reply(part);
+}
+
+export function createMusicCommands(queues: MusicQueues, source: MusicSource): CommandDefinition[] {
+  const autocomplete = async (ctx: CommandAutocompleteContext) => {
+    if (ctx.signal.aborted) return [];
+    try {
+      if (ctx.optionName !== 'busca') throw new MusicError('input');
+      const input = musicInput(ctx.query);
+      await source.check(ctx.signal);
+      aborted(ctx.signal);
+      const tracks = input.kind === 'url'
+        ? [await source.resolve(input.value, ctx.signal)]
+        : await source.search(input.value, ctx.signal);
+      if (ctx.signal.aborted) return [];
+      return tracks.map((track) => ({
+        value: track.url,
+        label: label(track).slice(0, 100),
+        description: translate(ctx.locale, 'YouTube · Prévia privada de 10 segundos', 'YouTube · Private 10-second preview'),
+        audio: {
+          resourceId: track.url, fileName: `youtube-${track.id}-preview.ogg`,
+          durationMs: MUSIC_PREVIEW_DURATION_MS,
+        },
+      }));
+    } catch (error: unknown) {
+      throw new Error(musicError(error, ctx.locale));
+    }
+  };
+  const audioPreview = async (ctx: CommandAudioPreviewContext): Promise<CommandAudioPreviewData> => {
+    try {
+      aborted(ctx.signal);
+      if (ctx.optionName !== 'busca') throw new MusicError('input');
+      const bytes = await source.preview(videoUrl(ctx.resourceId), ctx.signal);
+      aborted(ctx.signal);
+      return { bytes, mimeType: 'audio/ogg' };
+    } catch (error: unknown) {
+      throw new Error(musicError(error, ctx.locale));
+    }
+  };
+  return musicDefinitions.map((definition) => ({
+    ...definition,
+    ...(definition.name === 'play' ? { autocomplete, audioPreview } : {}),
+    handler: async (ctx) => {
+      if (ctx.signal.aborted) return;
+      try {
+        const caller = await actor(ctx);
+        if (ctx.signal.aborted) return;
+        queues.assertControl(caller);
+        if (definition.name === 'queue' || definition.name === 'nowplaying') {
+          const state = queues.snapshot(ctx.serverId);
+          const current = state.current
+            ? `${state.paused ? '⏸' : state.started ? '▶' : '⏳'} ${label(state.current)} — ${time(state.elapsedMs / 1000)}`
+            : translate(ctx.locale, 'Nenhuma faixa está tocando.', 'Nothing is playing.');
+          const upcoming = definition.name === 'queue'
+            ? `\n\n${translate(ctx.locale, 'Próximas faixas', 'Up next')}:\n${state.upcoming.map((item, index) =>
+              `${index + 1}. ${item.pending ? translate(ctx.locale, 'Carregando…', 'Loading…')
+                : item.title}`).join('\n') ||
+              translate(ctx.locale, 'Fila vazia.', 'Queue empty.')}` : '';
+          replyLines(ctx, `${current}${upcoming}`);
+          return;
+        }
+        if (definition.name === 'play') {
+          const input = musicInput(ctx.args.busca);
+          if (input.kind !== 'url') throw new MusicError('selection');
+          const track = await queues.enqueue(caller, input.value, ctx.signal, () => actor(ctx));
+          if (!ctx.signal.aborted) ctx.reply(translate(ctx.locale,
+            `➕ Adicionado à fila: ${label(track)}. O aviso de reprodução aparece quando a faixa começa a avançar.`,
+            `➕ Added to queue: ${label(track)}. A playback notice appears when the track starts advancing.`));
+        } else {
+          const control = definition.name;
+          if (control !== 'pause' && control !== 'resume' && control !== 'skip' && control !== 'stop' &&
+              control !== 'leave' && control !== 'remove' && control !== 'clear') return;
+          const position = typeof ctx.args.position === 'number' ? ctx.args.position : undefined;
+          await queues.control(caller, control, position);
+          if (!ctx.signal.aborted) {
+            const done = {
+              pause: ['Reprodução pausada.', 'Playback paused.'], resume: ['Reprodução retomada.', 'Playback resumed.'],
+              skip: ['Faixa pulada.', 'Track skipped.'], stop: ['Reprodução parada e fila limpa.', 'Playback stopped and queue cleared.'],
+              leave: ['Reprodução parada, fila limpa e sala desconectada.', 'Playback stopped, queue cleared and voice disconnected.'],
+              remove: ['Faixa removida da fila.', 'Track removed from the queue.'], clear: ['Próximas faixas removidas; faixa atual preservada.', 'Upcoming tracks cleared; current track preserved.'],
+            };
+            ctx.reply(done[control][ctx.locale === 'en' ? 1 : 0]);
+          }
+        }
+      } catch (error: unknown) {
+        if (!ctx.signal.aborted) ctx.reply(`⚠️ ${musicError(error, ctx.locale)}`);
+      }
+    },
+  }));
+}
+
+export function registerMusicCommands(bot: BotClient): () => Promise<void> {
+  const source = new YouTubeSource();
+  const seconds = defaultMusicIdleSeconds();
+  bot.settings(musicSettingsDefinition(seconds));
+  const notice = async (event: MusicNotice, signal?: AbortSignal): Promise<void> => {
+    if (signal) aborted(signal);
+    const sending = bot.sendMessage(event.actor.serverId, event.actor.textChannelId, musicNoticeText(event));
+    if (signal) await bounded(sending, signal, 5000);
+    else await sending;
+  };
+  const queues = new MusicQueues(source, bot, notice, seconds * 1000,
+    (serverId) => musicIdleMilliseconds(bot.getServerSettings(serverId)));
+  const detachSettings = bot.onSettingsChanged((_snapshot, { serverId }) => queues.refreshGracePeriod(serverId));
+  for (const command of createMusicCommands(queues, source)) bot.command(command);
+  const interrupted = new Map<string, { actor: MusicActor; sending: boolean }>();
+  const disconnectQueue = (serverId: string, error?: unknown): void => {
+    void queues.disconnect(serverId, error).catch(() => console.error('[music] Voice teardown failed.'));
+  };
+  const rememberInterruption = (serverId: string): void => {
+    const actor = queues.notificationActor(serverId);
+    if (actor) {
+      if (interrupted.has(serverId) || interrupted.size < 128) interrupted.set(serverId, { actor, sending: false });
+      else console.error('[music] Disconnection notice limit reached.');
+    }
+  };
+  const disconnected = ({ serverId }: { serverId: string }): void => {
+    rememberInterruption(serverId);
+    disconnectQueue(serverId);
+  };
+  const connected = ({ serverId }: { serverId: string }): void => {
+    const interruption = interrupted.get(serverId);
+    if (!interruption || interruption.sending) return;
+    const playback = queues.snapshot(serverId);
+    if (playback.current && playback.started) {
+      interrupted.delete(serverId);
+      return;
+    }
+    const { actor } = interruption;
+    interruption.sending = true;
+    void bounded(bot.sendMessage(serverId, actor.textChannelId, translate(actor.locale,
+      '⚠️ O bot perdeu a conexão com o servidor e a reprodução foi interrompida. A conexão voltou, mas a fila não foi retomada.',
+      '⚠️ The bot lost its server connection and playback was interrupted. The connection is back, but the queue was not resumed.')),
+    new AbortController().signal, 10_000)
+      .then(() => { if (interrupted.get(serverId) === interruption) interrupted.delete(serverId); })
+      .catch(() => console.error('[music] Could not deliver the disconnection notice.'))
+      .finally(() => { interruption.sending = false; });
+  };
+  const voiceDisconnected = ({ serverId, reason, channelId }: { serverId: string; reason: string; channelId?: string }): void => {
+    // The SDK clears the disconnected voice first; an existing one belongs to a newer generation.
+    if (bot.getVoiceConnection(serverId) || (channelId && queues.snapshot(serverId).channelId !== channelId)) return;
+    if (['disconnected', 'socket_lost', 'server_shutdown'].includes(reason)) {
+      rememberInterruption(serverId);
+      disconnectQueue(serverId);
+    } else {
+      disconnectQueue(serverId, ['left', 'join_failed'].includes(reason) ? undefined : new MusicError('voice_runtime'));
+    }
+  };
+  const runtimeError = (error: Error, info?: { serverId: string }): void => {
+    if (info?.serverId) void queues.reportRuntimeError(info.serverId, error);
+  };
+  const participants = (event: { serverId: string; channelId: string; humanParticipantCount: number }): void => {
+    queues.participantsChanged(event.serverId, event.channelId, event.humanParticipantCount);
+  };
+  let disposal: Promise<void> | undefined;
+  const onClosed = (): void => { void dispose().catch(() => console.error('[music] Shutdown failed.')); };
+  const dispose = (): Promise<void> => {
+    bot.off('disconnected', disconnected);
+    bot.off('connected', connected);
+    bot.off('voiceDisconnected', voiceDisconnected);
+    bot.off('error', runtimeError);
+    bot.off('voiceParticipantsChanged', participants);
+    bot.off('closed', onClosed);
+    detachSettings();
+    interrupted.clear();
+    return disposal ??= queues.dispose();
+  };
+  bot.on('disconnected', disconnected);
+  bot.on('connected', connected);
+  bot.on('voiceDisconnected', voiceDisconnected);
+  bot.on('error', runtimeError);
+  bot.on('voiceParticipantsChanged', participants);
+  bot.once('closed', onClosed);
+  return dispose;
+}
+
+function musicNoticeText(event: MusicNotice): string {
+  const locale = event.actor.locale;
+  switch (event.type) {
+    case 'started':
+      return translate(locale, `▶ Tocando: ${label(event.track)}`, `▶ Now playing: ${label(event.track)}`);
+    case 'ended':
+      return translate(locale,
+        '✅ Fim da fila. Vou sair da voz após o tempo de inatividade configurado se nenhuma música for adicionada.',
+        '✅ Queue finished. I will leave voice after the configured idle timeout unless another track is added.');
+    case 'runtime-error':
+      return translate(locale,
+        '⚠️ Não foi possível sair da sala de voz automaticamente. Use /leave ou reconecte o bot.',
+        '⚠️ Could not leave the voice room automatically. Use /leave or reconnect the bot.');
+    case 'recovery-failed':
+      return translate(locale,
+        `⚠️ Falha ao retomar ${label(event.track)} após ${event.attempts} tentativas consecutivas sem avanço do áudio. A faixa foi removida da fila.`,
+        `⚠️ Could not resume ${label(event.track)} after ${event.attempts} consecutive attempts without audio progress. The track was removed from the queue.`);
+    case 'failed': {
+      const reason = event.error instanceof IncompleteAudioError
+        ? translate(locale,
+          `A fonte entregou áudio incompleto (${time(event.error.emittedDurationMs / 1000)} de aproximadamente ${time(event.error.expectedDurationMs / 1000)}).`,
+          `The source delivered incomplete audio (${time(event.error.emittedDurationMs / 1000)} of approximately ${time(event.error.expectedDurationMs / 1000)}).`)
+        : musicError(event.error, locale);
+      return `⚠️ ${event.track ? `${label(event.track)}: ` : ''}${reason} ${translate(locale,
+        'A reprodução parou. Verifique a conexão de voz ou adicione outra faixa.',
+        'Playback stopped. Check the voice connection or add another track.')}`;
+    }
+  }
+}

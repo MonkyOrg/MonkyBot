@@ -6,7 +6,7 @@ O **bot oficial de referência** do Monky — comandos utilitários, diversão e
 
 ## Compatibilidade
 
-Esta versão exige **protocolo Monky 14**. Atualize o aplicativo e o servidor Monky
+Esta versão exige **protocolo Monky 15**. Atualize o aplicativo e o servidor Monky
 juntos antes de atualizar o bot; servidores com protocolos anteriores não são compatíveis.
 O SDK incluído no pacote é verificado no build e não precisa ser instalado à parte.
 
@@ -52,9 +52,9 @@ git clone https://github.com/MonkyOrg/MonkyBot.git
 cd MonkyBot
 ```
 
-O checkout inclui o SDK da release **Monky v16.0.1-beta** em `vendor`, fixado no
+O checkout inclui o SDK compatível em `vendor`, fixado no
 `package-lock.json`; não depende de outro checkout do Monky nesta máquina.
-Veja [vendor/README.md](vendor/README.md) para atualizar essa dependência.
+Veja [vendor/README.md](vendor/README.md) para consultar sua origem e atualizar essa dependência.
 
 ### Configure e inicie com o CLI
 
@@ -80,8 +80,9 @@ obtém a identidade do bot e troca as credenciais automaticamente. A URL deve
 estar acessível a partir do servidor Monky.
 
 **Manual (avançado):** quando o servidor não puder acessar um endpoint HTTP
-do bot, gere um vínculo/token em **Configurações do Servidor → Bots →
-Avançado**. Copie o token, exibido uma única vez, e escolha a opção manual
+do bot, vá em **Configurações do Servidor → Bots → Gerar vínculo/token**,
+abra **Mostrar opção avançada** e clique em **Gerar token**.
+Copie o token, exibido uma única vez, e escolha a opção manual
 no `setup`. O vínculo aguarda a conexão do bot para receber seu nome e avatar.
 Não é necessário definir esses campos no cliente.
 
@@ -271,6 +272,16 @@ Nome e avatar vêm do bot; não há criação ou edição de perfil no cliente.
 | `/moeda` | Cara ou coroa |
 | `/8ball <pergunta>` | Responde à pergunta completa obrigatória, em privado |
 | `/enquete` | Formulário privado que publica uma votação com encerramento automático |
+| `/play <busca>` | Busca por nome ou link do YouTube, prévia privada e seleção para adicionar à fila |
+| `/queue` | Faixa atual e fila numerada de próximas faixas |
+| `/nowplaying` | Faixa atual, pausa/carregamento e posição |
+| `/pause` / `/resume` | Pausa e retoma na mesma posição, sem reiniciar |
+| `/skip` | Pula a faixa atual (ou o primeiro carregamento pendente) |
+| `/stop` | Para e limpa toda a fila; permanece conectado durante a carência |
+| `/leave` | Para, limpa a fila e sai da voz |
+| `/remove <position>` | Remove uma posição, a partir de 1, das próximas faixas |
+| `/clear` | Limpa somente as próximas faixas, preservando a atual |
+| `/jogo-da-velha` | Tela compartilhada para 2 jogadores, com espectadores |
 | `/ajuda` | Lista todos os comandos |
 
 Digite `/`, selecione o comando e preencha seus parâmetros nomeados. Por exemplo,
@@ -312,6 +323,180 @@ de consulta ou publicação aparecem nos logs e são tentadas novamente, sem
 duplicar o resultado já publicado. Se o bot estiver offline no encerramento, o
 resultado será publicado depois que ele se reconectar. Uma enquete apenas com
 limite de votantes permanece aberta até atingir esse limite.
+
+### Música: pré-requisitos, limites e uso responsável
+
+A música roda **no processo externo do bot**, nunca no servidor Monky. Instale
+[yt-dlp](https://github.com/yt-dlp/yt-dlp#installation) atualizado e
+[FFmpeg](https://ffmpeg.org/download.html) compilado com **libopus** no host do bot.
+Os executáveis não são incluídos no tarball. Use `PATH` ou as variáveis
+`MONKY_MUSIC_YTDLP` e `MONKY_MUSIC_FFMPEG` com caminhos completos, **sem argumentos
+extras**. Configure essas variáveis no ambiente do processo/PM2 antes de iniciar;
+o arquivo `.env.example` é referência, não é carregado automaticamente.
+
+Para música, também é necessário **Node.js 22+** para os desafios JavaScript
+atuais do YouTube (os comandos sem música mantêm os requisitos gerais do bot).
+O bot habilita explicitamente `--js-runtimes node:<executável>`, usando o Node
+que o iniciou ou `MONKY_MUSIC_NODE`; não depende da descoberta automática do
+yt-dlp. Use o executável oficial do yt-dlp, que inclui **EJS**, ou instale/atualize
+`yt-dlp[default]` no seu ambiente gerenciado. EJS deve acompanhar a versão do
+yt-dlp. Veja o [guia oficial de EJS](https://github.com/yt-dlp/yt-dlp/wiki/EJS).
+Plugins, outros runtimes e downloads remotos de componentes EJS estão
+explicitamente desativados: não são usados atalhos `ejs:github`/`ejs:npm` nem
+helpers EJS remotos sem versão fixada. O diagnóstico valida Node e executáveis
+localmente; a disponibilidade do extrator/EJS para um vídeo é confirmada somente
+na resolução, antes de aceitar o item na fila.
+
+```bash
+monkybot music-check
+# Checkout local, após npm run build:
+npm run check:music
+```
+
+Esse diagnóstico não baixa mídia nem promete disponibilidade do YouTube.
+Faltando ferramentas/libopus, o comando falha com instruções; o bot não diz
+que tocou ou enfileirou um item válido. Os demais comandos continuam funcionando.
+
+1. Entre numa sala de voz e execute `/play` com nome ou link individual
+   `https://www.youtube.com/watch?v=...` / `https://youtu.be/...`.
+2. As sugestões aparecem durante a digitação, com até **8 resultados públicos
+   elegíveis**. Um link individual retorna a sugestão daquele vídeo. O cliente
+   aplica debounce, limita a frequência e descarta buscas anteriores.
+   O botão de ouvir gera uma **prévia privada de até 10 segundos**, somente
+   quando clicado: ela toca no seu cliente e não adiciona nada à fila.
+   Clicar na sugestão ou confirmá-la pelo teclado executa `/play` uma única vez.
+   Não há `/query` separado nem uma segunda janela de seleção.
+3. A fila conecta à sala de quem adicionou o primeiro item e toca em ordem.
+   O aviso público **Tocando** só é enviado quando o primeiro quadro de áudio
+   começa a avançar na reprodução.
+   Erros de carregamento são avisados no canal; a fila pula o item e continua.
+4. Qualquer humano **na mesma sala de voz** pode controlar a fila, sem cargo DJ.
+   Todos os comandos de música, inclusive `/queue`, `/nowplaying`, busca e
+   prévia, exigem estar em voz. Se o bot já estiver em outra sala, o pedido é
+   recusado com uma orientação para entrar na sala dele. As permissões existentes
+   de acesso ao canal e `USE_BOT_COMMANDS` continuam obrigatórias.
+   A sala atual do dispositivo é consultada no servidor antes das operações e
+   novamente após buscas, escolhas e resolução; não se confia no snapshot inicial.
+   A entrada inicial usa a invocação ativa como autorização restrita àquela sala,
+   inclusive em sala privada; o servidor recusa se a pessoa mudou de sala.
+   O comando aguarda somente essa admissão inicial, nunca a duração da reprodução.
+
+O bot aparece como um participante normal, sem mute/deafen automático, com
+indicador de atividade ao transmitir áudio e controles de volume/mute local.
+Mutar apenas para si não muda o áudio dos demais nem a fila. O bot de música
+atual não oferece captura da voz dos participantes.
+
+Mute/deafen administrativo bloqueia apenas o envio de som: a música continua
+avançando em silêncio, e a fila passa à próxima faixa no término normal.
+Ao remover o bloqueio, o áudio volta na posição atual, sem reiniciar a faixa.
+Isso não altera `/pause`: uma pausa manual continua parada até `/resume`.
+
+Há uma fila/conexão independente por servidor, até **50 próximas faixas**
+(incluindo adições em resolução) e vídeos de no máximo **1 hora**. Adições
+concorrentes mantêm a ordem de confirmação, mesmo com resoluções fora de ordem.
+Busca/resolução têm limite de 30s (até 30s de espera por um dos 4 processos de
+captura). Prévias compartilham esse limite de processos, têm prazo total de 30s
+no protocolo, até 256 KiB de áudio Ogg/Opus em memória e são canceladas ao fechar
+ou trocar a busca, sair da voz ou mudar de sala. O envio usa o WebSocket existente, sem porta pública adicional
+nem arquivos de mídia persistidos. As operações de rede, conexões, processos e
+buffers são limitados, sem impor um prazo total à recuperação bem-sucedida ou à
+pausa manual. Não há persistência da fila após reinício.
+
+Sala vazia **ou** fila ociosa desconecta após **60s** por padrão. Configure em
+**botão direito no bot → Configurações do bot → Comportamento neste servidor → Música → Tempo de inatividade (segundos)**,
+com um inteiro de **1 a 600**. É uma configuração compartilhada desse bot
+nesse servidor, disponível a quem tem permissão para configurar bots, e fica
+salva no servidor. Alterações valem imediatamente, inclusive para contadores
+em andamento: o tempo já decorrido conta, sem reiniciar a espera inteira.
+`MONKY_MUSIC_GRACE_SECONDS` define somente o valor padrão oferecido pelo host.
+Voltar antes do prazo cancela a saída por sala vazia, sem
+reiniciar a música ou limpar a fila. Desconexão, troca de modo de voz e encerramento do bot cancelam
+carregamentos, esvaziam a fila e liberam voz/FFmpeg. Cancelar uma invocação
+cancela a adição pendente, não a reprodução já aceita; cancelar uma prévia
+não interfere na fila.
+
+O fim normal da fila continua sendo avisado no chat. Erros só aparecem no chat
+compartilhado quando a reprodução realmente para e exige intervenção: por exemplo,
+perda definitiva da voz ou nenhuma faixa restante capaz de tocar. Falhas recuperadas,
+erros de um peer enquanto a reprodução continua e faixas com falha puladas em favor
+de outra que toca ficam apenas nos diagnósticos locais, exceto quando o limite de
+falhas consecutivas de retomada é esgotado: nesse caso há um aviso por faixa removida,
+mesmo que a fila continue. Erros de comando, entrada e permissão continuam nas
+respostas privadas.
+
+Uma reconexão só avisa sobre reprodução perdida se havia trabalho interrompido e ele
+não foi retomado; uma conexão saudável recuperada ou uma fila já encerrada não gera
+esse aviso. O bot continua sujeito às permissões do canal, e falhas de entrega ficam
+nos logs. `/queue` conserva os títulos completos e usa várias respostas, quando
+necessário, para respeitar o limite de tamanho de cada mensagem.
+
+Uma faixa pode ter **quantas retomadas bem-sucedidas forem necessárias**, sempre
+sem avisos de tentativa ou recuperação no chat. Após uma interrupção, o limite é de
+**cinco tentativas consecutivas que não conseguem fazer o áudio avançar**. Só um
+frame efetivamente avançado pelo player zera esse contador; conectar ao servidor,
+receber cabeçalhos ou baixar bytes não basta. Se as cinco falharem, um aviso seguro
+informa a falha de retomada, a faixa é removida e o player segue para a próxima.
+A pausa manual suspende a contagem sem zerá-la.
+
+O mesmo decoder continua do byte interrompido, sem reiniciar a música ou duplicar
+áudio. Cada operação de rede tem limite de 15 segundos e a espera entre tentativas
+é de até 5 segundos. Não existe um limite acumulado de retomadas ou de tempo de
+recuperação que interrompa uma sequência de retomadas bem-sucedidas. Uma entrada
+HTTP privada em loopback mantém o decoder aberto e suporta buscas por byte, sem
+guardar a faixa inteira em memória.
+
+O fim normal ainda exige áudio completo. Fontes corrompidas, alteradas, sem
+permissão ou que recusam a retomada geram erro explícito nos diagnósticos e são
+puladas; o chat recebe um aviso se a reprodução não puder continuar. Não se tenta contornar
+essas restrições nem reiniciar do zero. `/stop`, `/skip`, saída/desconexão da voz,
+encerramento do bot e o prazo configurado de sala vazia cancelam a recuperação.
+A pausa manual preserva a posição, e as prévias privadas continuam limitadas
+a dez segundos, sem adotar essa espera persistente.
+
+**Sem Spotify, playlists, álbuns, lives ou conteúdo com autenticação/paywall
+nesta versão.** Links com playlist são rejeitados, mesmo contendo um vídeo.
+URLs arbitrárias não são aceitas. A extração com yt-dlp **não é uma API oficial
+de áudio do YouTube**: pode deixar de funcionar e está sujeita aos termos da
+plataforma. Utilize somente mídia própria ou autorizada e respeite direitos
+autorais. O bot não coleta cookies do navegador/credenciais, ignora configurações
+locais do yt-dlp e não contorna restrições de acesso. Mantenha ambas as ferramentas
+atualizadas; erros definitivos do provedor continuam explícitos.
+
+### Demo: tela compartilhada de jogo da velha
+
+Entre em uma sala de voz e execute `/jogo-da-velha` em um canal de texto acessível.
+O convite aparece no mesmo canto dos avisos de compartilhamento de tela; abra-o
+para visualizar o miniapp **no palco de voz**, não em um card do chat.
+Somente participantes daquela sala podem visualizar ou interagir.
+O cartão continua no palco junto de câmeras e compartilhamentos, mesmo fechado.
+**Abrir miniapp** inicia a visualização local; **Sair do miniapp** a fecha sem
+remover o cartão ou encerrar a partida. Focar ou voltar à grade só muda o layout,
+sem reiniciar a tela nem alterar vagas de jogador.
+Quem criou joga como **X**; outra pessoa na sala clica **Jogar como O**. Os demais assistem.
+Use clique ou Tab + Enter/Espaço para jogar. O bot valida identidade, turno,
+casa livre, revisão e vitória/empate; cliques concorrentes não sobrescrevem jogadas.
+A tela usa HTML/CSS/JS autocontido, sem acesso à rede nem ao DOM do aplicativo.
+Os controles seguem o idioma de cada participante e se atualizam ao trocar
+o idioma do aplicativo, sem reiniciar a partida. Jogos expiram em 30min e são
+removidos ao desconectar/reiniciar o bot ou perder a autorização de acesso à sala; não são persistidos.
+Sair ou mudar de sala fecha a visualização local e impede novas ações. O estado
+e as vagas dos jogadores são mantidos até a expiração ou o encerramento pelo bot,
+inclusive se a sala ficar vazia; não há reinício nem liberação automática de vaga.
+Há até quatro miniapps simultâneos por sala. Fechar a visualização não encerra a partida dos demais.
+Telas removidas liberam imediatamente a cota de jogos. Erro de sincronização fecha a tela
+em vez de aceitar jogadas sobre um estado incerto.
+
+Para QA, entre na mesma sala com dois jogadores e um espectador: tente jogar fora
+da vez, clicar duas vezes e completar vitória/empate; confira a mesma posição nas
+três telas. Um cliente fora da voz ou em outra sala não deve receber o miniapp.
+Para música, use apenas áudio original autorizado; valide pausa/retomada, fila
+entre dois servidores, `/clear`, `/stop`, saída da sala e ausência de ferramentas.
+Os testes automatizados não baixam músicas: combinam fontes falsas com
+transporte real do SDK, incluindo moderação silenciosa e pausa manual.
+Se FFmpeg estiver disponível, `tests/music-audio.test.js` gera um tom senoidal
+original e verifica Opus real, cadência da fila e entrega ICE/DTLS/SRTP pelo SDK;
+caso contrário, esse teste informa
+o pré-requisito ausente e é ignorado. Configure `MONKY_MUSIC_FFMPEG` para executá-lo.
 
 ## Adicionando novos comandos
 
@@ -378,7 +563,9 @@ global é instalado, parado ou reiniciado.
 A CI executa esse teste **antes de publicar**. A variável de repositório
 `MONKY_SDK_RELEASE` pode fixar a tag da release do Monky que fornece o SDK; sem ela,
 usa-se o SDK publicado mais recente, betas inclusive. Em ambos os casos, o build
-falha se o SDK não corresponder ao protocolo 14 ou não oferecer seletores duráveis. Publique a release compatível do
+falha se o SDK não corresponder ao protocolo 15 ou não oferecer seletores duráveis,
+voz e telas. O pacote preserva as dependências transitivas do SDK (incluindo
+WebRTC/werift), mesmo quando o SDK é um workspace `file:`. Publique a release compatível do
 Monky antes de publicar este bot.
 
 ## Como funciona

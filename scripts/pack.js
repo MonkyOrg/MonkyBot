@@ -53,7 +53,9 @@ function productionDependencies(pkg) {
 }
 
 function lookupPaths(requester, name) {
-  return createRequire(path.join(requester, 'package.json')).resolve.paths(name) || [];
+  // Packages such as werift declare the npm "buffer" polyfill. Looking up the
+  // bare name returns null for Node builtins, hiding the real installed package.
+  return createRequire(path.join(requester, 'package.json')).resolve.paths(`${name}/package.json`) || [];
 }
 
 function resolvePackage(requester, name) {
@@ -108,10 +110,16 @@ function bundleDependencies(sourceRoot, destinationRoot) {
         recursive: true,
         filter: (file) => {
           const parts = path.relative(source, file).split(path.sep);
-          return !parts.includes('node_modules') && !parts.includes('.git');
+          // Only the package-root dependency tree is rebuilt below. Some
+          // packages ship source-local module aliases (e.g. src/node_modules).
+          return parts[0] !== 'node_modules' && !parts.includes('.git');
         },
       });
-      if (!pkg.exports) {
+      if (pkg.name.startsWith('@types/') && !pkg.main && !pkg.exports) {
+        const declarations = typeof pkg.types === 'string' ? pkg.types
+          : typeof pkg.typings === 'string' ? pkg.typings : 'index.d.ts';
+        requiredFile(path.join(source, declarations));
+      } else if (!pkg.exports) {
         try {
           createRequire(path.join(requesterSource, 'package.json')).resolve(source);
         } catch {
@@ -188,9 +196,10 @@ function pack({ version, out = path.join(ROOT, 'release'), root = ROOT } = {}) {
     writeJson(path.join(staging, 'package.json'), publishPkg);
 
     fs.mkdirSync(out, { recursive: true });
-    const result = JSON.parse(runNpm(['pack', '--json', '--ignore-scripts'], { cwd: staging }));
-    const packed = result[0]?.filename;
-    if (typeof packed !== 'string' || path.basename(packed) !== packed) {
+    // --json lists every bundled file and exceeds child_process's output limit
+    // for the WebRTC SDK. Only the tarball filename is needed here.
+    const packed = runNpm(['pack', '--silent', '--ignore-scripts'], { cwd: staging }).trim();
+    if (!packed.endsWith('.tgz') || path.basename(packed) !== packed || /[\r\n]/.test(packed)) {
       throw new Error('npm pack did not return a tarball filename.');
     }
     const finalPath = path.join(out, `monky-bot-${version}.tgz`);

@@ -39,6 +39,7 @@ ${color('COMANDOS', ANSI.bold)}
   autoupdate             Gerencia atualização automática
   config                 Exibe a configuração atual
   config set <k> <v>     Altera uma configuração
+  music-check            Verifica yt-dlp e FFmpeg/libopus sem baixar mídia
 
 ${color('OPÇÕES', ANSI.bold)}
   --version, -v          Exibe a versão
@@ -91,6 +92,19 @@ async function main(): Promise<void> {
   }
 
   switch (command) {
+    case 'music-check': {
+      const { YouTubeSource } = await import('./music/source');
+      const { musicError } = await import('./music/errors');
+      try {
+        await new YouTubeSource().check(new AbortController().signal);
+        console.log('✅ Node.js 22+ + yt-dlp + FFmpeg/libopus OK. Use yt-dlp com EJS local. Disponibilidade do YouTube não é garantida. / Use yt-dlp with local EJS. YouTube availability is not guaranteed.');
+      } catch (error: unknown) {
+        console.error(`${musicError(error, 'pt-BR')}\n${musicError(error, 'en')}`);
+        process.exitCode = 1;
+      }
+      break;
+    }
+
     case 'setup':
       await setupCommand();
       break;

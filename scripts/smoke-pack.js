@@ -8,6 +8,8 @@ const { createRequire } = require('node:module');
 const { runNpm } = require('./npm');
 
 const ROOT = path.resolve(__dirname, '..');
+const COMMANDS = ['8ball', 'ajuda', 'clear', 'dado', 'enquete', 'jogo-da-velha', 'leave', 'moeda',
+  'nowplaying', 'pause', 'ping', 'play', 'queue', 'remove', 'resume', 'skip', 'stop'];
 
 function waitForManifest(child, logs) {
   return new Promise((resolve, reject) => {
@@ -55,10 +57,11 @@ async function smokePack(tarball) {
   fs.mkdirSync(runtime, { recursive: true });
 
   try {
+    // Cold Windows installs of the bundled WebRTC tree can exceed two minutes.
     runNpm([
       'install', '--prefix', install, '--cache', path.join(workspace, 'cache'),
       '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', artifact,
-    ], { cwd: workspace, timeout: 120000 });
+    ], { cwd: workspace, timeout: 300000 });
 
     const modules = path.join(install, 'node_modules');
     const bot = path.join(modules, '@monky', 'bot');
@@ -114,7 +117,7 @@ async function smokePack(tarball) {
     assert.equal(manifest.icon, `data:image/png;base64,${expectedLogo}`);
     assert.equal(manifest.registrationUrl, url.replace('/manifest', '/register'));
     assert.deepEqual(manifest.commands.map((command) => command.name).sort(),
-      ['8ball', 'ajuda', 'dado', 'enquete', 'moeda', 'ping']);
+      COMMANDS);
     assert.equal(child.exitCode, null, 'Packaged runtime must still be running.');
 
     const fromBot = createRequire(path.join(bot, 'package.json'));
@@ -162,7 +165,7 @@ async function smokePack(tarball) {
       if (protocolError) throw protocolError;
       assert.equal(commandLists.length, count, 'The packaged bot must restore its commands after a process restart.');
       assert.deepEqual(commandLists[count - 1].map((command) => command.name).sort(),
-        ['8ball', 'ajuda', 'dado', 'enquete', 'moeda', 'ping']);
+        COMMANDS);
     };
     const registration = {
       serverId, serverName: 'Package smoke server',

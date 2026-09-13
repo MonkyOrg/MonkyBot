@@ -29,11 +29,14 @@ function context({ args = {}, locale = 'pt-BR', controller = new AbortController
   };
 }
 
-test('all six public command names register with the current SDK', async () => {
+test('all public command names register with the current SDK and dispose listeners', async () => {
   const bot = new BotClient({ publicKey: 'test-public-key' });
   const dispose = registerAllCommands(bot);
   try {
-    assert.deepEqual(commands.map((command) => command.name), ['ping', 'dado', 'moeda', '8ball', 'enquete', 'ajuda']);
+    assert.deepEqual(commands.map((command) => command.name), ['ping', 'dado', 'moeda', '8ball', 'enquete', 'ajuda',
+      'play', 'queue', 'nowplaying', 'pause', 'resume', 'skip', 'stop', 'leave', 'remove', 'clear', 'jogo-da-velha']);
+    assert.equal(commands.find(command => command.name === 'play').options[0].autocomplete, true);
+    assert.equal(commands.find(command => command.name === 'jogo-da-velha').voiceRequirement, 'joined');
     assert.equal(pollCommand.options, undefined);
     assert.equal(eightBallCommand.options[0].required, true);
     assert.equal(bot.listenerCount('selectorUpdate'), 1);
@@ -42,8 +45,11 @@ test('all six public command names register with the current SDK', async () => {
       type: 'integer', required: false, min: 2, max: 100,
     });
   } finally {
-    dispose();
+    await dispose();
     assert.equal(bot.listenerCount('selectorUpdate'), 0);
+    assert.equal(bot.listenerCount('voiceDisconnected'), 0);
+    assert.equal(bot.listenerCount('voiceParticipantsChanged'), 0);
+    assert.equal(bot.listenerCount('screenAction'), 0);
     await bot.close();
   }
 });
@@ -82,6 +88,9 @@ for (const locale of ['pt-BR', 'en']) {
         assert.match(state.replies[0], /\*\*\/enquete\*\*/);
         assert.match(state.replies[0], /\/8ball <pergunta>/);
         assert.match(state.replies[0], locale === 'en' ? /Submitting the poll form publishes/ : /Ao enviar o formulário de enquete/);
+        assert.match(state.replies[0], locale === 'en' ? /Music requires voice membership/ : /Música exige estar em voz/);
+        assert.match(state.replies[0], locale === 'en' ? /invitation on the stage/ : /convite no palco/);
+        assert.ok(state.replies[0].length <= 2000);
       }
     }
   });
@@ -104,8 +113,8 @@ for (const locale of ['pt-BR', 'en']) {
   });
 }
 
-test('already-aborted invocations are ignored by every command', async () => {
-  for (const command of commands) {
+test('already-aborted invocations are ignored by basic commands', async () => {
+  for (const command of [pingCommand, diceCommand, coinCommand, eightBallCommand, pollCommand, helpCommand]) {
     const controller = new AbortController();
     controller.abort();
     const state = context({ controller });

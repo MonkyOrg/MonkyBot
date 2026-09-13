@@ -1,8 +1,8 @@
 # SDK compativel
 
-`monky-bot-sdk-16.0.5-beta.tgz` e o pacote oficial da
-[release Monky v16.0.5-beta](https://github.com/MonkyOrg/Monky/releases/tag/v16.0.5-beta),
-com o shared incluido, para o protocolo Monky 14. A licenca MIT
+`monky-bot-sdk-17.0.3-beta.tgz` e o pacote oficial da
+[release Monky v17.0.3-beta](https://github.com/MonkyOrg/Monky/releases/tag/v17.0.3-beta),
+com o shared incluido, para o protocolo Monky 15. A licenca MIT
 acompanha o pacote. O codigo-fonte permanece em `MonkyOrg/Monky`; este
 repositorio nao mantem um fork do SDK.
 
@@ -11,17 +11,18 @@ Cliente e servidor precisam usar o mesmo protocolo. O SDK publica a
 identidade do bot e fornece as mesmas validacoes usadas pelo setup generico.
 O CLI do SDK tambem verifica conflitos na porta do manifest; o MonkyBot
 mantem a mesma protecao em seu CLI proprio, preservando perfil e host de escuta.
+Esta versao inclui os contratos de voz e miniapps usados pelo bot.
 
 O arquivo foi baixado sem modificacoes da release. Seu SHA-256 e
-`bea49f1ec74dd601cb0ceeb638c01df6c75352efd41e514fd74aed099f447e6b`.
+`8440229dceeb1995c31f21f2962d92526d81f2626acf63367bdbff4b4f3110da`.
 
 Ao atualizar o SDK, baixe o pacote de uma nova release compativel, confira
 seu digest e atualize dependencia, lockfile e este registro de origem juntos.
 Substitua tag e nome do arquivo do exemplo pela nova versao:
 
 ```powershell
-gh release download v16.0.5-beta --repo MonkyOrg/Monky --pattern monky-bot-sdk-16.0.5-beta.tgz --dir vendor
-npm install --save-exact .\vendor\monky-bot-sdk-16.0.5-beta.tgz
+gh release download v17.0.3-beta --repo MonkyOrg/Monky --pattern monky-bot-sdk-17.0.3-beta.tgz --dir vendor
+npm install --save-exact .\vendor\monky-bot-sdk-17.0.3-beta.tgz
 npm run check:sdk
 npm test
 ```

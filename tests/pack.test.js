@@ -47,20 +47,25 @@ test('bundling preserves per-requester nested versions instead of using a global
   assert.equal(fs.existsSync(path.join(output, 'node_modules', 'leaf')), false);
 });
 
-test('npm tarballs retain nested versions through an offline install, including paths with spaces', (t) => {
+test('npm tarballs retain nested versions and source-local modules offline, including paths with spaces', (t) => {
   const { root, source } = fixture(t);
   const output = path.join(root, 'package with spaces');
   fs.mkdirSync(output, { recursive: true });
-  json(path.join(source, 'package.json'), { dependencies: { first: '*', second: '*' } });
+  json(path.join(source, 'package.json'), { dependencies: { first: '*', second: '*', voice: '*' } });
   for (const [name, version] of [['first', '1.0.0'], ['second', '2.0.0']]) {
     const directory = path.join(source, 'node_modules', name);
     moduleAt(directory, name, '1.0.0', { dependencies: { leaf: '*' } }, "module.exports = require('leaf');");
     moduleAt(path.join(directory, 'node_modules', 'leaf'), 'leaf', version);
   }
+  const voice = path.join(source, 'node_modules', 'voice');
+  moduleAt(voice, 'voice', '1.0.0', { main: 'src/index.js' });
+  fs.mkdirSync(path.join(voice, 'src', 'node_modules', 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(voice, 'src', 'index.js'), "module.exports = require('lib/value');");
+  fs.writeFileSync(path.join(voice, 'src', 'node_modules', 'lib', 'value.js'), "module.exports = 'source-local';");
   const { dependencies } = bundleDependencies(source, output);
   moduleAt(output, '@monky/bundle-fixture', '1.0.0',
     { dependencies, bundleDependencies: Object.keys(dependencies) },
-    "module.exports = [require('first'), require('second')];");
+    "module.exports = [require('first'), require('second'), require('voice')];");
 
   const npmHelper = path.resolve(__dirname, '..', 'scripts', 'npm.js');
   const install = path.join(root, 'install with spaces');
@@ -96,7 +101,7 @@ test('npm tarballs retain nested versions through an offline install, including 
   });
   if (runtime.error) throw runtime.error;
   assert.equal(runtime.status, 0, runtime.stderr);
-  assert.deepEqual(JSON.parse(runtime.stdout), ['1.0.0', '2.0.0']);
+  assert.deepEqual(JSON.parse(runtime.stdout), ['1.0.0', '2.0.0', 'source-local']);
 });
 
 test('workspace links resolve dependencies from the real requesting workspace', (t) => {
@@ -117,6 +122,28 @@ test('workspace links resolve dependencies from the real requesting workspace', 
     process.platform === 'win32' ? 'junction' : 'dir');
   bundleDependencies(source, output);
   assert.equal(fromPackage(output, '@monky/bot-sdk')('./dist/index.js'), '3.0.0');
+});
+
+test('declared npm polyfills that share Node builtin names remain bundled', (t) => {
+  const { source, output } = fixture(t);
+  json(path.join(source, 'package.json'), { dependencies: { voice: '*' } });
+  const voice = path.join(source, 'node_modules', 'voice');
+  moduleAt(voice, 'voice', '1.0.0', { dependencies: { buffer: '^6.0.0' } });
+  moduleAt(path.join(source, 'node_modules', 'buffer'), 'buffer', '6.0.3');
+  const result = bundleDependencies(source, output);
+  assert.equal(result.packageCount, 2);
+  const copied = path.join(output, 'node_modules', 'voice', 'node_modules', 'buffer');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(copied, 'package.json'))).version, '6.0.3');
+});
+
+test('declared runtime dependencies may include validated declaration-only @types packages', (t) => {
+  const { source, output } = fixture(t);
+  json(path.join(source, 'package.json'), { dependencies: { '@types/media': '*' } });
+  const types = path.join(source, 'node_modules', '@types', 'media');
+  json(path.join(types, 'package.json'), { name: '@types/media', version: '1.0.0', types: 'index.d.ts' });
+  assert.throws(() => bundleDependencies(source, output), /Missing or empty required file/);
+  fs.writeFileSync(path.join(types, 'index.d.ts'), 'export interface Frame { value: number }');
+  assert.equal(bundleDependencies(source, output).packageCount, 1);
 });
 
 test('missing required and transitive modules fail instead of being skipped', (t) => {
