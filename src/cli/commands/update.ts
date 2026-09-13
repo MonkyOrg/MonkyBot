@@ -7,10 +7,10 @@ import {
   isPm2Available,
   isBotRunning,
   ensurePm2,
-  writeEcosystem,
 } from '../pm2';
 import { runSync } from '../process';
 import { compareVersions, fetchLatestRelease, parseVersion } from '../updateReleases';
+import { restartBot } from './lifecycle';
 
 // ── Version helpers ──────────────────────────────────────────────────
 
@@ -89,11 +89,12 @@ export async function updateCommand(args: string[]): Promise<void> {
     if (assumeYes || (await promptYesNo('Reiniciar o bot para aplicar?', true))) {
       const config = readConfig();
       if (!config) throw new Error('Pacote atualizado, mas não foi possível ler a configuração para reiniciar.');
-      const ecosystemPath = writeEcosystem(config);
-      const restart = runSync('pm2', ['startOrRestart', ecosystemPath], { stdio: 'inherit' });
-      if (restart.status !== 0) throw new Error('Pacote atualizado, mas o reinício do bot falhou.', { cause: restart.error });
-      const saved = runSync('pm2', ['save'], { stdio: 'ignore' });
-      if (saved.status !== 0) throw new Error('Bot reiniciado, mas não foi possível salvar o estado do pm2.');
+      try {
+        await restartBot(config);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Pacote atualizado, mas o reinício do bot falhou: ${message}`, { cause: error });
+      }
       console.log(color('🔄 Bot reiniciado.', ANSI.green));
     }
   }

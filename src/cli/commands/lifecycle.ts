@@ -1,15 +1,17 @@
 import fs from 'fs';
+import path from 'path';
+import { validateBotPublicHost, validateBotServePort } from '@monky/bot-sdk';
 import { ANSI, color, CONFIG_FILE } from '../constants';
-import { readConfig, writeConfig, getBotEntryPath } from '../config';
+import { BotConfig, readConfig, writeConfig, getBotEntryPath } from '../config';
 import {
   ensurePm2,
   requirePm2,
   findBotProcess,
-  isBotRunning,
   writeEcosystem,
-  deleteBotProcess,
+  Pm2Process,
 } from '../pm2';
 import { runSync } from '../process';
+import { assertManifestPortAvailable, DEFAULT_MANIFEST_PORT, getManifestBindHost } from '../manifestPort';
 import { DEFAULT_BOT_NAME } from '../../profile';
 import { getManifestUrl } from '../../utils/manifest';
 
@@ -49,25 +51,57 @@ function ensureBotBuilt(botDir: string): void {
   console.log(color('✅ Bot compilado.', ANSI.green));
 }
 
-export function startCommand(): void {
-  const config = loadConfigOrDie();
-  const manifestUrl = config.mode === 'marketplace'
-    ? getManifestUrl(config.publicHost, config.servePort)
+function manifestUrl(config: BotConfig): string | undefined {
+  return config.mode === 'marketplace'
+    ? getManifestUrl(config.publicHost, config.servePort ?? DEFAULT_MANIFEST_PORT)
     : undefined;
-  ensurePm2();
-  ensureBotBuilt(config.botDir);
+}
 
+async function checkManifestPort(config: BotConfig, host = getManifestBindHost()): Promise<void> {
+  if (config.mode === 'marketplace') {
+    await assertManifestPortAvailable(validateBotServePort(config.servePort ?? DEFAULT_MANIFEST_PORT), host);
+  }
+}
+
+function managedManifestHost(proc: Pm2Process | null): string {
+  return getManifestBindHost(proc?.pm2_env?.MONKY_SERVE_HOST ?? proc?.pm2_env?.env?.MONKY_SERVE_HOST);
+}
+
+function managedBotProcess(config: BotConfig): (Pm2Process & { pm_id: number }) | null {
   const proc = findBotProcess();
+  if (!proc) return null;
+  const normalize = (file: string): string => {
+    const resolved = path.resolve(file);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  if (typeof proc.pm_id !== 'number' || !Number.isInteger(proc.pm_id) || proc.pm_id < 0 ||
+      !proc.pm2_env?.pm_exec_path ||
+      normalize(proc.pm2_env.pm_exec_path) !== normalize(getBotEntryPath(config.botDir))) {
+    throw new Error('O processo pm2 chamado monkybot não pôde ser identificado como este bot. Nenhum processo foi alterado.');
+  }
+  return { ...proc, pm_id: proc.pm_id };
+}
+
+export async function startCommand(): Promise<void> {
+  const config = loadConfigOrDie();
+  const url = manifestUrl(config);
+
+  const proc = managedBotProcess(config);
   if (proc?.pm2_env?.status === 'online' && proc.pid) {
     console.log(color(`⚠️  Bot já está rodando (PID ${proc.pid}).`, ANSI.yellow));
     console.log(color('Use monkybot restart para reiniciar.', ANSI.dim));
     return;
   }
 
-  const ecosystemPath = writeEcosystem(config);
+  const host = managedManifestHost(proc);
+  await checkManifestPort(config, host);
+  ensurePm2();
+  ensureBotBuilt(config.botDir);
+
+  const ecosystemPath = writeEcosystem(config, host);
   const result = runSync('pm2', ['startOrRestart', ecosystemPath], { stdio: 'inherit' });
-  if (result.status !== 0) {
-    throw new Error('Falha ao iniciar o bot via pm2.');
+  if (result.error || result.status !== 0) {
+    throw new Error('Falha ao iniciar o bot via pm2.', { cause: result.error });
   }
 
   runSync('pm2', ['save'], { stdio: 'ignore' });
@@ -78,7 +112,7 @@ export function startCommand(): void {
   if (config.mode === 'manual') {
     console.log(`   Servidor: ${config.serverUrl}`);
   } else {
-    console.log(`   Manifest: ${manifestUrl}`);
+    console.log(`   Manifest: ${url}`);
   }
   console.log();
   console.log(color('Comandos úteis:', ANSI.bold));
@@ -92,37 +126,57 @@ export function stopCommand(): void {
   if (!requirePm2('parar')) return;
 
   const config = loadConfigOrDie();
-  if (!isBotRunning()) {
+  const proc = managedBotProcess(config);
+  if (proc?.pm2_env?.status !== 'online') {
     console.log(color('⚠️  Bot não está rodando.', ANSI.yellow));
     return;
   }
 
-  const result = runSync('pm2', ['stop', 'monkybot'], { stdio: 'inherit' });
-  if (result.status !== 0) {
-    throw new Error('Falha ao parar o bot.');
+  const result = runSync('pm2', ['stop', String(proc.pm_id)], { stdio: 'inherit' });
+  if (result.error || result.status !== 0) {
+    throw new Error('Falha ao parar o bot.', { cause: result.error });
   }
 
   console.log(color('🛑 Monky Bot parado.', ANSI.green));
 }
 
-export function restartCommand(args: string[]): void {
-  const config = loadConfigOrDie();
+export async function restartBot(config: BotConfig, fresh = false): Promise<void> {
+  manifestUrl(config);
+  const proc = managedBotProcess(config);
+  const host = managedManifestHost(proc);
+
+  if (proc) {
+    const stopped = runSync('pm2', ['stop', String(proc.pm_id)], { stdio: 'inherit' });
+    if (stopped.error || stopped.status !== 0) {
+      throw new Error('Falha ao parar o bot antes do reinício. A porta não foi considerada livre.', { cause: stopped.error });
+    }
+  }
+
+  await checkManifestPort(config, host);
   ensurePm2();
   ensureBotBuilt(config.botDir);
 
-  const fresh = args.includes('--fresh');
-
-  if (fresh) {
-    deleteBotProcess();
+  if (fresh && proc) {
+    const deleted = runSync('pm2', ['delete', String(proc.pm_id)], { stdio: 'ignore' });
+    if (deleted.error || deleted.status !== 0) {
+      throw new Error('Falha ao remover o processo do bot para recriá-lo.', { cause: deleted.error });
+    }
   }
 
-  const ecosystemPath = writeEcosystem(config);
+  const ecosystemPath = writeEcosystem(config, host);
   const result = runSync('pm2', ['startOrRestart', ecosystemPath], { stdio: 'inherit' });
-  if (result.status !== 0) {
-    throw new Error('Falha ao reiniciar o bot.');
+  if (result.error || result.status !== 0) {
+    throw new Error('Falha ao reiniciar o bot.', { cause: result.error });
   }
 
-  runSync('pm2', ['save'], { stdio: 'ignore' });
+  const saved = runSync('pm2', ['save'], { stdio: 'ignore' });
+  if (saved.error || saved.status !== 0) {
+    throw new Error('Bot reiniciado, mas não foi possível salvar o estado do pm2.', { cause: saved.error });
+  }
+}
+
+export async function restartCommand(args: string[]): Promise<void> {
+  await restartBot(loadConfigOrDie(), args.includes('--fresh'));
 
   console.log();
   console.log(color('🔄 Monky Bot reiniciado!', ANSI.green));
@@ -203,7 +257,7 @@ export function logsCommand(args: string[]): void {
   }
 }
 
-export function configCommand(args: string[]): void {
+export async function configCommand(args: string[]): Promise<void> {
   const config = readConfig();
 
   if (args.length === 0 || args[0] === 'show') {
@@ -238,13 +292,37 @@ export function configCommand(args: string[]): void {
       return;
     }
 
-    if (key === 'servePort') {
-      (config as unknown as Record<string, unknown>)[key] = parseInt(value, 10);
-    } else {
-      (config as unknown as Record<string, unknown>)[key] = value;
+    const next = { ...config };
+    switch (key) {
+      case 'mode':
+        if (value !== 'manual' && value !== 'marketplace') {
+          throw new Error('Modo inválido. Use manual ou marketplace.');
+        }
+        next.mode = value;
+        break;
+      case 'servePort':
+        next.servePort = validateBotServePort(value);
+        break;
+      case 'publicHost':
+        next.publicHost = validateBotPublicHost(value);
+        break;
+      case 'serverUrl':
+      case 'botToken':
+      case 'botName':
+      case 'botDir':
+        next[key] = value;
+        break;
     }
 
-    writeConfig(config);
+    if (next.mode === 'marketplace' && ['mode', 'servePort', 'publicHost'].includes(key)) {
+      manifestUrl(next);
+    }
+    if (next.mode === 'marketplace' &&
+        (config.mode !== 'marketplace' ||
+         (next.servePort ?? DEFAULT_MANIFEST_PORT) !== (config.servePort ?? DEFAULT_MANIFEST_PORT))) {
+      await checkManifestPort(next);
+    }
+    writeConfig(next);
     console.log(color(`✅ ${key} = ${value}`, ANSI.green));
     console.log(color('Reinicie o bot para aplicar: monkybot restart', ANSI.dim));
     return;

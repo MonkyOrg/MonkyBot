@@ -11,10 +11,10 @@ import readline from 'readline';
 import { Writable } from 'stream';
 import { ANSI, color, CONFIG_DIR, CONFIG_FILE } from '../constants';
 import { BotConfig, readConfig, writeConfig } from '../config';
+import { assertManifestPortAvailable, DEFAULT_MANIFEST_PORT } from '../manifestPort';
 import { DEFAULT_BOT_NAME } from '../../profile';
 
 const DEFAULT_MANUAL_SERVER_URL = 'ws://localhost:3000';
-const DEFAULT_MARKETPLACE_PORT = 7780;
 
 type SetupMode = BotConfig['mode'];
 type Ask = (question: string, secret?: boolean) => Promise<string>;
@@ -38,18 +38,26 @@ function prompt(rl: readline.Interface, question: string): Promise<string> {
 async function validatedPrompt<T>(
   ask: Ask,
   question: string,
-  validate: (value: string) => T,
+  validate: (value: string) => T | Promise<T>,
   secret = false
 ): Promise<T> {
   while (true) {
     const answer = await ask(question, secret);
     try {
-      return validate(answer);
+      return await validate(answer);
     } catch (error: unknown) {
       if (!(error instanceof Error)) throw error;
       console.error(color(error.message, ANSI.red));
     }
   }
+}
+
+function promptServePort(ask: Ask, defaultPort: number): Promise<number> {
+  return validatedPrompt(ask, `Porta do manifest [${defaultPort}]: `, async (answer) => {
+    const port = validateServePort(answer || String(defaultPort));
+    await assertManifestPortAvailable(port);
+    return port;
+  });
 }
 
 function modeLabel(mode: SetupMode): string {
@@ -97,8 +105,16 @@ export async function setupCommand(): Promise<void> {
     },
   });
   const rl = readline.createInterface({ input: process.stdin, output, terminal: true, historySize: 0 });
-  rl.on('SIGINT', () => rl.close());
+  let closed = false;
+  const onClose = (): void => { closed = true; };
+  const onSigint = (): void => { rl.close(); };
+  const ensureOpen = (): void => {
+    if (closed) throw new Error('Setup cancelado; a configuração não foi alterada.');
+  };
+  rl.once('close', onClose);
+  rl.on('SIGINT', onSigint);
   const ask: Ask = async (question, secret = false) => {
+    ensureOpen();
     const answer = prompt(rl, question);
     muted = secret;
     try {
@@ -160,13 +176,13 @@ export async function setupCommand(): Promise<void> {
       console.log(color('Instalação por URL', ANSI.cyan));
       console.log('Qualquer servidor Monky poderá instalar o bot via URL.');
       console.log('O host e a porta do manifest precisam ser acessíveis pelos servidores que vão instalar o bot.');
+      console.log('Cada bot precisa de uma porta livre exclusiva. Para reconfigurar este bot rodando, use monkybot stop antes.');
       console.log();
 
       const defaultPort = existing?.mode === 'marketplace'
-        ? existing.servePort ?? DEFAULT_MARKETPLACE_PORT
-        : DEFAULT_MARKETPLACE_PORT;
-      const servePort = await validatedPrompt(ask, `Porta do manifest [${defaultPort}]: `,
-        (answer) => validateServePort(answer || String(defaultPort)));
+        ? existing.servePort ?? DEFAULT_MANIFEST_PORT
+        : DEFAULT_MANIFEST_PORT;
+      const servePort = await promptServePort(ask, defaultPort);
 
       const detectedIp = getLocalIp();
       console.log(`Informe o IP ou domínio público desta máquina.${detectedIp ? ` (IP local detectado: ${detectedIp})` : ''}`);
@@ -188,6 +204,18 @@ export async function setupCommand(): Promise<void> {
         (answer) => validateBotName(answer || defaultName)),
     };
 
+    if (config.mode === 'marketplace') {
+      const port = config.servePort ?? DEFAULT_MANIFEST_PORT;
+      try {
+        await assertManifestPortAvailable(port);
+      } catch (error: unknown) {
+        if (!(error instanceof Error)) throw error;
+        ensureOpen();
+        console.error(color(error.message, ANSI.red));
+        config.servePort = await promptServePort(ask, port);
+      }
+    }
+    ensureOpen();
     writeConfig(config);
 
     console.log();
@@ -200,6 +228,8 @@ export async function setupCommand(): Promise<void> {
     console.log('  monkybot logs     — Exibe os logs');
   } finally {
     rl.close();
+    rl.off('close', onClose);
+    rl.off('SIGINT', onSigint);
     output.end();
   }
 }

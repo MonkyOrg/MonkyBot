@@ -112,6 +112,53 @@ monkybot autoupdate off     # Disable automatic updates
 
 Configuration is stored in `~/.monkybot/config.json`. pm2 ensures the bot restarts automatically if it crashes.
 
+### Exclusive manifest port
+
+Each bot on the same machine needs its own **available port** for URL installation.
+`7780` is only the default, not a reserved port. For example, if another bot already
+uses `7780`, choose a different free port for MonkyBot during setup. `/manifest` is
+an endpoint of the process listening on that port, **not a shared file**: using
+another process's URL links that bot, not this one.
+
+The CLI tests a local TCP bind on the runtime's listening address: `0.0.0.0` by
+default, or `MONKY_SERVE_HOST` when set in the CLI's environment. For start/restart
+(including updates), without a shell override, the previous host of this bot's
+managed pm2 process is preserved; the default applies only when no previous host
+exists. A `127.0.0.1` bind therefore does not become `0.0.0.0` just because the
+variable is missing from the shell.
+The probe and ecosystem receive the same resolved host and tested port. The probe
+socket is closed immediately; the CLI does not contact the public host, infer ownership from a
+manifest response, or **check firewall rules or external reachability**.
+
+- **Setup:** an occupied port shows the Portuguese message “A porta X já está em
+  uso por um bot ou outro serviço; escolha outra porta. Se for este bot, execute
+  monkybot stop antes de continuar.” This means the port is already in use by a
+  bot or another service: choose another port, or stop this bot first if it is
+  the one using it. Only the port is requested again; other answers are retained.
+  The port is rechecked before saving. Cancelling or failing to select a valid
+  port leaves the previous configuration and `.keys` unchanged.
+- **Reconfiguring this bot:** run `monkybot stop` **before** repeating setup on the
+  same port. Setup and `config set` never stop services automatically or select
+  another port for you.
+- **Configuration:** the port check runs only when enabling Marketplace or changing
+  its effective port. A conflict prevents saving. Changing `publicHost` or
+  `botName`, repeating the same `mode`/`servePort`, and using manual mode do not
+  probe the port or stop the bot. Host and port syntax are still validated for the relevant keys.
+- **Start/restart:** starting a stopped or unregistered bot checks the port before
+  installing pm2 or generating the ecosystem; starting an identified bot that is
+  already online remains idempotent. Restart stops only this bot's identified
+  process, by pm2 ID, confirms that stop succeeded, and tests the bind before
+  starting. If the port remains occupied, the bot stays stopped and no other
+  service is terminated. Updates and auto-updates use the same restart path.
+  Errors querying the pm2 process inventory abort the operation rather than
+  counting as an absent bot; the raw `jlist` response is never displayed.
+
+Permission errors (`EACCES`) and other bind errors also fail with the address and
+reason; they never count as an available port. This is a point-in-time check,
+**not a reservation until the runtime starts**: another process can still take
+the port in that interval. Check the logs after starting and allow the required
+network access if the Monky server runs on another machine.
+
 ### Beta and stable updates
 
 `update` checks stable only. `update --beta` includes betas and stable releases,

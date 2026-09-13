@@ -30,7 +30,7 @@
     "protocolVersion": 14
   },
   "dependencies": {
-    "@monky/bot-sdk": "file:vendor/monky-bot-sdk-16.0.1-beta.tgz"
+    "@monky/bot-sdk": "file:vendor/monky-bot-sdk-16.0.5-beta.tgz"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

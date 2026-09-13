@@ -28,7 +28,7 @@ test('manifest URLs reject missing or malformed endpoints rather than inventing 
   }
 });
 
-test('marketplace startup validates the advertised endpoint before touching pm2', (t) => {
+test('marketplace startup validates the advertised endpoint before touching pm2', async (t) => {
   t.mock.method(config, 'readConfig', () => ({
     mode: 'marketplace',
     botDir: process.cwd(),
@@ -37,6 +37,6 @@ test('marketplace startup validates the advertised endpoint before touching pm2'
   const ensurePm2 = t.mock.method(pm2, 'ensurePm2', () => {
     assert.fail('Invalid configuration must not start or install pm2.');
   });
-  assert.throws(() => startCommand(), /public host/i);
+  await assert.rejects(startCommand(), /public host/i);
   assert.equal(ensurePm2.mock.calls.length, 0);
 });

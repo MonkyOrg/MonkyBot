@@ -11,6 +11,7 @@ const updates = require('../dist/cli/commands/update');
 const processHelpers = require('../dist/cli/process');
 const pm2 = require('../dist/cli/pm2');
 const config = require('../dist/cli/config');
+const { setBindHost, listen, freePort, captureBinds } = require('./helpers/manifest-port');
 
 function release(version, changes = {}) {
   const tag = `v${version}`;
@@ -117,8 +118,30 @@ function commandFixture(t, local, remote) {
     releases.selectRelease([release(remote)], true));
   const run = t.mock.method(processHelpers, 'runSync', () => ({ status: 0 }));
   t.mock.method(pm2, 'isPm2Available', () => false);
-  t.mock.method(console, 'log', () => {});
-  return { fetch, run };
+  const lines = [];
+  t.mock.method(console, 'log', (...args) => lines.push(args.join(' ')));
+  return { fetch, run, lines };
+}
+
+function runningBot(t, port, previousHost) {
+  setBindHost(t);
+  const current = {
+    mode: 'marketplace', botDir: path.resolve(__dirname, '..'),
+    servePort: port, publicHost: 'bot.example.test',
+  };
+  t.mock.method(pm2, 'isPm2Available', () => true);
+  t.mock.method(pm2, 'isBotRunning', () => true);
+  t.mock.method(pm2, 'ensurePm2', () => {});
+  t.mock.method(pm2, 'findBotProcess', () => ({
+    name: 'monkybot', pm_id: 31, pid: 12345,
+    pm2_env: {
+      status: 'online', pm_exec_path: config.getBotEntryPath(current.botDir),
+      MONKY_SERVE_HOST: previousHost,
+    },
+  }));
+  t.mock.method(config, 'readConfig', () => current);
+  const ecosystem = t.mock.method(pm2, 'writeEcosystem', () => 'existing-ecosystem');
+  return { current, ecosystem };
 }
 
 test('update --beta --yes installs selected beta once', async (t) => {
@@ -163,29 +186,67 @@ test('failed install does not restart the bot or report success', async (t) => {
 
 test('successful update restarts using the existing bot configuration', async (t) => {
   const { run } = commandFixture(t, '2.0.1', '3.0.0-beta');
-  const current = { mode: 'marketplace', botDir: 'existing-bot-dir' };
-  t.mock.method(pm2, 'isPm2Available', () => true);
-  t.mock.method(pm2, 'isBotRunning', () => true);
-  t.mock.method(config, 'readConfig', () => current);
-  const ecosystem = t.mock.method(pm2, 'writeEcosystem', () => 'existing-ecosystem');
+  const listener = await listen(t);
+  const { current, ecosystem } = runningBot(t, listener.address().port);
+  run.mock.mockImplementation((_command, args) => {
+    if (args[0] === 'stop') listener.close();
+    return { status: 0 };
+  });
   await updates.updateCommand(['--beta', '--yes']);
   assert.equal(ecosystem.mock.calls[0].arguments[0], current);
   assert.deepEqual(run.mock.calls.map((call) => call.arguments.slice(0, 2)), [
     ['npm', ['install', '-g', release('3.0.0-beta').assets[0].browser_download_url]],
+    ['pm2', ['stop', '31']],
     ['pm2', ['startOrRestart', 'existing-ecosystem']], ['pm2', ['save']],
   ]);
 });
 
+test('update preserves the managed loopback bind when the shell has no host override', async (t) => {
+  const { run } = commandFixture(t, '2.0.1', '3.0.0-beta');
+  const listener = await listen(t, undefined, 0, '127.0.0.1');
+  const port = listener.address().port;
+  const { ecosystem } = runningBot(t, port, '127.0.0.1');
+  const binds = captureBinds(t);
+  run.mock.mockImplementation((_command, args) => {
+    if (args[0] === 'stop') listener.close();
+    return { status: 0 };
+  });
+  await updates.updateCommand(['--beta', '--yes']);
+  assert.deepEqual(binds, [{ port, host: '127.0.0.1', exclusive: true }]);
+  assert.equal(ecosystem.mock.calls[0].arguments[1], '127.0.0.1');
+  assert.equal(listener.listening, false);
+});
+
 test('restart failure is surfaced after package installation', async (t) => {
   const { run } = commandFixture(t, '2.0.1', '3.0.0-beta');
-  t.mock.method(pm2, 'isPm2Available', () => true);
-  t.mock.method(pm2, 'isBotRunning', () => true);
-  t.mock.method(config, 'readConfig', () => ({ mode: 'marketplace', botDir: 'unchanged' }));
-  t.mock.method(pm2, 'writeEcosystem', () => 'existing-ecosystem');
-  run.mock.mockImplementationOnce(() => ({ status: 0 }), 0);
-  run.mock.mockImplementationOnce(() => ({ status: 1 }), 1);
+  runningBot(t, await freePort(t));
+  run.mock.mockImplementationOnce(() => ({ status: 1 }), 2);
   await assert.rejects(updates.updateCommand(['--beta', '--yes']), /reinício do bot falhou/);
-  assert.equal(run.mock.callCount(), 2);
+  assert.equal(run.mock.callCount(), 3);
+});
+
+test('update shares the restart port check and never reports a successful restart on collision', async (t) => {
+  const { run, lines } = commandFixture(t, '2.0.1', '3.0.0-beta');
+  const otherService = await listen(t);
+  const ownListener = await listen(t);
+  const { ecosystem } = runningBot(t, otherService.address().port);
+  run.mock.mockImplementation((_command, args) => {
+    if (args[0] === 'stop') {
+      assert.equal(args[1], '31');
+      ownListener.close();
+    }
+    return { status: 0 };
+  });
+  await assert.rejects(updates.updateCommand(['--beta', '--yes']), (error) => {
+    assert.match(error.message, /Pacote atualizado, mas o reinício do bot falhou/);
+    assert.match(error.message, /já está em uso por um bot ou outro serviço/);
+    return true;
+  });
+  assert.deepEqual(run.mock.calls.map((call) => call.arguments[1][0]), ['install', 'stop']);
+  assert.equal(ecosystem.mock.callCount(), 0);
+  assert.equal(ownListener.listening, false);
+  assert.equal(otherService.listening, true);
+  assert.doesNotMatch(lines.join('\n'), /Bot reiniciado|Manifest:/);
 });
 
 test('auto-update resolves installed channel on every tick and preserves explicit beta opt-in', () => {
@@ -223,6 +284,30 @@ test('auto-update validates schedule and flags before touching pm2', async () =>
   for (const args of [['on', '25:00'], ['on', '--btea'], ['on', '04:00', '05:00'], ['off', '--beta']]) {
     await assert.rejects(updates.autoUpdateCommand(args), /Uso:|Opções extras/);
   }
+});
+
+test('auto-update surfaces an update or restart failure and schedules another attempt', () => {
+  const timers = [];
+  const errors = [];
+  const calls = [];
+  const context = {
+    require(name) {
+      if (name === 'fs') return { readFileSync: () => JSON.stringify({ version: '3.0.0-beta' }) };
+      if (name === 'child_process') return {
+        spawnSync: (_exe, args) => { calls.push(args); return { status: 1 }; },
+      };
+      if (name.endsWith('updateReleases.js')) return releases;
+      throw new Error(`Unexpected module: ${name}`);
+    },
+    process: { execPath: 'node' },
+    console: { log() {}, error: (...args) => errors.push(args.join(' ')) },
+    setTimeout: (callback) => timers.push(callback),
+  };
+  vm.runInNewContext(updates.generateUpdaterScript(path.resolve('dist', 'cli.js'), '04:00'), context);
+  timers.shift()();
+  assert.deepEqual(Array.from(calls[0]).slice(1), ['update', '--yes', '--beta']);
+  assert.match(errors[0], /Atualização falhou \(status 1\)/);
+  assert.equal(timers.length, 1);
 });
 
 test('auto-update activation persists the beta option without touching bot identity', async (t) => {
