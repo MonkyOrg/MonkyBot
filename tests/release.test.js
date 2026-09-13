@@ -225,7 +225,9 @@ test('workflow explicitly separates beta builds from promotion and never derives
   assert.match(workflow, /workflow_dispatch:\s+inputs:\s+promote_tag:/);
   assert.match(workflow, /group: release\s+cancel-in-progress: false/);
   assert.match(workflow, /PROMOTE_TAG: \$\{\{ inputs.promote_tag \}\}/);
-  assert.equal((workflow.match(/if: steps\.release\.outputs\.promotion != 'true'/g) || []).length, 4);
+  assert.equal((workflow.match(/if: steps\.release\.outputs\.promotion != 'true'/g) || []).length, 5);
+  assert.match(workflow, /name: Install FFmpeg for generated music fixtures\s+if: steps\.release\.outputs\.promotion != 'true'/);
+  assert.match(workflow, /echo "MONKY_MUSIC_FFMPEG=\$\(command -v ffmpeg\)" >> "\$GITHUB_ENV"/);
   assert.ok(!workflow.includes('SDK_PRERELEASE'));
   assert.match(workflow, /run: npm run check:sdk/);
   assert.match(workflow, /run: npm run smoke:pack -- "release\/monky-bot-\$\{VERSION\}\.tgz"/);
@@ -248,7 +250,7 @@ test('every workflow shell script passes bash -n', (t) => {
       scripts.push(body.join('\n'));
     }
   }
-  assert.equal(scripts.length, 7);
+  assert.equal(scripts.length, 8);
   for (const script of scripts) {
     const result = spawnSync(bash, ['-n'], { input: script, encoding: 'utf8', cwd: ROOT });
     if (result.error) throw result.error;
