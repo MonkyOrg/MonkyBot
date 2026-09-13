@@ -5,13 +5,20 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const { Readable } = require('node:stream');
-const { test } = require('node:test');
+const { test, beforeEach } = require('node:test');
 const releases = require('../dist/cli/updateReleases');
 const updates = require('../dist/cli/commands/update');
 const processHelpers = require('../dist/cli/process');
 const pm2 = require('../dist/cli/pm2');
 const config = require('../dist/cli/config');
+const musicTools = require('../dist/cli/musicTools');
 const { setBindHost, listen, freePort, captureBinds } = require('./helpers/manifest-port');
+
+beforeEach((t) => {
+  t.mock.method(musicTools, 'prepareMusicToolsForCli', async () => ({
+    node: process.execPath, ytDlp: 'fixture-ytdlp', ffmpeg: 'fixture-ffmpeg',
+  }));
+});
 
 function release(version, changes = {}) {
   const tag = `v${version}`;

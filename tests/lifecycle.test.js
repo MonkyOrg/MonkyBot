@@ -9,6 +9,7 @@ const config = require('../dist/cli/config');
 const pm2 = require('../dist/cli/pm2');
 const processHelpers = require('../dist/cli/process');
 const manifestPort = require('../dist/cli/manifestPort');
+const musicTools = require('../dist/cli/musicTools');
 const { setBindHost, closeServer, listen, freePort, captureBinds } = require('./helpers/manifest-port');
 
 const botDir = path.resolve(__dirname, '..');
@@ -27,6 +28,9 @@ function managedProcess(status = 'online') {
 
 function fixture(t, initial, proc = null) {
   setBindHost(t);
+  t.mock.method(musicTools, 'prepareMusicToolsForCli', async () => ({
+    node: process.execPath, ytDlp: 'fixture-ytdlp', ffmpeg: 'fixture-ffmpeg',
+  }));
   const state = {
     current: structuredClone(initial),
     effects: [], lines: [],
@@ -59,6 +63,79 @@ function mockPm2Lookup(t, result = { status: 0 }) {
     assert.equal(options.stdio, 'ignore');
     if (result instanceof Error) throw result;
     return result;
+  });
+}
+
+test('restart prepares music before stopping the running process and preserves it on failure', async (t) => {
+  const initial = marketplace(await freePort(t));
+  const state = fixture(t, initial, managedProcess());
+  t.mock.method(musicTools, 'prepareMusicToolsForCli', async () => {
+    assert.deepEqual(state.effects, []);
+    throw new Error('fixture media download failed');
+  });
+  await assert.rejects(lifecycle.restartBot(initial), /fixture media download failed/);
+  assert.deepEqual(state.effects, []);
+  assert.deepEqual(state.current, initial);
+});
+
+test('start pins the prepared media executables into the PM2 ecosystem', async (t) => {
+  const state = fixture(t, marketplace(await freePort(t)));
+  const prepared = { node: process.execPath, ytDlp: '/managed/yt-dlp', ffmpeg: '/managed/ffmpeg' };
+  t.mock.method(musicTools, 'prepareMusicToolsForCli', async () => prepared);
+  await lifecycle.startCommand();
+  assert.deepEqual(state.ecosystem.mock.calls[0].arguments[2], prepared);
+});
+
+test('start rechecks the manifest port after preparing external tools', async (t) => {
+  const port = await freePort(t);
+  const state = fixture(t, marketplace(port));
+  t.mock.method(musicTools, 'prepareMusicToolsForCli', async () => {
+    await listen(t, undefined, port);
+    return { node: process.execPath, ytDlp: 'fixture-ytdlp', ffmpeg: 'fixture-ffmpeg' };
+  });
+  await assert.rejects(lifecycle.startCommand(), /já está em uso/);
+  assert.deepEqual(state.effects, ['ensure']);
+});
+
+test('prepared tool paths survive generated ecosystem serialization', () => {
+  const prepared = { node: process.execPath, ytDlp: "C:\\media's tools\\yt-dlp.exe", ffmpeg: '/tools/line\nbreak/ffmpeg' };
+  const module = { exports: {} };
+  vm.runInNewContext(pm2.generateEcosystem(marketplace(7780), '127.0.0.1', prepared), { module });
+  const env = module.exports.apps[0].env;
+  assert.equal(env.MONKY_MUSIC_NODE, prepared.node);
+  assert.equal(env.MONKY_MUSIC_YTDLP, prepared.ytDlp);
+  assert.equal(env.MONKY_MUSIC_FFMPEG, prepared.ffmpeg);
+});
+
+for (const action of ['start', 'restart']) {
+  test(`${action} preserves media overrides from the owned PM2 process, with the shell taking precedence`, async t => {
+    const previous = {};
+    for (const key of ['MONKY_MUSIC_NODE', 'MONKY_MUSIC_YTDLP', 'MONKY_MUSIC_FFMPEG']) {
+      previous[key] = process.env[key];
+      delete process.env[key];
+    }
+    t.after(() => {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+    process.env.MONKY_MUSIC_FFMPEG = '/operator/ffmpeg';
+    const proc = managedProcess(action === 'start' ? 'stopped' : 'online');
+    proc.pm2_env.MONKY_MUSIC_YTDLP = '/previous/yt-dlp';
+    proc.pm2_env.env = { MONKY_MUSIC_NODE: '/previous/node', MONKY_MUSIC_FFMPEG: '/previous/ffmpeg' };
+    const state = fixture(t, marketplace(await freePort(t)), proc);
+    t.mock.method(musicTools, 'prepareMusicToolsForCli', async ({ env }) => {
+      assert.equal(env.MONKY_MUSIC_YTDLP, '/previous/yt-dlp');
+      assert.equal(env.MONKY_MUSIC_NODE, '/previous/node');
+      assert.equal(env.MONKY_MUSIC_FFMPEG, '/operator/ffmpeg');
+      return { node: env.MONKY_MUSIC_NODE, ytDlp: env.MONKY_MUSIC_YTDLP, ffmpeg: env.MONKY_MUSIC_FFMPEG };
+    });
+    if (action === 'start') await lifecycle.startCommand();
+    else await lifecycle.restartBot(state.current);
+    assert.deepEqual(state.ecosystem.mock.calls[0].arguments[2], {
+      node: '/previous/node', ytDlp: '/previous/yt-dlp', ffmpeg: '/operator/ffmpeg',
+    });
   });
 }
 
@@ -168,8 +245,11 @@ for (const [name, action, previousEnv, override, expected] of [
     };
     if (action === 'start') await lifecycle.startCommand();
     else await lifecycle.restartCommand(action === 'fresh' ? ['--fresh'] : []);
-    assert.deepEqual(binds, [{ port, host: expected, exclusive: true }]);
-    assert.deepEqual(state.ecosystem.mock.calls[0].arguments, [state.current, expected]);
+    assert.deepEqual(binds, Array.from({ length: action === 'start' ? 2 : 1 },
+      () => ({ port, host: expected, exclusive: true })));
+    assert.deepEqual(state.ecosystem.mock.calls[0].arguments, [state.current, expected, {
+      node: process.execPath, ytDlp: 'fixture-ytdlp', ffmpeg: 'fixture-ffmpeg',
+    }]);
     assert.equal(ownListener.listening, false);
   });
 }
@@ -283,6 +363,12 @@ for (const [name, output, expected] of [
   }]) }, /estrutura inválida/],
   ['invalid nested bind host', { status: 0, stdout: JSON.stringify([{
     ...managedProcess(), pm2_env: { ...managedProcess().pm2_env, env: { MONKY_SERVE_HOST: [] } },
+  }]) }, /estrutura inválida/],
+  ['invalid saved media path', { status: 0, stdout: JSON.stringify([{
+    ...managedProcess(), pm2_env: { ...managedProcess().pm2_env, MONKY_MUSIC_FFMPEG: [] },
+  }]) }, /estrutura inválida/],
+  ['invalid nested media path', { status: 0, stdout: JSON.stringify([{
+    ...managedProcess(), pm2_env: { ...managedProcess().pm2_env, env: { MONKY_MUSIC_YTDLP: {} } },
   }]) }, /estrutura inválida/],
   ['invalid metrics', { status: 0, stdout: JSON.stringify([{ ...managedProcess(), monit: { cpu: inventorySecret } }]) }, /estrutura inválida/],
 ]) {

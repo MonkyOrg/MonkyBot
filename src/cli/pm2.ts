@@ -5,20 +5,21 @@ import { ANSI, color, CONFIG_DIR, PM2_PROCESS_NAME } from './constants';
 import { runSync } from './process';
 import { BotConfig, getBotEntryPath } from './config';
 import { DEFAULT_MANIFEST_PORT, getManifestBindHost } from './manifestPort';
+import { MUSIC_TOOL_ENV, type MusicToolEnvironment, type MusicToolPaths } from '../music/toolPaths';
 
 export interface Pm2Process {
   name?: string;
   pm_id?: number;
   pid?: number;
   monit?: { memory?: number; cpu?: number };
-  pm2_env?: {
+  pm2_env?: MusicToolEnvironment & {
     status?: string;
     pm_uptime?: number;
     restart_time?: number;
     pm_cwd?: string;
     pm_exec_path?: string;
     MONKY_SERVE_HOST?: string;
-    env?: { MONKY_SERVE_HOST?: string };
+    env?: MusicToolEnvironment & { MONKY_SERVE_HOST?: string };
   };
 }
 
@@ -60,6 +61,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function hasValidMusicEnvironment(env: Record<string, unknown>): boolean {
+  return Object.values(MUSIC_TOOL_ENV).every((key) => env[key] === undefined || typeof env[key] === 'string');
+}
+
 function isPm2Process(value: unknown): value is Pm2Process {
   if (!isRecord(value) || typeof value.name !== 'string' || !value.name ||
       typeof value.pm_id !== 'number' || !Number.isInteger(value.pm_id) || value.pm_id < 0 ||
@@ -70,8 +75,9 @@ function isPm2Process(value: unknown): value is Pm2Process {
     typeof env.status === 'string' && env.status.length > 0 &&
     typeof env.pm_exec_path === 'string' && env.pm_exec_path.length > 0 &&
     (env.pm_cwd === undefined || typeof env.pm_cwd === 'string') &&
+    hasValidMusicEnvironment(env) &&
     (env.MONKY_SERVE_HOST === undefined || typeof env.MONKY_SERVE_HOST === 'string') &&
-    (env.env === undefined || (isRecord(env.env) &&
+    (env.env === undefined || (isRecord(env.env) && hasValidMusicEnvironment(env.env) &&
       (env.env.MONKY_SERVE_HOST === undefined || typeof env.env.MONKY_SERVE_HOST === 'string'))) &&
     [env.pm_uptime, env.restart_time].every((field) =>
       field === undefined || (typeof field === 'number' && Number.isFinite(field))) &&
@@ -127,10 +133,10 @@ export function getEcosystemPath(): string {
 }
 
 function forSingleQuotes(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r/g, '\\r').replace(/\n/g, '\\n');
 }
 
-export function generateEcosystem(config: BotConfig, manifestHost = getManifestBindHost()): string {
+export function generateEcosystem(config: BotConfig, manifestHost = getManifestBindHost(), musicTools?: MusicToolPaths): string {
   const entryPath = forSingleQuotes(getBotEntryPath(config.botDir));
   const cwd = forSingleQuotes(config.botDir);
 
@@ -138,6 +144,11 @@ export function generateEcosystem(config: BotConfig, manifestHost = getManifestB
     NODE_ENV: 'production',
     MONKY_SERVE: String(config.mode === 'marketplace'),
   };
+  if (musicTools) {
+    env.MONKY_MUSIC_NODE = musicTools.node;
+    env.MONKY_MUSIC_YTDLP = musicTools.ytDlp;
+    env.MONKY_MUSIC_FFMPEG = musicTools.ffmpeg;
+  }
   if (config.botName) env.MONKY_BOT_NAME = config.botName;
   if (config.mode === 'manual') {
     if (config.serverUrl) env.MONKY_SERVER_URL = config.serverUrl;
@@ -168,7 +179,7 @@ ${envLines}
 `;
 }
 
-export function writeEcosystem(config: BotConfig, manifestHost = getManifestBindHost()): string {
+export function writeEcosystem(config: BotConfig, manifestHost = getManifestBindHost(), musicTools?: MusicToolPaths): string {
   // Ensure botDir exists (it's the cwd for the process — .keys/ go there)
   try {
     fs.mkdirSync(config.botDir, { recursive: true });
@@ -187,6 +198,6 @@ export function writeEcosystem(config: BotConfig, manifestHost = getManifestBind
   // Ecosystem lives in ~/.monkybot/, not botDir
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
   const ecosystemPath = getEcosystemPath();
-  fs.writeFileSync(ecosystemPath, generateEcosystem(config, manifestHost), 'utf8');
+  fs.writeFileSync(ecosystemPath, generateEcosystem(config, manifestHost, musicTools), 'utf8');
   return ecosystemPath;
 }

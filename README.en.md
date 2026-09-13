@@ -70,6 +70,12 @@ the server URL and token; in both modes it keeps the current `botDir` and bot
 name as the defaults when reconfiguring. For a global installation, use
 `monkybot setup` and `monkybot start`.
 
+Before saving, setup also prepares the music tools. It reuses working
+executables or downloads missing ones into `~/.monkybot/tools`. Linux and Windows
+do not use `sudo` or install these tools globally; macOS asks before installing
+FFmpeg with Homebrew. See the platform requirements in the
+music section below. Failures or cancellation preserve the previous configuration.
+
 ### Link to the server
 
 **By URL (recommended):** start the bot, copy the manifest URL printed by the
@@ -101,6 +107,8 @@ monkybot logs --lines 100    # Last 100 lines
 monkybot logs --no-follow    # Print recent logs and exit
 monkybot config              # Show current config
 monkybot config set <k> <v>  # Change a setting
+monkybot music-check         # Diagnose Node.js, yt-dlp and FFmpeg/libopus without installing
+monkybot music-setup         # Prepare/repair music tools without recreating registrations
 monkybot --version           # Installed version
 monkybot update              # Update to the latest stable
 monkybot update --beta       # Include betas and stable; install the newest version
@@ -325,17 +333,43 @@ is reached.
 
 ### Music: prerequisites, limits and responsible use
 
-Music runs **in the external bot process**, never on the Monky server. Install
-current [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation) and
-[FFmpeg](https://ffmpeg.org/download.html) with **libopus** on the bot host.
-Executables are not included in the tarball. Use `PATH`, or set
-`MONKY_MUSIC_YTDLP` and `MONKY_MUSIC_FFMPEG` to full executable paths, **without
-extra arguments**. Set these variables in the process/PM2 environment before
-starting; `.env.example` is a reference, not automatically loaded.
+Music runs **in the external bot process**, never on the Monky server.
+`monkybot setup` prepares [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation)
+and [FFmpeg](https://ffmpeg.org/download.html) with **libopus** before saving the
+configuration. Starting a stopped bot and restarting also prepare these tools;
+starting an already online bot remains a no-op. Preparation failure aborts a
+restart **before stopping the previously running bot**.
+
+Executables are not bundled in the tarball. Working tools are reused; missing
+or incompatible ones are downloaded from the official
+[yt-dlp](https://github.com/yt-dlp/yt-dlp/releases) and
+[yt-dlp/FFmpeg-Builds](https://github.com/yt-dlp/FFmpeg-Builds/releases) releases.
+Size and SHA-256 are checked before execution. Direct downloads are installed in
+`~/.monkybot/tools`, without changing system packages. Downloads require HTTPS
+access to GitHub. Each preparation has a ten-minute deadline.
+
+- **Ubuntu/Debian and other glibc Linux distributions:** automatic installation
+  on x64 and arm64. Requires `tar` with xz support; GNU tar also uses `xz-utils`.
+- **Windows:** automatic installation on x64, arm64 and x86, using the system
+  `tar` to extract FFmpeg.
+- **macOS:** yt-dlp is installed locally; FFmpeg uses an existing Homebrew,
+  **only after explicit confirmation**. Non-interactive execution never
+  approves a system installation. An existing FFmpeg executable can be supplied.
+- **musl/Alpine or other platforms:** install compatible executables and provide
+  their paths; a glibc binary is not downloaded as though it were compatible.
+
+Resolution order is: explicit `MONKY_MUSIC_YTDLP` / `MONKY_MUSIC_FFMPEG`,
+managed tools, then `PATH`. Overrides must contain full executable paths,
+**without extra arguments**; an invalid override fails instead of being
+silently replaced. Resolved paths are forwarded to PM2. On start/restart,
+previous overrides from this bot's managed process are preserved unless the
+shell provides new values. Set variables in the process/PM2 environment;
+`.env.example` is a reference, not automatically loaded.
 
 Music additionally needs **Node.js 22+** for current YouTube JavaScript
-challenges (non-music commands keep the bot's general requirements). The bot
-explicitly enables `--js-runtimes node:<executable>`, using its own Node
+challenges (non-music commands keep the bot's general requirements).
+Setup requires this runtime to prepare music; it does not upgrade global Node.
+The bot explicitly enables `--js-runtimes node:<executable>`, using its own Node
 executable or `MONKY_MUSIC_NODE`, rather than relying on yt-dlp autodetection.
 Use an official yt-dlp executable with bundled **EJS**, or install/update
 `yt-dlp[default]` in your managed environment. EJS must match the yt-dlp version;
@@ -346,14 +380,26 @@ The diagnostic checks Node and executables locally; extractor/EJS availability
 for a video is confirmed during resolution, before accepting it into the queue.
 
 ```bash
+monkybot music-setup
 monkybot music-check
 # Local checkout, after npm run build:
 npm run check:music
 ```
 
-This diagnostic downloads no media and does not promise YouTube availability.
-Missing tools/libopus produce actionable failures; the bot does not claim
-playback or successful playable enqueue. Other commands remain available.
+`music-check` shows each tool's status and failure reason. It installs nothing,
+downloads no media, and does not promise YouTube availability. Missing tools
+or libopus are reported with a `music-setup` instruction; the bot does not claim
+playback or successful playable enqueue. Other commands in an already running
+bot remain available.
+
+**Existing installations:** after upgrading a CLI that did not prepare these
+tools (such as `6.0.2-beta`), run `monkybot restart` with the new CLI. Do not
+repeat setup, recreate registrations, or delete `.keys`. A restart initiated by
+the old updater still uses its already loaded code and may not prepare
+dependencies during this first upgrade. `monkybot music-setup` also prepares
+without stopping the process; restart afterward to apply the paths to PM2.
+Direct `npm start`/`npm run dev` execution does not install tools automatically:
+prepare first with `npm run cli -- music-setup`.
 
 1. Join a voice room and run `/play` with a name or an individual
    `https://www.youtube.com/watch?v=...` / `https://youtu.be/...` URL.
