@@ -112,7 +112,7 @@ function runCapture(executable: string, args: string[], signal: AbortSignal, tim
       diagnostic = (diagnostic + text).slice(0, 4096);
       if (bytes > limit) fail(new MusicError('unavailable'));
     });
-    child.once('error', () => { failure = new MusicError('tools'); });
+    child.once('error', (error) => { failure = new MusicError('tools', safeDiagnostic(error.message)); });
     child.once('close', (code) => {
       clearTimeout(timer);
       signal.removeEventListener('abort', cancel);

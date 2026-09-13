@@ -5,6 +5,8 @@ import { MusicError, aborted } from './errors';
 import { capture, captureBytes, bounded, cancellable, safeDiagnostic, terminate } from './process';
 import { OggOpusParser } from './ogg';
 import { createPersistentInput, type PersistentInput } from './persistent-http';
+import { musicToolPaths } from './toolPaths';
+import { checkMusicTools, youtubeExtractorArgs } from './toolChecks';
 
 export const MUSIC_PREVIEW_DURATION_MS = 10_000;
 
@@ -126,36 +128,19 @@ export function parseTrack(value: unknown, requirePublic = false): Track {
 
 export class YouTubeSource implements MusicSource {
   constructor(
-    private readonly ytDlp = process.env.MONKY_MUSIC_YTDLP || 'yt-dlp',
-    private readonly ffmpeg = process.env.MONKY_MUSIC_FFMPEG || 'ffmpeg',
+    private readonly ytDlp = musicToolPaths().ytDlp,
+    private readonly ffmpeg = musicToolPaths().ffmpeg,
     private readonly run = capture,
-    private readonly node = process.env.MONKY_MUSIC_NODE || process.execPath,
+    private readonly node = musicToolPaths().node,
     private readonly runBytes = captureBytes,
   ) {}
 
   private extractorArgs(): string[] {
-    return [
-      '--ignore-config', '--no-cache-dir', '--no-plugin-dirs',
-      '--no-js-runtimes', '--js-runtimes', `node:${this.node}`, '--no-remote-components',
-    ];
+    return youtubeExtractorArgs(this.node);
   }
 
   async check(signal: AbortSignal): Promise<void> {
-    try {
-      const runtime = await this.run(this.node, ['--version'], signal, 5000, 65536).catch((error: unknown) => {
-        if (error instanceof MusicError && error.code === 'tools') throw new MusicError('runtime');
-        throw error;
-      });
-      const major = /^v(\d+)\./.exec(runtime.trim())?.[1];
-      if (!major || Number(major) < 22) throw new MusicError('runtime');
-      await this.run(this.ytDlp, [...this.extractorArgs(), '--version'], signal, 5000, 65536);
-      const encoders = await this.run(this.ffmpeg, ['-hide_banner', '-encoders'], signal, 5000, 131072);
-      if (!/\blibopus\b/.test(encoders)) throw new MusicError('tools');
-    } catch (error: unknown) {
-      if (signal.aborted) throw new MusicError('cancelled');
-      if (error instanceof MusicError && ['busy', 'timeout', 'runtime'].includes(error.code)) throw error;
-      throw new MusicError('tools');
-    }
+    await checkMusicTools({ node: this.node, ytDlp: this.ytDlp, ffmpeg: this.ffmpeg }, signal, this.run);
   }
 
   async search(query: string, signal: AbortSignal): Promise<Track[]> {

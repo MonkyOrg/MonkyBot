@@ -1,10 +1,10 @@
 import path from 'path';
-import os from 'os';
+import { BOT_CONFIG_DIR } from '../utils/paths';
 
 export const APP_NAME = 'monkybot';
 export const PM2_PROCESS_NAME = 'monkybot';
 
-export const CONFIG_DIR = path.join(os.homedir(), '.monkybot');
+export const CONFIG_DIR = BOT_CONFIG_DIR;
 export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
 export const ANSI = {

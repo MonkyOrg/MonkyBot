@@ -5,15 +5,22 @@ const path = require('node:path');
 const readline = require('node:readline');
 const { randomUUID } = require('node:crypto');
 const { EventEmitter } = require('node:events');
-const { test } = require('node:test');
+const { test, beforeEach } = require('node:test');
 
 const { setupCommand } = require('../dist/cli/commands/setup');
 const config = require('../dist/cli/config');
 const constants = require('../dist/cli/constants');
 const { CONFIG_DIR } = constants;
 const manifestPort = require('../dist/cli/manifestPort');
+const musicTools = require('../dist/cli/musicTools');
 const { DEFAULT_BOT_NAME } = require('../dist/profile');
 const { setBindHost, listen, freePort } = require('./helpers/manifest-port');
+
+beforeEach((t) => {
+  t.mock.method(musicTools, 'prepareMusicToolsForCli', async () => ({
+    node: process.execPath, ytDlp: 'fixture-ytdlp', ffmpeg: 'fixture-ffmpeg',
+  }));
+});
 
 function captureLogs(t) {
   const lines = [];
@@ -81,6 +88,54 @@ function mockConfig(t, initialConfig = null) {
   });
   return { get current() { return current; } };
 }
+
+test('setup keeps an existing profile unchanged when music preparation fails', async (t) => {
+  const existing = {
+    mode: 'manual', botDir: CONFIG_DIR, serverUrl: 'ws://localhost:3000/',
+    botToken: 'existing-token', botName: DEFAULT_BOT_NAME,
+  };
+  const state = mockConfig(t, existing);
+  interactiveAnswers(t, ['', '', '', '', '']);
+  const lines = captureLogs(t);
+  t.mock.method(musicTools, 'prepareMusicToolsForCli', async () => {
+    assert.deepEqual(state.current, existing);
+    throw new Error('fixture checksum mismatch');
+  });
+  await assert.rejects(setupCommand(), /fixture checksum mismatch/);
+  assert.deepEqual(state.current, existing);
+  assert.doesNotMatch(lines.join('\n'), /Configuração salva/);
+});
+
+test('setup cancellation aborts pending music preparation without saving a new profile', async (t) => {
+  const existing = {
+    mode: 'manual', botDir: CONFIG_DIR, serverUrl: 'ws://localhost:3000/',
+    botToken: 'existing-token', botName: DEFAULT_BOT_NAME,
+  };
+  const state = mockConfig(t, existing);
+  let terminal;
+  interactiveAnswers(t, ['', '', '', '', rl => { terminal = rl; return 'Changed name'; }]);
+  captureLogs(t);
+  t.mock.method(musicTools, 'prepareMusicToolsForCli', async ({ signal }) => {
+    assert.equal(signal.aborted, false);
+    terminal.emit('SIGINT');
+    assert.equal(signal.aborted, true);
+    throw signal.reason;
+  });
+  await assert.rejects(setupCommand(), /Setup cancelado/);
+  assert.deepEqual(state.current, existing);
+});
+
+test('setup asks before a system-wide music dependency install and honors refusal', async (t) => {
+  const state = mockConfig(t);
+  interactiveAnswers(t, ['2', '', 'localhost:3000', 'fixture-token', '', 'n']);
+  captureLogs(t);
+  t.mock.method(musicTools, 'prepareMusicToolsForCli', async ({ approveSystemInstall }) => {
+    assert.equal(await approveSystemInstall('Authorize fixture system install?', new AbortController().signal), false);
+    throw new Error('fixture install not authorized');
+  });
+  await assert.rejects(setupCommand(), /fixture install not authorized/);
+  assert.equal(state.current, null);
+});
 
 test('setup defaults to the recommended URL installation for fresh configs', async (t) => {
   setBindHost(t);

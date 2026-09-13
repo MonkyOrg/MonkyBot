@@ -13,6 +13,7 @@ import { ANSI, color, CONFIG_DIR, CONFIG_FILE } from '../constants';
 import { BotConfig, readConfig, writeConfig } from '../config';
 import { assertManifestPortAvailable, DEFAULT_MANIFEST_PORT } from '../manifestPort';
 import { DEFAULT_BOT_NAME } from '../../profile';
+import { prepareMusicToolsForCli } from '../musicTools';
 
 const DEFAULT_MANUAL_SERVER_URL = 'ws://localhost:3000';
 
@@ -105,8 +106,12 @@ export async function setupCommand(): Promise<void> {
     },
   });
   const rl = readline.createInterface({ input: process.stdin, output, terminal: true, historySize: 0 });
+  const preparation = new AbortController();
   let closed = false;
-  const onClose = (): void => { closed = true; };
+  const onClose = (): void => {
+    closed = true;
+    preparation.abort(new Error('Setup cancelado; a configuração não foi alterada.'));
+  };
   const onSigint = (): void => { rl.close(); };
   const ensureOpen = (): void => {
     if (closed) throw new Error('Setup cancelado; a configuração não foi alterada.');
@@ -205,6 +210,20 @@ export async function setupCommand(): Promise<void> {
         (answer) => validateBotName(answer || defaultName)),
     };
 
+    await prepareMusicToolsForCli({
+      signal: preparation.signal,
+      approveSystemInstall: async (message, signal) => {
+        const cancelPrompt = (): void => { rl.close(); };
+        signal.addEventListener('abort', cancelPrompt, { once: true });
+        try {
+          signal.throwIfAborted();
+          return /^(?:s|sim|y|yes)$/i.test(await ask(`${message} [s/N]: `));
+        } finally {
+          signal.removeEventListener('abort', cancelPrompt);
+        }
+      },
+    });
+    ensureOpen();
     if (config.mode === 'marketplace') {
       const port = config.servePort ?? DEFAULT_MANIFEST_PORT;
       try {

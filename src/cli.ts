@@ -40,6 +40,7 @@ ${color('COMANDOS', ANSI.bold)}
   config                 Exibe a configuração atual
   config set <k> <v>     Altera uma configuração
   music-check            Verifica yt-dlp e FFmpeg/libopus sem baixar mídia
+  music-setup            Prepara as ferramentas de música sem refazer o vínculo
 
 ${color('OPÇÕES', ANSI.bold)}
   --version, -v          Exibe a versão
@@ -93,15 +94,16 @@ async function main(): Promise<void> {
 
   switch (command) {
     case 'music-check': {
-      const { YouTubeSource } = await import('./music/source');
-      const { musicError } = await import('./music/errors');
-      try {
-        await new YouTubeSource().check(new AbortController().signal);
-        console.log('✅ Node.js 22+ + yt-dlp + FFmpeg/libopus OK. Use yt-dlp com EJS local. Disponibilidade do YouTube não é garantida. / Use yt-dlp with local EJS. YouTube availability is not guaranteed.');
-      } catch (error: unknown) {
-        console.error(`${musicError(error, 'pt-BR')}\n${musicError(error, 'en')}`);
-        process.exitCode = 1;
-      }
+      if (rest.length) throw new Error('Uso: monkybot music-check');
+      const { checkMusicToolsCommand } = await import('./cli/musicTools');
+      await checkMusicToolsCommand();
+      break;
+    }
+    case 'music-setup': {
+      if (rest.length) throw new Error('Uso: monkybot music-setup');
+      const { prepareMusicToolsForCli } = await import('./cli/musicTools');
+      await prepareMusicToolsForCli();
+      console.log('✅ Ferramentas de música preparadas. Se o bot já estiver rodando, execute monkybot restart.');
       break;
     }
 
