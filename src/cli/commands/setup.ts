@@ -153,8 +153,9 @@ export async function setupCommand(): Promise<void> {
       console.log(color('Conexão manual por token', ANSI.cyan));
       console.log('Para obter o token:');
       console.log('  1. No app Monky → Configurações do Servidor → Bots');
-      console.log('  2. Na seção Avançado, gere um vínculo/token');
+      console.log('  2. Em "Gerar vínculo/token", abra "Mostrar opção avançada" e clique "Gerar token"');
       console.log('  3. Copie o token exibido (só aparece uma vez!)');
+      console.log('  Nome e foto são definidos pelo próprio bot, não pelo servidor.');
       console.log();
 
       const defaultUrl = existing?.mode === 'manual'

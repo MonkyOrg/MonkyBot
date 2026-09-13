@@ -13,7 +13,8 @@ function sdkFixture(t, { version = protocolVersion, missing } = {}) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ monky: { protocolVersion } }));
   fs.writeFileSync(path.join(sdk, 'package.json'), JSON.stringify({ main: 'index.js' }));
-  const methods = ['close', 'createSelector', 'listSelectors', 'updateSelector', 'closeSelector', 'finalizeSelector']
+  const methods = ['close', 'createSelector', 'listSelectors', 'updateSelector', 'closeSelector', 'finalizeSelector',
+    'joinVoice', 'getVoiceConnection', 'leaveVoice', 'createScreen', 'updateScreen', 'closeScreen', 'listScreens']
     .filter((name) => name !== missing).map((name) => `${name}() {}`).join('\n');
   const registrations = missing === 'registeredServerCount' ? '' : 'get registeredServerCount() { return 0; }';
   fs.writeFileSync(path.join(sdk, 'index.js'),
@@ -21,10 +22,11 @@ function sdkFixture(t, { version = protocolVersion, missing } = {}) {
   return root;
 }
 
-test('SDK compatibility requires matching protocol and durable selector methods', (t) => {
+test('SDK compatibility requires matching protocol, selectors, voice and screen methods', (t) => {
   assert.equal(checkSdk(sdkFixture(t)), protocolVersion);
   assert.throws(() => checkSdk(sdkFixture(t, { version: protocolVersion - 1 })), /requires the bot-sdk/);
-  for (const missing of ['close', 'registeredServerCount', 'createSelector', 'listSelectors', 'updateSelector', 'closeSelector', 'finalizeSelector']) {
+  for (const missing of ['close', 'registeredServerCount', 'createSelector', 'listSelectors', 'updateSelector', 'closeSelector', 'finalizeSelector',
+    'joinVoice', 'getVoiceConnection', 'leaveVoice', 'createScreen', 'updateScreen', 'closeScreen', 'listScreens']) {
     assert.throws(() => checkSdk(sdkFixture(t, { missing })), /durable selectors/, missing);
   }
 });

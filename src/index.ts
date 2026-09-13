@@ -3,6 +3,7 @@ import { registerAllCommands } from './commands';
 import { DEFAULT_BOT_NAME, loadBotAvatar } from './profile';
 import { loadOrGenerateKeys, REGISTRATIONS_PATH } from './utils/keys';
 import { getManifestUrl } from './utils/manifest';
+import { safeDiagnostic } from './music/process';
 
 // ── Configuration ────────────────────────────────────────────────────
 // Todas as variáveis de ambiente são opcionais — veja README.md para detalhes.
@@ -55,7 +56,7 @@ async function main(): Promise<void> {
   });
 
   bot.on('error', (err: Error, info?: { serverId: string }) => {
-    console.error(info ? `❌ Erro no vínculo ${info.serverId}:` : '❌ Erro:', err.message);
+    console.error(info ? `❌ Erro no vínculo ${info.serverId}:` : '❌ Erro:', safeDiagnostic(err.message || err.name));
   });
 
   bot.on('auth_failed', (failure: unknown) => {
@@ -67,13 +68,17 @@ async function main(): Promise<void> {
     }
   });
 
-  const close = (): Promise<void> => {
-    disposeCommands();
-    return bot.close().finally(() => {
-      process.off('SIGINT', onSignal);
-      process.off('SIGTERM', onSignal);
-    });
-  };
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => closing ??= (async () => {
+    try { await disposeCommands(); }
+    finally {
+      try { await bot.close(); }
+      finally {
+        process.off('SIGINT', onSignal);
+        process.off('SIGTERM', onSignal);
+      }
+    }
+  })();
   const onSignal = (): void => {
     void close().catch((error: unknown) => {
       console.error('❌ Erro ao encerrar:', error instanceof Error ? error.message : String(error));
@@ -141,8 +146,8 @@ async function main(): Promise<void> {
       console.log('       MONKY_BOT_TOKEN=token_do_bot');
       console.log('');
       console.log('     Para obter o token:');
-      console.log('     1. No app Monky → Configurações do Servidor → Bots → Avançado');
-      console.log('     2. Gere um vínculo/token, sem definir nome ou avatar no cliente');
+      console.log('     1. No app Monky → Configurações do Servidor → Bots → Gerar vínculo/token');
+      console.log('     2. Abra "Mostrar opção avançada" e clique "Gerar token", sem definir nome ou avatar no cliente');
       console.log('     3. Copie o token exibido (só aparece uma vez!)');
       console.log('');
       console.log('  📖 Docs: https://monkyorg.github.io/Monky/bots');

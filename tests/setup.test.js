@@ -123,7 +123,7 @@ test('setup reprompts invalid mode choices and only reveals the advanced manual 
     botToken: token,
     botName: 'Meu MonkyBot',
   });
-  assert.match(lines.join('\n'), /Na seção Avançado, gere um vínculo\/token/);
+  assert.match(lines.join('\n'), /"Gerar vínculo\/token".*"Mostrar opção avançada".*"Gerar token"/);
   assert.doesNotMatch(lines.join('\n'), /Clique "Criar", dê um nome ao bot/);
   assert.equal(lines.join('\n').includes(token), false);
   assert.equal(terminal.join('').includes(token), false);
