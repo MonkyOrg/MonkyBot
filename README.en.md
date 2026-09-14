@@ -347,6 +347,9 @@ or incompatible ones are downloaded from the official
 Size and SHA-256 are checked before execution. Direct downloads are installed in
 `~/.monkybot/tools`, without changing system packages. Downloads require HTTPS
 access to GitHub. Each preparation has a ten-minute deadline.
+FFmpeg is extracted in one pass, without first decompressing the `.tar.xz`
+just to list its contents. Extraction uses the overall deadline rather than
+a separate 30-second limit; the CLI distinguishes downloading, extraction and verification.
 
 - **Ubuntu/Debian and other glibc Linux distributions:** automatic installation
   on x64 and arm64. Requires `tar` with xz support; GNU tar also uses `xz-utils`.
@@ -400,6 +403,11 @@ dependencies during this first upgrade. `monkybot music-setup` also prepares
 without stopping the process; restart afterward to apply the paths to PM2.
 Direct `npm start`/`npm run dev` execution does not install tools automatically:
 prepare first with `npm run cli -- music-setup`.
+
+When upgrading from `6.0.3-beta`, the old CLI's restart can still report its
+archive-listing timeout even after installing the corrected package. Run
+`monkybot restart` as a separate command to use the new code. Do not repeat setup
+or delete tools that were already prepared successfully.
 
 1. Join a voice room and run `/play` with a name or an individual
    `https://www.youtube.com/watch?v=...` / `https://youtu.be/...` URL.

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
-import { capture, safeDiagnostic } from '../music/process';
+import { safeDiagnostic } from '../music/process';
 import { MusicError } from '../music/errors';
 
 export type ToolRepository = 'yt-dlp/yt-dlp' | 'yt-dlp/FFmpeg-Builds';
@@ -135,13 +135,14 @@ export async function downloadToolAsset(asset: ToolAsset, destination: string, s
   }
 }
 
-export async function ffmpegArchiveEntry(archive: string, binaryName: string, signal: AbortSignal): Promise<string> {
-  const entries = (await capture('tar', ['-tf', archive], signal, 30_000, 1024 * 1024)).split(/\r?\n/);
-  const matches = entries.filter((entry) => entry === binaryName ||
-    (entry.endsWith(`/bin/${binaryName}`) && /^[a-zA-Z0-9._/-]+$/.test(entry) &&
-      entry.split('/').every((part) => part && part !== '.' && part !== '..')));
-  if (matches.length !== 1) throw new Error('O arquivo de FFmpeg nao contem um executavel unico no local esperado.');
-  return matches[0];
+export function ffmpegArchiveEntry(archiveName: string): string {
+  // Official builds use the asset basename as their root directory. Listing an
+  // xz archive first would decompress it twice and impose a separate timeout.
+  const linux = /^(ffmpeg-master-latest-linux(?:64|arm64)-gpl)\.tar\.xz$/.exec(archiveName);
+  if (linux && linux[0] === archiveName) return `${linux[1]}/bin/ffmpeg`;
+  const windows = /^(ffmpeg-master-latest-win(?:32|64|arm64)-gpl)\.zip$/.exec(archiveName);
+  if (windows && windows[0] === archiveName) return `${windows[1]}/bin/ffmpeg.exe`;
+  throw new Error('O arquivo de FFmpeg nao corresponde a uma distribuicao oficial suportada.');
 }
 
 export function toolDownloadError(error: unknown): Error {

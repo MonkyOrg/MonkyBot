@@ -23,20 +23,26 @@ function directory(t) {
   return root;
 }
 
-function installation(t, { platform = 'linux', arch = 'x64', invalidHash = false } = {}) {
+function installation(t, {
+  platform = 'linux', arch = 'x64', invalidHash = false, slowListing = false, deferExtraction = false,
+} = {}) {
   const root = directory(t);
   const env = { PATH: '' };
   const requests = [];
   const probes = [];
   const binaries = { ytDlp: Buffer.from('synthetic yt-dlp'), ffmpeg: Buffer.from('synthetic FFmpeg archive') };
   const progress = [];
+  let finishExtraction;
+  let started;
+  const extractionStarted = new Promise(resolve => { started = resolve; });
   t.mock.method(capture, 'capture', async (executable, args) => {
     probes.push({ executable, args });
     if (executable === process.execPath) return 'v22.23.2\n';
     if (executable === 'yt-dlp' || executable === 'ffmpeg') throw new MusicError('tools', `spawn ${executable} ENOENT`);
     if (executable === 'tar') {
-      return args[0] === '--version' ? 'bsdtar 3.8' :
-        `ffmpeg-fixture/bin/ffmpeg${platform === 'win32' ? '.exe' : ''}\n`;
+      if (args[0] === '-tf' && slowListing) throw new MusicError('timeout');
+      assert.deepEqual(args, ['--version'], 'Extraction must not perform a preliminary archive listing.');
+      return 'bsdtar 3.8';
     }
     assert.ok(fs.existsSync(executable), 'Only the downloaded candidate or installed executable may be probed.');
     if (args.includes('-encoders')) return ' A..... libopus Opus encoder\n';
@@ -68,22 +74,26 @@ function installation(t, { platform = 'linux', arch = 'x64', invalidHash = false
     assert.equal(command, 'tar');
     assert.equal(args[0], '-xOf');
     assert.equal(args[2], '--');
-    assert.ok(args[3].startsWith('ffmpeg-fixture/bin/'));
+    const archiveRoot = tools.mediaAssetName('ffmpeg', platform, arch).replace(/\.tar\.xz$|\.zip$/, '');
+    assert.equal(args[3], `${archiveRoot}/bin/ffmpeg${platform === 'win32' ? '.exe' : ''}`);
     const child = new EventEmitter();
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
     child.exitCode = null;
     child.signalCode = null;
     child.kill = () => assert.fail('A completed fixture must not need termination.');
-    queueMicrotask(() => {
-      child.stdout.end('synthetic extracted FFmpeg');
-      child.stderr.end();
-      child.exitCode = 0;
-      child.emit('close', 0);
-    });
+    finishExtraction = (code = 0, diagnostic = '') => {
+      child.stdout.end(code === 0 ? 'synthetic extracted FFmpeg' : '');
+      child.stderr.end(diagnostic);
+      child.exitCode = code;
+      child.emit('close', code);
+    };
+    started(child);
+    if (!deferExtraction) queueMicrotask(() => finishExtraction());
     return child;
   });
   return { root, env, requests, probes, progress,
+    extractionStarted, finishExtraction: (...args) => finishExtraction(...args),
     options: { directory: root, env, platform, arch, progress: message => progress.push(message) } };
 }
 
@@ -129,6 +139,9 @@ for (const platform of ['linux', 'win32']) {
     assert.deepEqual(again, result);
     assert.equal(f.requests.length, 4, 'Healthy tools must not download again.');
     assert.ok(f.progress.some(message => message.includes('SHA-256')));
+    const extraction = f.progress.findIndex(message => message.includes('Extraindo o executavel'));
+    const verification = f.progress.findIndex(message => message.includes('Verificando FFmpeg/libopus'));
+    assert.ok(extraction >= 0 && verification > extraction);
   });
 }
 
@@ -138,6 +151,51 @@ test('checksum mismatch never executes or publishes the downloaded file', async 
   assert.deepEqual(fs.readdirSync(f.root), []);
   assert.equal(f.probes.some(probe => probe.executable.includes('.install-')), false);
 });
+
+test('a slow compressed archive does not require a separately timed full listing before extraction', async t => {
+  const f = installation(t, { slowListing: true });
+  await tools.ensureMusicTools(f.options);
+  assert.equal(f.probes.some(probe => probe.executable === 'tar' && probe.args[0] === '-tf'), false);
+});
+
+test('extraction can exceed 30 seconds while remaining within the existing preparation deadline', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = installation(t, { deferExtraction: true });
+  const pending = tools.ensureMusicTools(f.options);
+  await f.extractionStarted;
+  t.mock.timers.tick(35_000);
+  f.finishExtraction();
+  const result = await pending;
+  assert.equal(fs.readFileSync(result.ffmpeg, 'utf8'), 'synthetic extracted FFmpeg');
+});
+
+for (const failure of ['deadline', 'cancel', 'tar']) {
+  test(`failed extraction terminates its owned process and removes staging files (${failure})`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const f = installation(t, { deferExtraction: true });
+    const controller = new AbortController();
+    const terminated = [];
+    t.mock.method(capture, 'terminate', async child => {
+      terminated.push(child);
+      if (child.exitCode === null) {
+        child.signalCode = 'SIGTERM';
+        child.emit('close', null);
+      }
+    });
+    const pending = tools.ensureMusicTools({ ...f.options, signal: controller.signal });
+    const child = await f.extractionStarted;
+    const rejection = assert.rejects(pending, failure === 'deadline' ? /Tempo limite/ :
+      failure === 'cancel' ? /fixture cancel/ : /Nao foi possivel extrair FFmpeg.*fixture extraction error/);
+    if (failure === 'deadline') t.mock.timers.tick(10 * 60_000 + 1);
+    else if (failure === 'cancel') controller.abort(new Error('fixture cancel'));
+    else f.finishExtraction(1, 'fixture extraction error');
+    await rejection;
+    assert.deepEqual(terminated, [child]);
+    assert.ok(child.stdout.destroyed && child.stderr.destroyed);
+    assert.equal(fs.existsSync(paths.managedMusicTool('ffmpeg', f.root, 'linux')), false);
+    assert.ok(!fs.readdirSync(f.root).some(name => name.startsWith('.install-')));
+  });
+}
 
 test('an invalid explicit tool override never downloads or replaces another executable', async t => {
   const f = installation(t);
@@ -200,14 +258,23 @@ for (const value of [
   });
 }
 
-test('FFmpeg extraction selects exactly one bounded, non-traversing archive path', async t => {
-  const run = t.mock.method(capture, 'capture', async () => 'safe/bin/ffmpeg\n');
-  assert.equal(await download.ffmpegArchiveEntry('fixture', 'ffmpeg', signal()), 'safe/bin/ffmpeg');
-  run.mock.restore();
-  for (const listing of ['../outside/bin/ffmpeg\n', 'one/bin/ffmpeg\ntwo/bin/ffmpeg\n', 'nothing\n']) {
-    const invalid = t.mock.method(capture, 'capture', async () => listing);
-    await assert.rejects(download.ffmpegArchiveEntry('fixture', 'ffmpeg', signal()), /executavel unico/);
-    invalid.mock.restore();
+test('FFmpeg extraction targets only the exact executable in supported official archives', () => {
+  for (const build of ['linux64', 'linuxarm64', 'win32', 'win64', 'winarm64']) {
+    const windows = build.startsWith('win');
+    const root = `ffmpeg-master-latest-${build}-gpl`;
+    assert.equal(download.ffmpegArchiveEntry(`${root}${windows ? '.zip' : '.tar.xz'}`),
+      `${root}/bin/ffmpeg${windows ? '.exe' : ''}`);
+  }
+  for (const name of [
+    '../ffmpeg-master-latest-linux64-gpl.tar.xz',
+    'unsafe/ffmpeg-master-latest-win64-gpl.zip',
+    'ffmpeg-master-latest-win64-gpl-shared.zip',
+    'ffmpeg-master-latest-linux64-gpl.zip',
+    'ffmpeg-master-latest-win64-gpl.tar.xz',
+    'ffmpeg-master-latest-linux64-gpl.tar.xz\n',
+    'other.tar.xz',
+  ]) {
+    assert.throws(() => download.ffmpegArchiveEntry(name), /distribuicao oficial suportada/);
   }
 });
 
