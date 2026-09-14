@@ -3,7 +3,8 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { test } = require('node:test');
+const { test, beforeEach } = require('node:test');
+const { setCliLocale } = require('../dist/cli/i18n');
 const lifecycle = require('../dist/cli/commands/lifecycle');
 const config = require('../dist/cli/config');
 const pm2 = require('../dist/cli/pm2');
@@ -14,6 +15,8 @@ const { setBindHost, closeServer, listen, freePort, captureBinds } = require('./
 
 const botDir = path.resolve(__dirname, '..');
 const entry = path.join(botDir, 'dist', 'index.js');
+
+beforeEach(() => setCliLocale('pt-BR'));
 
 function marketplace(port) {
   return { mode: 'marketplace', botDir, servePort: port, publicHost: 'bot.example.test', botName: 'MonkyBot' };
@@ -65,6 +68,27 @@ function mockPm2Lookup(t, result = { status: 0 }) {
     return result;
   });
 }
+
+test('English fresh restart uses the same owned lifecycle and does not rewrite configuration', async t => {
+  setCliLocale('en');
+  const initial = marketplace(await freePort(t));
+  const state = fixture(t, initial, managedProcess());
+  await lifecycle.restartCommand(['--fresh']);
+  assert.deepEqual(state.effects, ['stop', 'ensure', 'delete', 'ecosystem', 'startOrRestart', 'save']);
+  assert.match(state.lines.join('\n'), /Monky Bot restarted/);
+  assert.equal(state.write.mock.callCount(), 0);
+  assert.deepEqual(state.current, initial);
+});
+
+test('generated runtime locale follows the operator, independently of bot profile values', () => {
+  for (const locale of ['pt-BR', 'en']) {
+    setCliLocale(locale);
+    const context = { module: { exports: {} } };
+    vm.runInNewContext(pm2.generateEcosystem(marketplace(7780)), context);
+    assert.equal(context.module.exports.apps[0].env.MONKY_BOT_LOCALE, locale);
+    assert.equal(context.module.exports.apps[0].env.MONKYBOT_LOCALE, locale);
+  }
+});
 
 test('restart prepares music before stopping the running process and preserves it on failure', async (t) => {
   const initial = marketplace(await freePort(t));
@@ -538,7 +562,7 @@ for (const args of [
   test(`config set rejects invalid ${args.join(' ')} without mutating config`, async (t) => {
     const initial = marketplace(await freePort(t));
     const state = fixture(t, initial);
-    await assert.rejects(lifecycle.configCommand(['set', ...args]), /serve port|Modo inválido|public host/i);
+    await assert.rejects(lifecycle.configCommand(['set', ...args]), /porta do manifest|Modo inválido|host público/i);
     assert.deepEqual(state.current, initial);
     assert.equal(state.write.mock.callCount(), 0);
   });
@@ -610,13 +634,18 @@ for (const [command, method] of [['start', 'startCommand'], ['restart', 'restart
     const context = {
       require(name) {
         if (name === './cli/constants') return require('../dist/cli/constants');
+        if (name === './cli/i18n') return require('../dist/cli/i18n');
+        if (name === './music/process') return require('../dist/music/process');
         if (name === './cli/commands/lifecycle') {
           return { [method]: async () => { await Promise.resolve(); throw new Error('synthetic EADDRINUSE'); } };
         }
         if (['./cli/commands/setup', './cli/commands/update'].includes(name)) return {};
         throw new Error(`Unexpected CLI import: ${name}`);
       },
-      process: { argv: ['node', 'cli.js', command], exit: (code) => exits.push(code) },
+      process: {
+        argv: ['node', 'cli.js', command], exit: (code) => exits.push(code),
+        stdin: { isTTY: false }, stdout: { isTTY: false }, env: {},
+      },
       console: { log() {}, error: (message) => errors.push(message) },
       exports: {},
     };

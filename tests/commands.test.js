@@ -9,6 +9,45 @@ const { coinCommand } = require('../dist/commands/coin');
 const { pingCommand } = require('../dist/commands/ping');
 const { helpCommand } = require('../dist/commands/help');
 const { generateEcosystem } = require('../dist/cli/pm2');
+const { setCliLocale, normalizeCliLocale } = require('../dist/cli/i18n');
+const sdk = require('@monky/bot-sdk');
+
+test('every official command and option declares English text without changing canonical names', () => {
+  for (const command of commands) {
+    const text = command.localizations.en;
+    assert.ok(text.description.trim() && text.description.length <= 100, command.name);
+    assert.notEqual(text.description, command.description, command.name);
+    assert.equal(text.name, undefined, 'Command names are never translated');
+    assert.deepEqual(Object.keys(text.options ?? {}).sort(), (command.options ?? []).map(option => option.name).sort());
+    for (const option of command.options ?? []) {
+      const field = text.options[option.name];
+      assert.ok(field.label && field.label.length <= 100);
+      assert.ok(field.description && field.description.length <= 100);
+      assert.equal(field.name, undefined, 'Argument keys stay canonical');
+    }
+  }
+});
+
+test('localized schemas survive SDK registration and canonical language normalization', async () => {
+  assert.equal(typeof sdk.localizeCommand, 'function');
+  const bot = new BotClient({ publicKey: 'test-public-key' });
+  const dispose = registerAllCommands(bot);
+  try {
+    for (const command of commands) {
+      const registered = bot.commands.get(command.name);
+      assert.deepEqual(registered.localizations, command.localizations);
+      const english = sdk.localizeCommand(registered, 'en-US');
+      assert.equal(english.name, command.name);
+      assert.equal(english.description, command.localizations.en.description);
+      for (const option of english.options ?? []) {
+        assert.equal(option.label, command.localizations.en.options[option.name].label);
+      }
+    }
+    for (const locale of ['pt', 'pt-BR', 'pt_PT', 'en', 'en-US', 'EN_us', 'en-GB', undefined]) {
+      assert.equal(normalizeCliLocale(locale), sdk.resolveBotLocale(locale));
+    }
+  } finally { await dispose(); await bot.close(); }
+});
 
 function context({ args = {}, locale = 'pt-BR', controller = new AbortController() } = {}) {
   const replies = [];
@@ -121,6 +160,21 @@ test('already-aborted invocations are ignored by basic commands', async () => {
     await command.handler(state.ctx);
     assert.equal(state.forms.length + state.replies.length + state.published.length, 0);
   }
+});
+
+test('per-user command language is independent of the operator CLI language', () => {
+  try {
+    for (const [operator, user, pattern] of [['pt-BR', 'en', /is online/], ['en', 'pt-BR', /está online/]]) {
+      setCliLocale(operator);
+      const state = context({ locale: user });
+      pingCommand.handler(state.ctx);
+      assert.match(state.replies[0], pattern);
+      assert.equal(state.published.length, 0);
+    }
+    const legacy = context({ locale: 'en-US' });
+    pingCommand.handler(legacy.ctx);
+    assert.match(legacy.replies[0], /is online/);
+  } finally { setCliLocale('pt-BR'); }
 });
 
 test('PM2 passes the configured bot identity in both modes', () => {

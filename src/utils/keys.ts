@@ -1,6 +1,7 @@
 import { generateKeyPairSync } from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { cliText } from '../cli/i18n';
 
 const KEYS_DIR = path.resolve(process.cwd(), '.keys');
 const PRIVATE_KEY_PATH = path.join(KEYS_DIR, 'private.pem');
@@ -30,12 +31,14 @@ export function loadOrGenerateKeys(): KeyPair {
   }
   if (hasPublicKey || hasPrivateKey || fs.existsSync(REGISTRATIONS_PATH)) {
     throw new Error(
-      'A identidade do bot está incompleta. Restaure public.hex, private.pem e registrations.json ' +
-      'do mesmo backup em .keys/. As chaves existentes não foram substituídas.'
+      cliText('A identidade do bot está incompleta. Restaure public.hex, private.pem e registrations.json ' +
+      'do mesmo backup em .keys/. As chaves existentes não foram substituídas.',
+      'The bot identity is incomplete. Restore public.hex, private.pem and registrations.json ' +
+      'from the same backup in .keys/. Existing keys were not replaced.')
     );
   }
 
-  console.log('🔑 Gerando par de chaves Ed25519 (primeira execução)...');
+  console.log(cliText('🔑 Gerando par de chaves Ed25519 (primeira execução)...', '🔑 Generating Ed25519 keys (first run)...'));
 
   const { publicKey, privateKey } = generateKeyPairSync('ed25519', {
     publicKeyEncoding: { type: 'spki', format: 'der' },
@@ -56,8 +59,8 @@ export function loadOrGenerateKeys(): KeyPair {
     // Windows doesn't support chmod — that's fine.
   }
 
-  console.log('✅ Chaves geradas e salvas em .keys/');
-  console.log(`   Chave pública: ${publicKeyHex.substring(0, 32)}...`);
+  console.log(cliText('✅ Chaves geradas e salvas em .keys/', '✅ Keys generated and saved in .keys/'));
+  console.log(cliText(`   Chave pública: ${publicKeyHex.substring(0, 32)}...`, `   Public key: ${publicKeyHex.substring(0, 32)}...`));
 
   return { publicKeyHex, privateKeyPem: privateKey as string };
 }

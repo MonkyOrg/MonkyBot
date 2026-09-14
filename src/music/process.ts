@@ -18,6 +18,19 @@ export function safeDiagnostic(value: string): string {
     .replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 1024);
 }
 
+export function errorDiagnostic(error: unknown): string {
+  const details: string[] = [];
+  const visited = new Set<unknown>();
+  let current = error;
+  while (current instanceof Error && !visited.has(current) && visited.size < 4) {
+    visited.add(current);
+    details.push(current instanceof MusicError ? `${current.code}: ${current.detail || current.message}`
+      : current.message || current.name);
+    current = current.cause;
+  }
+  return safeDiagnostic(details.join(' — ') || 'Unknown failure.');
+}
+
 function captureSlot(signal: AbortSignal): Promise<() => void> {
   aborted(signal);
   if (waitingCaptures.length >= 64) return Promise.reject(new MusicError('busy'));
@@ -97,11 +110,11 @@ function runCapture(executable: string, args: string[], signal: AbortSignal, tim
       void terminate(child);
     };
     const cancel = (): void => fail(new MusicError('cancelled'));
-    const timer = setTimeout(() => fail(new MusicError('timeout')), timeoutMs);
+    const timer = setTimeout(() => fail(new MusicError('timeout', `Media process exceeded ${timeoutMs} ms.`)), timeoutMs);
     signal.addEventListener('abort', cancel, { once: true });
     child.stdout.on('data', (chunk: Buffer) => {
       bytes += chunk.length;
-      if (bytes > limit) fail(new MusicError('unavailable'));
+      if (bytes > limit) fail(new MusicError('unavailable', `Media process output exceeded ${limit} bytes.`));
       else if (!failure) chunks.push(chunk);
     });
     child.stderr.on('data', (chunk: Buffer) => {
@@ -110,15 +123,17 @@ function runCapture(executable: string, args: string[], signal: AbortSignal, tim
       hasDiagnostic ||= !!text.trim();
       // Keep URL/key prefixes: a tail-only buffer can expose their unrecognizable secrets.
       diagnostic = (diagnostic + text).slice(0, 4096);
-      if (bytes > limit) fail(new MusicError('unavailable'));
+      if (bytes > limit) fail(new MusicError('unavailable', `Media process output exceeded ${limit} bytes.`));
     });
     child.once('error', (error) => { failure = new MusicError('tools', safeDiagnostic(error.message)); });
     child.once('close', (code) => {
       clearTimeout(timer);
       signal.removeEventListener('abort', cancel);
-      if (failure || code !== 0 || (options.rejectStderr && hasDiagnostic)) reject(failure ?? new MusicError('unavailable',
-        safeDiagnostic(diagnostic.trim() || (code === 0 ? 'Media process reported error output.' : `Media process exited with code ${code}.`))));
-      else resolve(Buffer.concat(chunks));
+      if (failure || code !== 0 || (options.rejectStderr && hasDiagnostic)) {
+        const detail = safeDiagnostic([failure?.detail, diagnostic.trim()].filter(Boolean).join(' — ') ||
+          (code === 0 ? 'Media process reported error output.' : `Media process exited with code ${code}.`));
+        reject(new MusicError(failure?.code ?? 'unavailable', detail));
+      } else resolve(Buffer.concat(chunks));
     });
     if (signal.aborted) cancel();
   });

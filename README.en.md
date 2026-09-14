@@ -6,7 +6,7 @@ The **official reference bot** for Monky — utility commands, fun and more.
 
 ## Compatibility
 
-This version requires **Monky protocol 15**. Update the Monky app and server
+This version requires **Monky protocol 16**. Update the Monky app and server
 together before updating the bot; earlier protocol versions are not compatible.
 The bundled SDK is checked during the build and needs no separate installation.
 
@@ -109,6 +109,8 @@ monkybot config              # Show current config
 monkybot config set <k> <v>  # Change a setting
 monkybot music-check         # Diagnose Node.js, yt-dlp and FFmpeg/libopus without installing
 monkybot music-setup         # Prepare/repair music tools without recreating registrations
+monkybot music-diagnose --url <url> # Public-video diagnostic, metadata only
+monkybot language en         # Save the CLI language (pt-BR or en)
 monkybot --version           # Installed version
 monkybot update              # Update to the latest stable
 monkybot update --beta       # Include betas and stable; install the newest version
@@ -120,6 +122,27 @@ monkybot autoupdate off     # Disable automatic updates
 ```
 
 Configuration is stored in `~/.monkybot/config.json`. pm2 ensures the bot restarts automatically if it crashes.
+
+### CLI and log language
+
+On the first interactive command, the CLI asks for **Português (Brasil)** or
+**English** and saves only `~/.monkybot/preferences.json`. This does not repeat
+setup or change `config.json`, registrations, ports, or `.keys`. Change it later
+with `monkybot language pt-BR` or `monkybot language en`.
+
+`--help`, `--version`, `update --check`, `--yes`, CI, and noninteractive input/output
+never open that prompt. Without a saved preference, the CLI uses a recognized
+system language or `pt-BR`. For automation, set `MONKY_BOT_LOCALE=pt-BR` or
+`MONKY_BOT_LOCALE=en` in the environment without changing the saved preference.
+The aliases `pt` and `en-US` follow Monky's canonical normalization.
+`MONKY_LANG` is also accepted, with lower priority than `MONKY_BOT_LOCALE`.
+An unreadable or invalid preference produces a warning without exposing its
+contents or rewriting the file; `language` saves an explicit choice.
+
+The operator language is also passed on subsequent CLI-managed restarts and
+used for runtime log headings. Technical executable diagnostics may remain in
+their original language. This is **independent** of each client's personal bot
+language preference.
 
 ### Exclusive manifest port
 
@@ -139,11 +162,10 @@ The probe and ecosystem receive the same resolved host and tested port. The prob
 socket is closed immediately; the CLI does not contact the public host, infer ownership from a
 manifest response, or **check firewall rules or external reachability**.
 
-- **Setup:** an occupied port shows the Portuguese message “A porta X já está em
-  uso por um bot ou outro serviço; escolha outra porta. Se for este bot, execute
-  monkybot stop antes de continuar.” This means the port is already in use by a
-  bot or another service: choose another port, or stop this bot first if it is
-  the one using it. Only the port is requested again; other answers are retained.
+- **Setup:** an occupied port shows a localized message explaining that the port
+  is already in use by a bot or another service. Choose another port, or run
+  `monkybot stop` first if this bot is the one using it.
+  Only the port is requested again; other answers are retained.
   The port is rechecked before saving. Cancelling or failing to select a valid
   port leaves the previous configuration and `.keys` unchanged.
 - **Reconfiguring this bot:** run `monkybot stop` **before** repeating setup on the
@@ -176,9 +198,24 @@ A stable release supersedes the beta with the same number (`3.0.1` > `3.0.1-beta
 Neither command reinstalls an equal or older version, even with `--yes`.
 `--check` only queries and never installs or restarts the bot.
 
+Downloads show received bytes and a percentage when the size is known: a bar
+in interactive terminals and rate-limited lines in logs/pipes. Published asset
+size and SHA-256 are checked before installation; older releases without this
+metadata remain compatible. npm installation is a separate stage, without a
+fabricated percentage.
+
 After installation, the CLI offers to restart the bot if it is running;
 `--yes` also confirms that restart. The configuration, `botDir`, and `.keys`
 directory remain unchanged. Update the client and server to a compatible protocol.
+The updater verifies the installed version and CLI entry in npm's actual global
+prefix and runs the **newly installed CLI in a fresh Node process**, preserving
+`PM2_HOME`, language, and host/media overrides. A stopped bot is not started.
+Restart failure is reported separately from a completed installation, and music
+tools are still prepared before stopping the running process.
+
+An already loaded old updater cannot receive this fix retroactively. On the
+first upgrade, if installation succeeds but its old restart fails, run
+`monkybot restart` separately; do not repeat setup or delete `.keys`.
 
 Auto-update reads the installed version on every run: a beta installation
 checks betas; a stable installation checks stable. With
@@ -293,8 +330,12 @@ come from the bot; the client does not create or edit its profile.
 
 Type `/`, select a command, and fill its named parameters. For example, `lados`
 in `/dado` is an **integer from 2 to 100**, not text; questions retain their spaces.
-Command names stay the same in every language. Replies and forms follow the
-client's language (**Brazilian Portuguese or English**).
+Command names stay the same in every language. Descriptions, fields, replies
+and forms support **Brazilian Portuguese and English**, following the client's
+selected language by default. In personal bot preferences, **Bot language**
+offers **Follow Monky** or a language override for that bot. This is not a shared
+server setting. Generated public content, such as poll results and queue notices,
+retains the language of the person whose interaction created it.
 
 ### Private conversations and guided polls
 
@@ -350,6 +391,9 @@ access to GitHub. Each preparation has a ten-minute deadline.
 FFmpeg is extracted in one pass, without first decompressing the `.tar.xz`
 just to list its contents. Extraction uses the overall deadline rather than
 a separate 30-second limit; the CLI distinguishes downloading, extraction and verification.
+Download progress uses actual received bytes and the published size. Download
+completion does not mean preparation has finished: SHA-256 verification,
+extraction and executable validation are separate stages.
 
 - **Ubuntu/Debian and other glibc Linux distributions:** automatic installation
   on x64 and arm64. Requires `tar` with xz support; GNU tar also uses `xz-utils`.
@@ -409,6 +453,45 @@ archive-listing timeout even after installing the corrected package. Run
 `monkybot restart` as a separate command to use the new code. Do not repeat setup
 or delete tools that were already prepared successfully.
 
+#### When search works but public audio cannot be resolved
+
+Search uses flat metadata; finding a suggestion **does not prove** that the
+extractor can obtain an eligible public audio address. “Could not load public
+audio” means `unavailable`: by itself it **does not confirm a timeout, an IP
+block, or a need for authentication**.
+
+The bot keeps the reply private and localized. Logs now preserve the failure
+code and sanitized native stderr, including resolution failures before queue
+acceptance and exceptions propagated from search/preview. URLs, identifiable
+credentials and keys are redacted, and diagnostics have a size limit.
+
+On the affected host, without reinstalling or restarting just to investigate:
+
+```bash
+monkybot --version
+monkybot music-check
+# Public example; replace it with the individual public video that failed:
+monkybot music-diagnose --url "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
+monkybot logs --no-follow --lines 100
+```
+
+`music-diagnose` requires an explicit valid URL. It has a **45-second** overall
+deadline, queries metadata with the same validation as `/play`, and never
+downloads/plays audio or installs tools. It prints versions, the video ID, and
+failure stage, **not** provider JSON or a signed audio address. On failure,
+`providerCause=UNRESOLVED` states that the cause still needs confirmation; keep
+the sanitized line with the version, OS and test time. An accepted result
+validates metadata/address, not audio transfer. Success on another machine does
+not prove operation on the affected host.
+
+Do not share `.keys`, `config.json`, `.env`, cookies, tokens or signed URLs.
+Do not enable authentication, proxies or remote EJS components to get around a
+restriction. Official yt-dlp executables already bundle EJS and must remain
+compatible with Node.js 22+; local configuration and plugins remain ignored.
+Without the host diagnostic, the provider cause remains **unconfirmed**.
+
+#### Playback and recovery
+
 1. Join a voice room and run `/play` with a name or an individual
    `https://www.youtube.com/watch?v=...` / `https://youtu.be/...` URL.
 2. Suggestions appear while typing, with up to **8 eligible public results**.
@@ -421,7 +504,8 @@ or delete tools that were already prepared successfully.
 3. The queue joins the first caller's voice room and plays in order.
    A public **Now playing** notice is sent only when the first audio frame
    starts advancing through playback.
-   Loading failures are reported to the channel; failed tracks are skipped.
+   Failures during enqueue use a private reply. Already accepted tracks follow
+   the recovery and notice policy described below.
 4. Every human **in that same voice room** can control the queue, without a DJ
    role. All music commands, including `/queue`, `/nowplaying`, search and
    preview, require voice membership. If the bot is already in another room,
@@ -614,7 +698,7 @@ does not change global installations or stop/restart existing bot or pm2 process
 CI runs the smoke test **before publishing**. The repository variable
 `MONKY_SDK_RELEASE` can pin the Monky release tag providing the SDK; otherwise,
 the latest published SDK is used, including betas. Either way, the build fails
-unless the SDK matches protocol 15 and supports durable selectors, voice and
+unless the SDK matches protocol 16 and supports durable selectors, voice and
 screens. Packaging preserves transitive SDK dependencies (including WebRTC/werift),
 even with a `file:` workspace SDK. Publish the compatible Monky release before
 publishing this bot.

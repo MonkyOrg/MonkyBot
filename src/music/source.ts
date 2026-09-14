@@ -97,19 +97,32 @@ export function musicInput(input: unknown): { kind: 'url' | 'search'; value: str
 }
 
 export function audioUrl(input: unknown): string {
-  if (typeof input !== 'string') throw new MusicError('unavailable');
+  if (typeof input !== 'string') throw new MusicError('unavailable', 'yt-dlp did not return an audio URL.');
   let url: URL;
-  try { url = new URL(input); } catch { throw new MusicError('unavailable'); }
+  try { url = new URL(input); } catch { throw new MusicError('unavailable', 'yt-dlp returned an invalid audio URL.'); }
   if (url.protocol !== 'https:' || url.port || url.username || url.password ||
       !/^[a-zA-Z0-9-]+\.googlevideo\.com$/.test(url.hostname) || url.pathname !== '/videoplayback') {
-    throw new MusicError('unavailable');
+    throw new MusicError('unavailable', 'The audio URL is not an authorized HTTPS googlevideo videoplayback endpoint.');
   }
   return url.href;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function record(value: unknown): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new MusicError('unavailable');
-  return value as Record<string, unknown>;
+  if (!isRecord(value)) {
+    throw new MusicError('unavailable', 'yt-dlp returned an invalid metadata object.');
+  }
+  return value;
+}
+
+function metadata(json: string): Record<string, unknown> {
+  let value: unknown;
+  try { value = JSON.parse(json); }
+  catch { throw new MusicError('unavailable', 'yt-dlp returned invalid metadata JSON.'); }
+  return record(value);
 }
 
 export function parseTrack(value: unknown, requirePublic = false): Track {
@@ -119,7 +132,9 @@ export function parseTrack(value: unknown, requirePublic = false): Track {
       data.duration > 3600 || data.is_live === true || data.was_live === true ||
       (data.live_status !== undefined && data.live_status !== null && data.live_status !== 'not_live') ||
       (data.availability !== undefined && data.availability !== null && data.availability !== 'public') ||
-      (requirePublic && data.age_limit !== undefined && data.age_limit !== 0)) throw new MusicError('unsupported');
+      (requirePublic && data.age_limit !== undefined && data.age_limit !== 0)) {
+    throw new MusicError('unsupported', 'Video metadata did not satisfy the public, individual, non-live, unrestricted, up-to-one-hour policy.');
+  }
   return {
     id: data.id, title: data.title.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 150),
     duration: data.duration, url: `https://www.youtube.com/watch?v=${data.id}`,
@@ -151,8 +166,8 @@ export class YouTubeSource implements MusicSource {
       '--dump-single-json', '--playlist-end', '8', '--socket-timeout', '10', '--retries', '1',
       '--', `ytsearch8:${input.value}`,
     ], signal);
-    const data = record(JSON.parse(json));
-    if (!Array.isArray(data.entries)) throw new MusicError('unavailable');
+    const data = metadata(json);
+    if (!Array.isArray(data.entries)) throw new MusicError('unavailable', 'yt-dlp search returned no entries array.');
     const seen = new Set<string>();
     return data.entries.slice(0, 8).flatMap((entry: unknown) => {
       try {
@@ -174,9 +189,9 @@ export class YouTubeSource implements MusicSource {
       '--socket-timeout', '10', '--retries', '1', '--format', 'bestaudio[protocol=https]',
       '--', canonical,
     ], signal);
-    const data = record(JSON.parse(json));
+    const data = metadata(json);
     const track = parseTrack(data, true);
-    if (track.url !== canonical) throw new MusicError('unsupported');
+    if (track.url !== canonical) throw new MusicError('unsupported', 'Resolved video ID did not match the selected public video.');
     return { ...track, audioUrl: audioUrl(data.url) };
   }
 

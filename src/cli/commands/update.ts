@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { ANSI, color } from '../constants';
+import { ANSI, color as terminalColor, CONFIG_DIR } from '../constants';
 import { readConfig } from '../config';
 import {
   requirePm2,
@@ -10,7 +10,14 @@ import {
 } from '../pm2';
 import { runSync } from '../process';
 import { compareVersions, fetchLatestRelease, parseVersion } from '../updateReleases';
-import { restartBot } from './lifecycle';
+import { cliT, cliText, getCliLocale } from '../i18n';
+import { createDownloadProgress } from '../progress';
+import { downloadUpdate } from '../updateDownload';
+import { installUpdate, installedCliEntry, resolveNpmInstallation, restartInstalledCli } from '../updateInstallation';
+
+function color(message: string, style: string): string {
+  return process.stdout.isTTY ? terminalColor(message, style) : message;
+}
 
 // ── Version helpers ──────────────────────────────────────────────────
 
@@ -24,27 +31,27 @@ function readPackagedVersion(): string {
     const parsed: unknown = JSON.parse(fs.readFileSync(pkg, 'utf8'));
     if (typeof parsed === 'object' && parsed !== null && 'version' in parsed &&
         typeof parsed.version === 'string' && parseVersion(parsed.version)) return parsed.version;
-    throw new Error(`Versão inválida no pacote: ${pkg}`);
+    throw new Error(cliT('update.invalidVersion', { path: pkg }));
   }
-  throw new Error('Não foi possível determinar a versão instalada.');
+  throw new Error(cliT('update.versionMissing'));
 }
 
 // ── Update command ───────────────────────────────────────────────────
 
 export async function updateCommand(args: string[]): Promise<void> {
   const invalid = args.find((arg) => !['--check', '--yes', '-y', '--beta'].includes(arg));
-  if (invalid) throw new Error(`Opção desconhecida: ${invalid}`);
+  if (invalid) throw new Error(cliT('update.unknownOption', { option: invalid }));
   const checkOnly = args.includes('--check');
   const assumeYes = args.includes('--yes') || args.includes('-y');
   const includeBeta = args.includes('--beta');
 
   const local = readPackagedVersion();
-  console.log(color(`Versão local: ${local}`, ANSI.dim));
-  console.log(color(`Verificando atualizações (${includeBeta ? 'beta' : 'stable'})...`, ANSI.dim));
+  console.log(color(cliT('update.localVersion', { version: local }), ANSI.dim));
+  console.log(color(cliT('update.checking', { channel: includeBeta ? 'beta' : 'stable' }), ANSI.dim));
 
   const latest = await fetchLatestRelease(includeBeta);
   if (!latest) {
-    console.log(color('Nenhuma release instalável disponível neste canal.', ANSI.yellow));
+    console.log(color(cliT('update.noRelease'), ANSI.yellow));
     return;
   }
 
@@ -52,52 +59,83 @@ export async function updateCommand(args: string[]): Promise<void> {
   const hasUpdate = comparison > 0;
 
   if (hasUpdate) {
-    console.log(color(`🆕 Nova versão disponível: ${latest.version}`, ANSI.green));
+    console.log(color(cliT('update.available', { version: latest.version }), ANSI.green));
     if (latest.htmlUrl) console.log(`   ${latest.htmlUrl}`);
   } else if (comparison < 0) {
-    console.log(color(`A versão ${latest.version} deste canal é anterior à instalada. Downgrade bloqueado.`, ANSI.yellow));
+    console.log(color(cliT('update.downgradeBlocked', { version: latest.version }), ANSI.yellow));
   } else {
-    console.log(color('✅ Você já está na versão mais recente.', ANSI.green));
+    console.log(color(cliT('update.current'), ANSI.green));
   }
 
   if (checkOnly || !hasUpdate) return;
 
   if (hasUpdate && !assumeYes) {
-    const accepted = await promptYesNo(`Atualizar para ${latest.version}?`, true);
+    const accepted = await promptYesNo(cliT('update.confirm', { version: latest.version }), true);
     if (!accepted) {
-      console.log(color('Atualização cancelada.', ANSI.yellow));
+      console.log(color(cliT('update.cancelled'), ANSI.yellow));
       return;
     }
   }
 
-  // Perform update
   console.log();
-  console.log(color('📦 Atualizando Monky Bot...', ANSI.bold));
+  console.log(color(cliT('update.starting'), ANSI.bold));
   console.log(color(latest.tgzUrl, ANSI.cyan));
   console.log();
 
-  const installResult = runSync('npm', ['install', '-g', latest.tgzUrl], { stdio: 'inherit' });
-  if (installResult.status !== 0) {
-    throw new Error('Falha ao instalar a atualização.', { cause: installResult.error });
+  const installation = resolveNpmInstallation();
+  await fs.promises.mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  const staging = await fs.promises.mkdtemp(path.join(CONFIG_DIR, '.update-'));
+  try {
+    const archive = path.join(staging, `monky-bot-${latest.version}.tgz`);
+    const controller = new AbortController();
+    const cancel = (): void => controller.abort(new Error(cliT('update.cancelledSignal')));
+    const timeout = setTimeout(() => controller.abort(new Error(cliT('update.downloadTimeout'))), 10 * 60_000);
+    const progress = createDownloadProgress(cliT('update.downloading', { version: latest.version }));
+    process.once('SIGINT', cancel);
+    try {
+      await downloadUpdate(latest, archive, controller.signal, {
+        onProgress: progress.update,
+        onVerify: () => {
+          progress.finish();
+          console.log(cliT('update.verifyingDownload'));
+        },
+      });
+      controller.signal.throwIfAborted();
+    } finally {
+      progress.finish();
+      clearTimeout(timeout);
+      process.off('SIGINT', cancel);
+    }
+    console.log(cliT('update.installing'));
+    await installUpdate(installation, archive);
+  } finally {
+    await fs.promises.rm(staging, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  }
+
+  let entry: string;
+  try {
+    entry = installedCliEntry(installation.prefix, latest.version);
+  } catch (error: unknown) {
+    throw new Error(cliT('update.installVerificationFailed', {
+      reason: error instanceof Error ? error.message : String(error),
+    }), { cause: error });
   }
 
   console.log();
-  console.log(color(`✅ Monky Bot atualizado para ${latest.version}!`, ANSI.green));
+  console.log(color(cliT('update.installed', { version: latest.version }), ANSI.green));
 
-  // Restart if running
-  if (isPm2Available() && isBotRunning()) {
-    if (assumeYes || (await promptYesNo('Reiniciar o bot para aplicar?', true))) {
-      const config = readConfig();
-      if (!config) throw new Error('Pacote atualizado, mas não foi possível ler a configuração para reiniciar.');
-      try {
-        await restartBot(config);
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`Pacote atualizado, mas o reinício do bot falhou: ${message}`, { cause: error });
-      }
-      console.log(color('🔄 Bot reiniciado.', ANSI.green));
-    }
+  try {
+    if (!isPm2Available() || !isBotRunning()) return;
+    if (!assumeYes && !await promptYesNo(cliT('update.confirmRestart'), true)) return;
+    if (!readConfig()) throw new Error(cliT('update.restartConfigMissing'));
+    console.log(cliT('update.restartStarting'));
+    // npm has replaced files on disk, not the modules already loaded in this process.
+    await restartInstalledCli(entry);
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(cliT('update.restartFailed', { reason }), { cause: error });
   }
+  console.log(color(cliT('update.restarted'), ANSI.green));
 }
 
 // ── Auto-update ──────────────────────────────────────────────────────
@@ -129,6 +167,7 @@ export function generateUpdaterScript(cliEntry: string, schedule: string, includ
 const { spawnSync } = require('child_process');
 const fs = require('fs');
 const { parseVersion } = require(${JSON.stringify(path.join(path.dirname(cliEntry), 'cli', 'updateReleases.js'))});
+const { cliT } = require(${JSON.stringify(path.join(path.dirname(cliEntry), 'cli', 'i18n.js'))});
 
 const CLI = ${JSON.stringify(cliEntry)};
 const PACKAGE_FILE = ${JSON.stringify(path.resolve(path.dirname(cliEntry), '..', 'package.json'))};
@@ -147,19 +186,19 @@ function getMsUntilNextRun() {
 }
 
 function check() {
-  console.log('[' + new Date().toISOString() + '] [monkybot-updater] Verificando atualizações...');
+  console.log('[' + new Date().toISOString() + '] [monkybot-updater] ' + cliT('auto.checking'));
   try {
     const version = parseVersion(JSON.parse(fs.readFileSync(PACKAGE_FILE, 'utf8')).version);
-    if (!version) throw new Error('Versão instalada inválida.');
+    if (!version) throw new Error(cliT('auto.invalidVersion'));
     const beta = INCLUDE_BETA || version.beta !== null;
-    console.log('[monkybot-updater] Canal: ' + (beta ? 'beta' : 'stable'));
+    console.log('[monkybot-updater] ' + cliT('auto.channel', { channel: beta ? 'beta' : 'stable' }));
     const args = [CLI, 'update', '--yes'];
     if (beta) args.push('--beta');
-    const result = spawnSync(process.execPath, args, { stdio: 'inherit' });
+    const result = spawnSync(process.execPath, args, { stdio: 'inherit', shell: false, windowsHide: true });
     if (result.error) throw result.error;
-    if (result.status !== 0) throw new Error('Atualização falhou (status ' + result.status + ').');
+    if (result.status !== 0) throw new Error(cliT('auto.updateFailed', { status: result.status }));
   } catch (err) {
-    console.error('[monkybot-updater] Erro:', err);
+    console.error('[monkybot-updater] ' + cliT('auto.error'), err);
   }
   schedule();
 }
@@ -167,32 +206,32 @@ function check() {
 function schedule() {
   const ms = getMsUntilNextRun();
   const next = new Date(Date.now() + ms);
-  console.log('[monkybot-updater] Próxima verificação:', next.toLocaleString());
+  console.log('[monkybot-updater] ' + cliT('auto.nextCheck'), next.toLocaleString());
   setTimeout(check, ms);
 }
 
-console.log('[monkybot-updater] Daemon iniciado (horário: ' + SCHEDULE + ').');
+console.log('[monkybot-updater] ' + cliT('auto.daemonStarted', { schedule: SCHEDULE }));
 schedule();
 `;
 }
 
 export async function autoUpdateCommand(args: string[]): Promise<void> {
   const action = args[0]; // 'on', 'off', 'status'
-  if (action !== 'on' && args.length > 1) throw new Error('Opções extras não são aceitas neste subcomando.');
+  if (action !== 'on' && args.length > 1) throw new Error(cliT('auto.extraOptions'));
 
   if (!action || action === 'status') {
     const enabled = isAutoUpdateEnabled();
-    console.log(`Auto-update: ${enabled ? color('ativado', ANSI.green) : color('desativado', ANSI.yellow)}`);
+    console.log(`Auto-update: ${enabled ? color(cliT('auto.enabled'), ANSI.green) : color(cliT('auto.disabled'), ANSI.yellow)}`);
     if (enabled) {
-      console.log(color('Para desativar: monkybot autoupdate off', ANSI.dim));
+      console.log(color(cliT('auto.disableHint'), ANSI.dim));
     } else {
-      console.log(color('Para ativar: monkybot autoupdate on [HH:MM]', ANSI.dim));
+      console.log(color(cliT('auto.enableHint'), ANSI.dim));
     }
     return;
   }
 
   if (action === 'off') {
-    if (!requirePm2('desativar auto-update')) return;
+    if (!requirePm2(cliT('auto.disableAction'))) return;
     runSync('pm2', ['delete', UPDATER_PM2_NAME], { stdio: 'ignore' });
     runSync('pm2', ['save'], { stdio: 'ignore' });
 
@@ -202,7 +241,7 @@ export async function autoUpdateCommand(args: string[]): Promise<void> {
       try { fs.unlinkSync(scriptPath); } catch {}
     }
 
-    console.log(color('✅ Auto-update desativado.', ANSI.green));
+    console.log(color(cliT('auto.stopped'), ANSI.green));
     return;
   }
 
@@ -210,7 +249,7 @@ export async function autoUpdateCommand(args: string[]): Promise<void> {
     const options = args.slice(1).filter((arg) => arg !== '--beta');
     const schedule = options[0] || '04:00';
     if (options.length > 1 || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(schedule)) {
-      throw new Error('Uso: monkybot autoupdate on [HH:MM] [--beta] (horário entre 00:00 e 23:59).');
+      throw new Error(cliT('auto.usage'));
     }
     const includeBeta = args.includes('--beta');
     ensurePm2();
@@ -223,32 +262,39 @@ export async function autoUpdateCommand(args: string[]): Promise<void> {
 
     // Remove existing and start fresh
     runSync('pm2', ['delete', UPDATER_PM2_NAME], { stdio: 'ignore' });
-    const result = runSync('pm2', ['start', scriptPath, '--name', UPDATER_PM2_NAME], { stdio: 'inherit' });
+    const locale = getCliLocale();
+    const result = runSync('pm2', ['start', scriptPath, '--name', UPDATER_PM2_NAME], {
+      stdio: 'inherit',
+      env: { ...process.env, MONKY_BOT_LOCALE: locale, MONKYBOT_LOCALE: locale },
+    });
     if (result.status !== 0) {
-      throw new Error('Falha ao iniciar o daemon de auto-update.');
+      throw new Error(cliT('auto.startFailed'));
     }
     runSync('pm2', ['save'], { stdio: 'ignore' });
 
     console.log();
-    console.log(color('✅ Auto-update ativado!', ANSI.green));
-    console.log(`   Horário: ${schedule} (diariamente)`);
-    console.log(`   Canal: ${includeBeta ? 'beta' : 'acompanha a versão instalada'}`);
+    console.log(color(cliT('auto.started'), ANSI.green));
+    console.log(`   ${cliT('auto.schedule', { schedule })}`);
+    console.log(`   ${cliT('auto.channel', { channel: includeBeta ? 'beta' : cliT('auto.followInstalled') })}`);
     console.log(`   Script: ${scriptPath}`);
-    console.log(color('Para desativar: monkybot autoupdate off', ANSI.dim));
+    console.log(color(cliT('auto.disableHint'), ANSI.dim));
     return;
   }
 
-  throw new Error(`Subcomando desconhecido: ${action}. Uso: monkybot autoupdate [on [HH:MM] [--beta] | off | status]`);
+  throw new Error(cliT('auto.unknownAction', { action }));
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
 function promptYesNo(question: string, defaultYes: boolean): Promise<boolean> {
-  const hint = defaultYes ? '[S/n]' : '[s/N]';
+  const hint = defaultYes ? cliText('[S/n]', '[Y/n]') : cliText('[s/N]', '[y/N]');
   return new Promise((resolve) => {
     const readline = require('readline');
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    let answered = false;
+    rl.once('close', () => { if (!answered) resolve(false); });
     rl.question(`${question} ${hint} `, (answer: string) => {
+      answered = true;
       rl.close();
       const trimmed = answer.trim().toLowerCase();
       if (!trimmed) { resolve(defaultYes); return; }

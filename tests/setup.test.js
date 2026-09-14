@@ -15,8 +15,10 @@ const manifestPort = require('../dist/cli/manifestPort');
 const musicTools = require('../dist/cli/musicTools');
 const { DEFAULT_BOT_NAME } = require('../dist/profile');
 const { setBindHost, listen, freePort } = require('./helpers/manifest-port');
+const { setCliLocale } = require('../dist/cli/i18n');
 
 beforeEach((t) => {
+  setCliLocale('pt-BR');
   t.mock.method(musicTools, 'prepareMusicToolsForCli', async () => ({
     node: process.execPath, ytDlp: 'fixture-ytdlp', ffmpeg: 'fixture-ffmpeg',
   }));
@@ -87,6 +89,31 @@ function mockConfig(t, initialConfig = null) {
     current = JSON.parse(JSON.stringify(next));
   });
   return { get current() { return current; } };
+}
+
+for (const locale of ['pt-BR', 'en']) {
+  test(`manual setup localizes questions and SDK validation while keeping token input hidden (${locale})`, async t => {
+    setCliLocale(locale);
+    const state = mockConfig(t);
+    const terminal = [];
+    const questions = interactiveAnswers(t, [
+      '2', '', 'https://invalid.example.test', 'localhost:3000', '', 'fixture-hidden-token', 'x', 'Localized Bot',
+    ], terminal);
+    const lines = captureLogs(t);
+    const errors = [];
+    t.mock.method(console, 'error', text => errors.push(text));
+    await setupCommand();
+    const all = [...questions, ...lines, ...errors].join('\n');
+    assert.match(all, locale === 'en' ? /Manual token connection/ : /Conexão manual por token/);
+    assert.match(all, locale === 'en' ? /Working directory/ : /Diretório de trabalho/);
+    assert.match(all, locale === 'en' ? /Configuration saved/ : /Configuração salva/);
+    assert.equal(errors.length, 3);
+    assert.match(errors[0], locale === 'en' ? /server URL must/ : /URL do servidor deve/);
+    assert.match(errors[1], locale === 'en' ? /bot token is required/ : /token do bot é obrigatório/);
+    assert.match(errors[2], locale === 'en' ? /bot name must/ : /nome do bot deve/);
+    assert.equal(state.current.botToken, 'fixture-hidden-token');
+    assert.doesNotMatch(all + terminal.join(''), /fixture-hidden-token/);
+  });
 }
 
 test('setup keeps an existing profile unchanged when music preparation fails', async (t) => {

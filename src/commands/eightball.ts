@@ -1,5 +1,5 @@
-import type { CommandDefinition } from '@monky/bot-sdk';
-import { translate } from './i18n';
+import { translate, type LocalizedCommandDefinition } from './i18n';
+import { normalizeCliLocale } from '../cli/i18n';
 
 const responses = {
   'pt-BR': [
@@ -48,9 +48,13 @@ const responses = {
   ],
 };
 
-export const eightBallCommand: CommandDefinition = {
+export const eightBallCommand: LocalizedCommandDefinition = {
   name: '8ball',
   description: 'A bola mágica responde sua pergunta.',
+  localizations: { en: {
+    description: 'The magic ball answers your question.',
+    options: { pergunta: { label: 'Question', description: 'Your question for the magic ball' } },
+  } },
   options: [
     {
       name: 'pergunta',
@@ -68,7 +72,7 @@ export const eightBallCommand: CommandDefinition = {
         '⚠️ Enter a question with up to 200 characters.'));
       return;
     }
-    const choices = responses[ctx.locale];
+    const choices = responses[normalizeCliLocale(ctx.locale)];
     const answer = choices[Math.floor(Math.random() * choices.length)];
     ctx.reply(`🎱 *"${question.trim()}"*\n\n**${answer}**`);
   },

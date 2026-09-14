@@ -1,7 +1,9 @@
 import type {
-  BotClient, BotForm, BotFormValues, BotSelector, CommandContext, CommandDefinition,
+  BotClient, BotForm, BotFormValues, BotSelector, CommandContext,
 } from '@monky/bot-sdk';
-import { translate } from './i18n';
+import { translate, type LocalizedCommandDefinition } from './i18n';
+import { cliText, normalizeCliLocale } from '../cli/i18n';
+import { errorDiagnostic, safeDiagnostic } from '../music/process';
 
 const MAX_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
 const RETRY_INTERVAL_MS = 30_000;
@@ -94,9 +96,10 @@ function readDraft(values: BotFormValues): PollDraft | null {
   return { question: question.trim(), options: trimmedOptions, durationMs, maxVoters };
 }
 
-export const pollCommand: CommandDefinition = {
+export const pollCommand: LocalizedCommandDefinition = {
   name: 'enquete',
   description: 'Publica uma enquete com votação e encerramento automático.',
+  localizations: { en: { description: 'Publish a poll with voting and automatic closing.' } },
   handler: async (ctx) => {
     if (ctx.signal.aborted) return;
     let previous: BotFormValues = {};
@@ -132,7 +135,7 @@ export const pollCommand: CommandDefinition = {
 };
 
 export function pollResult(selector: BotSelector): string {
-  const locale = selector.metadata?.locale === 'en' ? 'en' : 'pt-BR';
+  const locale = normalizeCliLocale(selector.metadata?.locale);
   const counts = new Map(selector.choices.map((choice) => [choice.value, 0]));
   for (const value of Object.values(selector.responses)) {
     if (counts.has(value)) counts.set(value, (counts.get(value) ?? 0) + 1);
@@ -169,7 +172,8 @@ export function registerPollCommand(bot: BotClient): () => void {
       // The server makes this idempotent, including across restarts and lost acknowledgments.
       await bot.finalizeSelector(serverId, selector.id, pollResult(selector));
     } catch (error: unknown) {
-      console.error(`[poll] Failed to finalize ${selector.id} on ${serverId}; retrying on recovery.`, error);
+      console.error(`[poll] ${cliText('Falha ao finalizar; nova tentativa na recuperação.', 'Failed to finalize; retrying on recovery.')}`,
+        safeDiagnostic(`${serverId}:${selector.id}`), errorDiagnostic(error));
     } finally {
       finalizing.delete(key);
     }
@@ -184,7 +188,8 @@ export function registerPollCommand(bot: BotClient): () => void {
         await finalize(serverId, selector);
       }
     } catch (error: unknown) {
-      console.error(`[poll] Failed to list polls on ${serverId}; retrying on recovery.`, error);
+      console.error(`[poll] ${cliText('Falha ao listar enquetes; nova tentativa na recuperação.', 'Failed to list polls; retrying on recovery.')}`,
+        safeDiagnostic(serverId), errorDiagnostic(error));
     } finally {
       recovering.delete(serverId);
     }

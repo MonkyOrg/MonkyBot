@@ -1,3 +1,5 @@
+import { normalizeCliLocale } from '../cli/i18n';
+
 export type MusicErrorCode = 'input' | 'selection' | 'unsupported' | 'tools' | 'runtime' | 'unavailable' | 'recovery_failed' | 'timeout' | 'not_in_voice' | 'room' | 'voice' | 'voice_runtime' | 'settings' | 'bot_runtime' | 'full' | 'busy' | 'empty' | 'position' | 'cancelled';
 
 export class MusicError extends Error {
@@ -40,7 +42,7 @@ const messages: Record<MusicErrorCode, [string, string]> = {
 
 export function musicError(error: unknown, locale: string, fallback: MusicErrorCode = 'unavailable'): string {
   const code = error instanceof MusicError ? error.code : fallback;
-  return messages[code][locale === 'en' ? 1 : 0];
+  return messages[code][normalizeCliLocale(locale) === 'en' ? 1 : 0];
 }
 
 export function aborted(signal: AbortSignal): void {

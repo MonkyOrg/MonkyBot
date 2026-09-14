@@ -1,7 +1,8 @@
 import { performance } from 'node:perf_hooks';
 import { MusicError, SourceRecoveryError, aborted } from './errors';
-import { bounded, cancellable, safeDiagnostic } from './process';
+import { bounded, cancellable, errorDiagnostic, safeDiagnostic } from './process';
 import type { AudioStream, MusicSource, ResolvedTrack, Track } from './source';
+import { cliText } from '../cli/i18n';
 
 export interface MusicVoice {
   readonly channelId: string;
@@ -211,14 +212,14 @@ export class MusicQueues {
       if (session.active === active) session.active = undefined;
       this.pump(session);
     }));
-    void active.done.catch(() => console.error('[music] Playback teardown failed.'));
+    void active.done.catch((error: unknown) =>
+      console.error(`[music] ${cliText('Falha ao encerrar reprodução.', 'Playback teardown failed.')} ${errorDiagnostic(error)}`));
   }
 
   private async report(notice: MusicNotice): Promise<void> {
     try { await bounded(this.notify(notice), new AbortController().signal, 10_000); }
     catch (error: unknown) {
-      const detail = error instanceof Error ? error.message : 'Unknown notification failure.';
-      console.error(`[music] Could not deliver ${notice.type} notice: ${safeDiagnostic(detail)}`);
+      console.error(`[music] ${cliText(`Não foi possível entregar o aviso ${notice.type}`, `Could not deliver ${notice.type} notice`)}: ${errorDiagnostic(error)}`);
     }
   }
 
@@ -230,9 +231,7 @@ export class MusicQueues {
     const now = performance.now();
     if (session.lastRuntimeError?.key === key && now - session.lastRuntimeError.at < 5000) return;
     session.lastRuntimeError = { key, at: now };
-    const detail = error instanceof MusicError ? error.detail ?? error.message
-      : error instanceof Error ? error.message : 'Unknown runtime failure.';
-    console.error(`[music] Runtime diagnostic: ${safeDiagnostic(detail)}`);
+    console.error(`[music] ${cliText('Diagnóstico de execução', 'Runtime diagnostic')}: ${errorDiagnostic(error)}`);
   }
 
   private hasPendingPlayback(session: Session): boolean {
@@ -312,12 +311,11 @@ export class MusicQueues {
       }
     } catch (error: unknown) {
       if (!signal.aborted) {
-        const detail = error instanceof MusicError ? error.detail ?? error.message
-          : error instanceof Error ? error.message : 'Unknown playback failure.';
+        const detail = errorDiagnostic(error);
         const failure = stage === 'write' && !(error instanceof MusicError)
           ? new MusicError('voice_runtime', safeDiagnostic(detail)) : error;
         const code = failure instanceof MusicError ? failure.code : 'unavailable';
-        console.error(`[music] Playback failed (stage=${stage}, code=${code}, advancedMs=${active.elapsedMs}): ${safeDiagnostic(detail)}`);
+        console.error(`[music] ${cliText('Reprodução falhou', 'Playback failed')} (stage=${stage}, code=${code}, advancedMs=${active.elapsedMs}): ${detail}`);
         if (failure instanceof SourceRecoveryError) {
           session.pendingFailure = undefined;
           session.endedNoticePending = false;
@@ -330,13 +328,14 @@ export class MusicQueues {
       active.token.abort();
       active.wake?.();
       this.stopSpeaking(connection);
-      await active.stream?.close().catch(() => console.error('[music] Could not close the audio stream.'));
+      await active.stream?.close().catch((error: unknown) =>
+        console.error(`[music] ${cliText('Não foi possível fechar o fluxo de áudio.', 'Could not close the audio stream.')} ${errorDiagnostic(error)}`));
     }
   }
 
   private stopSpeaking(connection: MusicVoice | undefined): void {
     try { connection?.stopSpeaking?.(); }
-    catch { console.error('[music] Could not clear voice activity.'); }
+    catch { console.error(`[music] ${cliText('Não foi possível limpar a atividade de voz.', 'Could not clear voice activity.')}`); }
   }
 
   private sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -434,7 +433,7 @@ export class MusicQueues {
       session[kind] = undefined;
       const connection = this.voice.getVoiceConnection(session.serverId);
       void this.disconnect(session.serverId).catch((error: unknown) => {
-        console.error(`[music] Could not leave an ${kind} voice room.`);
+        console.error(`[music] ${cliText(`Não foi possível sair da sala de voz (${kind}).`, `Could not leave an ${kind} voice room.`)}`);
         if (connection && this.voice.getVoiceConnection(session.serverId) === connection) {
           void this.report({ type: 'runtime-error', actor: session.lastActor, error });
         }
@@ -503,8 +502,7 @@ export class MusicQueues {
       }
     });
     if (actor) {
-      const detail = error instanceof Error ? error.message : 'Voice playback stopped.';
-      console.error(`[music] Playback stopped by voice loss: ${safeDiagnostic(detail)}`);
+      console.error(`[music] ${cliText('Reprodução interrompida por perda de voz', 'Playback stopped by voice loss')}: ${errorDiagnostic(error)}`);
       void this.report({ type: 'failed', actor, track, error });
     }
     return session.closePromise;

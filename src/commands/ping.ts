@@ -1,9 +1,9 @@
-import type { CommandDefinition } from '@monky/bot-sdk';
-import { translate } from './i18n';
+import { translate, type LocalizedCommandDefinition } from './i18n';
 
-export const pingCommand: CommandDefinition = {
+export const pingCommand: LocalizedCommandDefinition = {
   name: 'ping',
   description: 'Verifica se o bot está respondendo.',
+  localizations: { en: { description: 'Check whether the bot is responding.' } },
   handler: (ctx) => {
     if (ctx.signal.aborted) return;
     ctx.reply(translate(ctx.locale,

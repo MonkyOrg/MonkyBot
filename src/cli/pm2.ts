@@ -6,6 +6,7 @@ import { runSync } from './process';
 import { BotConfig, getBotEntryPath } from './config';
 import { DEFAULT_MANIFEST_PORT, getManifestBindHost } from './manifestPort';
 import { MUSIC_TOOL_ENV, type MusicToolEnvironment, type MusicToolPaths } from '../music/toolPaths';
+import { cliText, getCliLocale } from './i18n';
 
 export interface Pm2Process {
   name?: string;
@@ -27,7 +28,7 @@ export function isPm2Available(): boolean {
   // Falhar ao executar pm2 não prova ausência; consulte apenas a localização do comando.
   const command = process.platform === 'win32' ? 'where.exe' : 'sh';
   const args = process.platform === 'win32' ? ['pm2'] : ['-c', 'command -v pm2'];
-  const message = 'Não foi possível verificar se o pm2 está instalado.';
+  const message = cliText('Não foi possível verificar se o pm2 está instalado.', 'Could not check whether pm2 is installed.');
   let result: ReturnType<typeof spawnSync>;
   try {
     result = spawnSync(command, args, { stdio: 'ignore', windowsHide: true });
@@ -42,18 +43,19 @@ export function isPm2Available(): boolean {
 
 export function ensurePm2(): void {
   if (!isPm2Available()) {
-    console.log(color('⚙️  pm2 não encontrado. Instalando...', ANSI.yellow));
+    console.log(color(cliText('⚙️  pm2 não encontrado. Instalando...', '⚙️  pm2 not found. Installing...'), ANSI.yellow));
     const result = runSync('npm', ['install', '-g', 'pm2'], { stdio: 'inherit' });
     if (result.error || result.status !== 0) {
-      throw new Error('Falha ao instalar pm2. Execute manualmente: npm install -g pm2');
+      throw new Error(cliText('Falha ao instalar pm2. Execute manualmente: npm install -g pm2',
+        'Failed to install pm2. Run manually: npm install -g pm2'));
     }
   }
 }
 
 export function requirePm2(action: string): boolean {
   if (isPm2Available()) return true;
-  console.log(color(`pm2 não encontrado — necessário para ${action}.`, ANSI.yellow));
-  console.log(color('Instale com: npm install -g pm2', ANSI.dim));
+  console.log(color(cliText(`pm2 não encontrado — necessário para ${action}.`, `pm2 not found — required to ${action}.`), ANSI.yellow));
+  console.log(color(cliText('Instale com: npm install -g pm2', 'Install with: npm install -g pm2'), ANSI.dim));
   return false;
 }
 
@@ -91,19 +93,20 @@ export function listPm2Processes(): Pm2Process[] {
   try {
     result = runSync('pm2', ['jlist'], { encoding: 'utf8' });
   } catch {
-    throw new Error('Falha ao consultar os processos do pm2 (jlist).');
+    throw new Error(cliText('Falha ao consultar os processos do pm2 (jlist).', 'Failed to query pm2 processes (jlist).'));
   }
   if (result.error || result.status !== 0) {
-    throw new Error(`Falha ao consultar os processos do pm2 (jlist, status ${result.status ?? 'indisponível'}).`);
+    throw new Error(cliText(`Falha ao consultar os processos do pm2 (jlist, status ${result.status ?? 'indisponível'}).`,
+      `Failed to query pm2 processes (jlist, status ${result.status ?? 'unavailable'}).`));
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(result.stdout);
   } catch {
-    throw new Error('A resposta do pm2 (jlist) contém JSON inválido.');
+    throw new Error(cliText('A resposta do pm2 (jlist) contém JSON inválido.', 'The pm2 response (jlist) contains invalid JSON.'));
   }
   if (!Array.isArray(parsed) || !parsed.every(isPm2Process)) {
-    throw new Error('A resposta do pm2 (jlist) tem estrutura inválida.');
+    throw new Error(cliText('A resposta do pm2 (jlist) tem estrutura inválida.', 'The pm2 response (jlist) has an invalid structure.'));
   }
   return parsed;
 }
@@ -111,7 +114,9 @@ export function listPm2Processes(): Pm2Process[] {
 export function findBotProcess(): Pm2Process | null {
   const matches = listPm2Processes().filter((p) => p.name === PM2_PROCESS_NAME);
   if (matches.length > 1) {
-    throw new Error(`Há mais de um processo pm2 chamado ${PM2_PROCESS_NAME}; não é seguro escolher um deles. Nenhum processo foi alterado.`);
+    throw new Error(cliText(
+      `Há mais de um processo pm2 chamado ${PM2_PROCESS_NAME}; não é seguro escolher um deles. Nenhum processo foi alterado.`,
+      `More than one pm2 process is named ${PM2_PROCESS_NAME}; choosing one is unsafe. No process was changed.`));
   }
   return matches[0] ?? null;
 }
@@ -143,6 +148,8 @@ export function generateEcosystem(config: BotConfig, manifestHost = getManifestB
   const env: Record<string, string> = {
     NODE_ENV: 'production',
     MONKY_SERVE: String(config.mode === 'marketplace'),
+    MONKY_BOT_LOCALE: getCliLocale(),
+    MONKYBOT_LOCALE: getCliLocale(),
   };
   if (musicTools) {
     env.MONKY_MUSIC_NODE = musicTools.node;
@@ -184,13 +191,17 @@ export function writeEcosystem(config: BotConfig, manifestHost = getManifestBind
   try {
     fs.mkdirSync(config.botDir, { recursive: true });
   } catch (err: unknown) {
-    const code = (err as NodeJS.ErrnoException).code;
+    const code = typeof err === 'object' && err !== null && 'code' in err ? err.code : undefined;
     if (code === 'EACCES') {
       throw new Error(
-        `Sem permissão para criar "${config.botDir}".\n` +
+        cliText(`Sem permissão para criar "${config.botDir}".\n` +
         `Escolha um diretório dentro do seu home, ex:\n` +
         `  monkybot config set botDir ~/.monkybot\n` +
-        `Ou execute: monkybot setup`
+        `Ou execute: monkybot setup`,
+        `Permission denied creating "${config.botDir}".\n` +
+        `Choose a directory inside your home, e.g.:\n` +
+        `  monkybot config set botDir ~/.monkybot\n` +
+        `Or run: monkybot setup`)
       );
     }
     throw err;

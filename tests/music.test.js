@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { test } = require('node:test');
+const { test, beforeEach } = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
@@ -12,6 +12,9 @@ const { OggOpusParser } = require('../dist/music/ogg');
 const { capture, captureBytes, safeDiagnostic } = require('../dist/music/process');
 const { LIMITS } = require('@monky/bot-sdk');
 const { registerMusicCommands } = require('../dist/commands/music');
+const { setCliLocale } = require('../dist/cli/i18n');
+
+beforeEach(() => setCliLocale('en'));
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -766,7 +769,7 @@ test('audio cleanup failures are reported without wedging the remaining queue', 
   await Promise.all(['broken-close', 'last'].map(id => f.queues.enqueue(actor(), id)));
   await until(() => f.closed.includes('last'));
   assert.equal(errors.mock.callCount(), 1);
-  assert.deepEqual(errors.mock.calls[0].arguments, ['[music] Could not close the audio stream.']);
+  assert.deepEqual(errors.mock.calls[0].arguments, ['[music] Could not close the audio stream. Cleanup failed']);
   assert.deepEqual(f.opens, ['broken-close', 'last']);
 });
 

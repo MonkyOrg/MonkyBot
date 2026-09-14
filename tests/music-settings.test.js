@@ -1,5 +1,8 @@
 const assert = require('node:assert/strict');
-const { test } = require('node:test');
+const { test, beforeEach } = require('node:test');
+const { setCliLocale } = require('../dist/cli/i18n');
+
+beforeEach(() => setCliLocale('en'));
 const { BotClient } = require('@monky/bot-sdk');
 const { EventEmitter } = require('node:events');
 const { registerMusicCommands } = require('../dist/commands/music');

@@ -1,5 +1,6 @@
 import type { BotServerSettingsSnapshot, BotSettingsDefinition } from '@monky/bot-sdk';
 import { MusicError } from './errors';
+import { cliText } from '../cli/i18n';
 
 export const MUSIC_IDLE_SETTING = 'music_idle_seconds';
 
@@ -7,7 +8,8 @@ export function defaultMusicIdleSeconds(configured = process.env.MONKY_MUSIC_GRA
   if (configured === undefined) return 60;
   const seconds = Number(configured);
   if (!/^\d+$/.test(configured) || seconds < 1 || seconds > 600) {
-    throw new Error('MONKY_MUSIC_GRACE_SECONDS must be a whole number from 1 to 600.');
+    throw new Error(cliText('MONKY_MUSIC_GRACE_SECONDS deve ser um número inteiro entre 1 e 600.',
+      'MONKY_MUSIC_GRACE_SECONDS must be a whole number from 1 to 600.'));
   }
   return seconds;
 }

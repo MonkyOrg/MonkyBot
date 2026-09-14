@@ -1,10 +1,14 @@
-import type { BotClient, BotScreenRemoved, CommandDefinition } from '@monky/bot-sdk';
+import type { BotClient, BotScreenRemoved } from '@monky/bot-sdk';
 import { gameAction, newGame, ticTacToeHtml, type GameState } from '../screens/ticTacToe';
-import { translate } from './i18n';
+import { translate, type LocalizedCommandDefinition } from './i18n';
+import { cliText } from '../cli/i18n';
 
-export const ticTacToeDefinition: Omit<CommandDefinition, 'handler'> = {
+export const ticTacToeDefinition: Omit<LocalizedCommandDefinition, 'handler'> = {
   name: 'jogo-da-velha',
   description: 'Abre um jogo da velha na sua sala de voz; duas pessoas jogam e as outras assistem.',
+  localizations: { en: {
+    description: 'Open tic-tac-toe in your voice room; two people play and others watch.',
+  } },
   voiceRequirement: 'joined',
 };
 
@@ -53,7 +57,7 @@ export function registerTicTacToe(bot: BotClient, lifetimeMs = 30 * 60_000): () 
   const close = async (game: Game): Promise<void> => {
     if (!release(game)) return;
     try { await bot.closeScreen(game.serverId, game.screenId); }
-    catch { console.error('[screens] Could not confirm game closure.'); }
+    catch { console.error(`[screens] ${cliText('Não foi possível confirmar o encerramento do jogo.', 'Could not confirm game closure.')}`); }
   };
   bot.command({
     ...ticTacToeDefinition,
@@ -93,7 +97,7 @@ export function registerTicTacToe(bot: BotClient, lifetimeMs = 30 * 60_000): () 
             '🎮 Jogo criado na sua sala de voz! Use o convite para abrir no palco. Você é X; outra pessoa pode entrar como O. Expira em 30 minutos.',
             '🎮 Game created in your voice room! Use the invitation to open it on the stage. You are X; another person can join as O. Expires in 30 minutes.'));
         } catch {
-          console.error('[screens] Could not create an active game.');
+          console.error(`[screens] ${cliText('Não foi possível criar um jogo ativo.', 'Could not create an active game.')}`);
           if (!ctx.signal.aborted) ctx.reply(translate(ctx.locale, 'Não foi possível abrir o jogo. Verifique o acesso ao canal e os limites de telas.', 'Could not open the game. Check channel access and screen limits.'));
         } finally {
           pendingScreens.delete(pendingKey);
@@ -124,7 +128,8 @@ export function registerTicTacToe(bot: BotClient, lifetimeMs = 30 * 60_000): () 
     }).catch(async () => {
       if (game.closed) return;
       // Unknown acknowledgement state cannot safely accept another move.
-      console.error('[screens] Could not confirm the game update; closing the game.');
+      console.error(`[screens] ${cliText('Não foi possível confirmar a atualização; encerrando o jogo.',
+        'Could not confirm the game update; closing the game.')}`);
       await close(game);
     }).finally(() => { game.pending--; });
   };

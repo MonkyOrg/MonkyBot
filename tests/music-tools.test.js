@@ -1,24 +1,41 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const processes = require('node:child_process');
-const { test } = require('node:test');
+const { test, after } = require('node:test');
+const suiteHome = fs.mkdtempSync(path.join(__dirname, '.music-tools-home-'));
+const previousEnv = {};
+for (const [key, value] of Object.entries({
+  HOME: suiteHome, USERPROFILE: suiteHome, PM2_HOME: path.join(suiteHome, 'pm2'),
+  MONKY_BOT_LOCALE: 'pt-BR', MONKYBOT_LOCALE: 'pt-BR',
+})) {
+  previousEnv[key] = process.env[key];
+  process.env[key] = value;
+}
+after(() => {
+  fs.rmSync(suiteHome, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  for (const [key, value] of Object.entries(previousEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
 const { MusicError } = require('../dist/music/errors');
 const checks = require('../dist/music/toolChecks');
 const paths = require('../dist/music/toolPaths');
 const capture = require('../dist/music/process');
 const download = require('../dist/cli/musicToolDownload');
 const tools = require('../dist/cli/musicTools');
+const { cliT, setCliLocale } = require('../dist/cli/i18n');
+const progressRenderer = require('../dist/cli/progress');
 
 const checksum = value => createHash('sha256').update(value).digest('hex');
 const signal = () => new AbortController().signal;
 
 function directory(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'monky-music-tools-'));
+  const root = fs.mkdtempSync(path.join(suiteHome, 'music-tools-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }));
   return root;
 }
@@ -32,6 +49,9 @@ function installation(t, {
   const probes = [];
   const binaries = { ytDlp: Buffer.from('synthetic yt-dlp'), ffmpeg: Buffer.from('synthetic FFmpeg archive') };
   const progress = [];
+  const transfers = [];
+  const events = [];
+  const extractions = [];
   let finishExtraction;
   let started;
   const extractionStarted = new Promise(resolve => { started = resolve; });
@@ -66,11 +86,19 @@ function installation(t, {
             digest: `sha256:${invalidHash ? '0'.repeat(64) : checksum(binaries[tool])}` }],
         }));
       }
-      if (url === assetUrl) return new Response(binaries[tool]);
+      if (url === assetUrl) return new Response(new ReadableStream({
+        start(controller) {
+          const split = Math.floor(binaries[tool].length / 2);
+          controller.enqueue(binaries[tool].subarray(0, split));
+          controller.enqueue(binaries[tool].subarray(split));
+          controller.close();
+        },
+      }));
     }
     assert.fail(`Unexpected network request: ${url}`);
   });
   t.mock.method(processes, 'spawn', (command, args) => {
+    extractions.push({ command, args });
     assert.equal(command, 'tar');
     assert.equal(args[0], '-xOf');
     assert.equal(args[2], '--');
@@ -92,9 +120,16 @@ function installation(t, {
     if (!deferExtraction) queueMicrotask(() => finishExtraction());
     return child;
   });
-  return { root, env, requests, probes, progress,
+  return { root, env, requests, probes, progress, transfers, events, extractions, binaries,
     extractionStarted, finishExtraction: (...args) => finishExtraction(...args),
-    options: { directory: root, env, platform, arch, progress: message => progress.push(message) } };
+    options: {
+      directory: root, env, platform, arch,
+      progress: message => { progress.push(message); events.push({ stage: message }); },
+      downloadProgress: (tool, value) => {
+        transfers.push({ tool, ...value });
+        events.push({ tool, ...value });
+      },
+    } };
 }
 
 test('tool paths preserve explicit overrides, prefer managed tools, then use PATH names', t => {
@@ -139,9 +174,21 @@ for (const platform of ['linux', 'win32']) {
     assert.deepEqual(again, result);
     assert.equal(f.requests.length, 4, 'Healthy tools must not download again.');
     assert.ok(f.progress.some(message => message.includes('SHA-256')));
-    const extraction = f.progress.findIndex(message => message.includes('Extraindo o executavel'));
-    const verification = f.progress.findIndex(message => message.includes('Verificando FFmpeg/libopus'));
-    assert.ok(extraction >= 0 && verification > extraction);
+    const checksumVerification = f.progress.indexOf(cliT('music.verifyingDownload', { tool: checks.MUSIC_TOOL_NAMES.ffmpeg }));
+    const extraction = f.progress.indexOf(cliT('music.extracting'));
+    const verification = f.progress.indexOf(cliT('music.verifyingExecutable', { tool: checks.MUSIC_TOOL_NAMES.ffmpeg }));
+    assert.ok(checksumVerification >= 0 && extraction > checksumVerification && verification > extraction);
+    assert.equal(f.extractions.length, 1, 'Progress must not add a second extraction/listing pass.');
+    for (const tool of ['ytDlp', 'ffmpeg']) {
+      const transfers = f.transfers.filter(value => value.tool === tool);
+      const size = f.binaries[tool].length;
+      assert.deepEqual(transfers.map(value => value.receivedBytes), [0, Math.floor(size / 2), size, size]);
+      assert.ok(transfers.every(value => value.totalBytes === size && value.receivedBytes <= size));
+      assert.equal(transfers.at(-1).done, true);
+      const complete = f.events.findIndex(event => event.tool === tool && event.done);
+      const checked = f.events.findIndex(event => event.stage === cliT('music.verifyingDownload', { tool: checks.MUSIC_TOOL_NAMES[tool] }));
+      assert.ok(checked > complete, 'Verification is a distinct stage after the transfer.');
+    }
   });
 }
 
@@ -185,7 +232,7 @@ for (const failure of ['deadline', 'cancel', 'tar']) {
     const pending = tools.ensureMusicTools({ ...f.options, signal: controller.signal });
     const child = await f.extractionStarted;
     const rejection = assert.rejects(pending, failure === 'deadline' ? /Tempo limite/ :
-      failure === 'cancel' ? /fixture cancel/ : /Nao foi possivel extrair FFmpeg.*fixture extraction error/);
+      failure === 'cancel' ? /fixture cancel/ : /Não foi possível extrair FFmpeg.*fixture extraction error/);
     if (failure === 'deadline') t.mock.timers.tick(10 * 60_000 + 1);
     else if (failure === 'cancel') controller.abort(new Error('fixture cancel'));
     else f.finishExtraction(1, 'fixture extraction error');
@@ -207,7 +254,7 @@ test('an invalid explicit tool override never downloads or replaces another exec
   });
   await assert.rejects(tools.ensureMusicTools({
     ...f.options, env: { ...f.env, MONKY_MUSIC_YTDLP: custom },
-  }), /MONKY_MUSIC_YTDLP.*nao sera substituido/);
+  }), /MONKY_MUSIC_YTDLP.*não será substituído/);
   assert.deepEqual(f.requests, []);
   assert.equal(fs.readFileSync(custom, 'utf8'), 'keep-me');
 });
@@ -239,7 +286,7 @@ test('public tool downloads reject unapproved redirects before making another re
   await assert.rejects(download.downloadToolAsset({
     name: 'fixture', url: 'https://github.com/yt-dlp/yt-dlp/releases/download/test/fixture',
     size: 3, sha256: checksum(Buffer.from('abc')), version: 'test',
-  }, path.join(root, 'download'), signal()), /origem nao autorizada/);
+  }, path.join(root, 'download'), signal()), /origem não autorizada/);
   assert.equal(request.mock.callCount(), 1);
 });
 
@@ -274,7 +321,7 @@ test('FFmpeg extraction targets only the exact executable in supported official 
     'ffmpeg-master-latest-linux64-gpl.tar.xz\n',
     'other.tar.xz',
   ]) {
-    assert.throws(() => download.ffmpegArchiveEntry(name), /distribuicao oficial suportada/);
+    assert.throws(() => download.ffmpegArchiveEntry(name), /distribuição oficial suportada/);
   }
 });
 
@@ -284,7 +331,7 @@ test('tool release metadata must match the exact official asset and provide a ch
   t.mock.method(global, 'fetch', async () => new Response(JSON.stringify({
     tag_name: 'fixture', draft: false, prerelease: false, assets: [asset],
   })));
-  await assert.rejects(download.findToolAsset('yt-dlp/yt-dlp', 'yt-dlp_linux', signal()), /arquivo valido/);
+  await assert.rejects(download.findToolAsset('yt-dlp/yt-dlp', 'yt-dlp_linux', signal()), /arquivo válido/);
 });
 
 test('official checksum manifests are used when the release API does not supply asset digests', async t => {
@@ -314,7 +361,7 @@ for (const change of [
       tag_name: 'fixture', draft: false, prerelease: false, assets: [], ...change,
     })));
     await assert.rejects(download.findToolAsset('yt-dlp/yt-dlp', 'yt-dlp_linux', signal()),
-      /release de ferramenta invalida|arquivo valido|checksum verificavel/);
+      /release de ferramenta inválida|arquivo válido|checksum verificável/);
   });
 }
 
@@ -358,3 +405,152 @@ test('macOS system installation requires explicit approval before invoking Homeb
   }), /Autorize.*interativa/);
   assert.equal(commands.some(([command, args]) => command === 'brew' && args.includes('install')), false);
 });
+
+test('unsupported Node runtime is reported before downloads and is never silently upgraded', async t => {
+  const f = installation(t);
+  t.mock.method(capture, 'capture', async executable => {
+    assert.equal(executable, process.execPath);
+    return 'v20.19.0';
+  });
+  await assert.rejects(tools.ensureMusicTools(f.options), /22\+/);
+  assert.deepEqual(f.requests, []);
+  assert.deepEqual(fs.readdirSync(f.root), []);
+  assert.deepEqual(f.extractions, []);
+});
+
+test('download progress remains bounded and never marks a short transfer as 100 percent', async t => {
+  const root = directory(t);
+  const progress = [];
+  t.mock.method(global, 'fetch', async () => new Response('abc'));
+  await assert.rejects(download.downloadToolAsset({
+    name: 'fixture', url: 'https://github.com/yt-dlp/yt-dlp/releases/download/test/fixture',
+    size: 4, sha256: checksum(Buffer.from('abcd')), version: 'test',
+  }, path.join(root, 'download'), signal(), { onProgress: value => progress.push(value) }), /tamanho\/checksum/);
+  assert.deepEqual(progress.map(value => value.receivedBytes), [0, 3, 3]);
+  assert.ok(progress.every(value => value.receivedBytes < value.totalBytes));
+});
+
+test('tool download progress is reported only after full writes, including partial filesystem writes', async t => {
+  const root = directory(t);
+  const open = fs.promises.open;
+  let writes = 0;
+  t.mock.method(fs.promises, 'open', async (...args) => {
+    const file = await open(...args);
+    return {
+      write: (buffer, offset, length) => { writes++; return file.write(buffer, offset, Math.min(1, length)); },
+      sync: () => file.sync(), close: () => file.close(),
+    };
+  });
+  const progress = [];
+  t.mock.method(global, 'fetch', async () => new Response('abc'));
+  const output = path.join(root, 'download');
+  await download.downloadToolAsset({
+    name: 'fixture', url: 'https://github.com/yt-dlp/yt-dlp/releases/download/test/fixture',
+    size: 3, sha256: checksum(Buffer.from('abc')), version: 'test',
+  }, output, signal(), { onProgress: value => progress.push(value) });
+  assert.equal(writes, 3);
+  assert.deepEqual(progress.map(value => value.receivedBytes), [0, 3, 3]);
+  assert.equal(fs.readFileSync(output, 'utf8'), 'abc');
+});
+
+test('exclusive tool download staging never overwrites another file', async t => {
+  const root = directory(t);
+  const output = path.join(root, 'download');
+  fs.writeFileSync(output, 'keep this file');
+  const fetch = t.mock.method(global, 'fetch', () => assert.fail('An existing file must fail before network access.'));
+  await assert.rejects(download.downloadToolAsset({
+    name: 'fixture', url: 'https://github.com/yt-dlp/yt-dlp/releases/download/test/fixture',
+    size: 3, sha256: checksum(Buffer.from('abc')), version: 'test',
+  }, output, signal()), { code: 'EEXIST' });
+  assert.equal(fs.readFileSync(output, 'utf8'), 'keep this file');
+  assert.equal(fetch.mock.callCount(), 0);
+});
+
+test('cancellation during final tool verification never publishes or executes its candidate', async t => {
+  const f = installation(t);
+  const controller = new AbortController();
+  await assert.rejects(tools.ensureMusicTools({
+    ...f.options, signal: controller.signal,
+    progress: message => {
+      if (message === cliT('music.verifyingDownload', { tool: checks.MUSIC_TOOL_NAMES.ytDlp })) {
+        controller.abort(new Error('fixture cancelled during verification'));
+      }
+    },
+  }), /fixture cancelled during verification/);
+  assert.deepEqual(fs.readdirSync(f.root), []);
+  assert.equal(f.probes.some(probe => probe.executable.includes('.install-')), false);
+});
+
+test('cancelling a stalled tool body releases its reader within the existing deadline', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = installation(t);
+  const original = global.fetch;
+  let started;
+  let cancelled = false;
+  const reading = new Promise(resolve => { started = resolve; });
+  t.mock.method(global, 'fetch', async (url, options) => {
+    if (String(url).startsWith('https://api.github.com/')) return original(url, options);
+    return new Response(new ReadableStream({ cancel() { cancelled = true; } }));
+  });
+  const pending = tools.ensureMusicTools({
+    ...f.options,
+    downloadProgress: (_tool, value) => { if (value.receivedBytes === 0) started(); },
+  });
+  const rejection = assert.rejects(pending, /Tempo limite preparando/);
+  await reading;
+  t.mock.timers.tick(10 * 60_000 + 1);
+  await rejection;
+  assert.equal(cancelled, true);
+  assert.deepEqual(fs.readdirSync(f.root), []);
+});
+
+test('progress observer failure cleans unpublished staging without executing a candidate', async t => {
+  const f = installation(t);
+  await assert.rejects(tools.ensureMusicTools({
+    ...f.options,
+    downloadProgress: () => { throw new Error('fixture progress failure'); },
+  }), /fixture progress failure/);
+  assert.deepEqual(fs.readdirSync(f.root), []);
+  assert.equal(f.probes.some(probe => probe.executable.includes('.install-')), false);
+});
+
+test('music setup stages and failures respect English CLI language selection', async t => {
+  setCliLocale('en');
+  t.after(() => setCliLocale('pt-BR'));
+  const f = installation(t);
+  await tools.ensureMusicTools(f.options);
+  assert.ok(f.progress.some(message => message.startsWith('Downloading')));
+  assert.ok(f.progress.some(message => message.includes('Extracting the executable')));
+  assert.ok(f.progress.some(message => message.includes('SHA-256 verified')));
+  assert.ok(f.progress.every(message => !/Baixando|Extraindo|Verificando|instalado/.test(message)));
+  assert.throws(() => tools.mediaAssetName('ffmpeg', 'freebsd', 'x64'), /Automatic installation/);
+});
+
+for (const isTTY of [false, true]) {
+  test(`music CLI wires real download bytes into separate finished progress displays (TTY=${isTTY})`, async t => {
+    const f = installation(t, { platform: process.platform, arch: process.arch });
+    const displays = [];
+    const stages = [];
+    const create = progressRenderer.createDownloadProgress;
+    t.mock.method(progressRenderer, 'createDownloadProgress', label => {
+      const lines = [];
+      displays.push({ label, lines });
+      return create(label, { isTTY, write: value => lines.push(value) }, () => 0);
+    });
+    t.mock.method(console, 'log', message => stages.push(message));
+    const listenerCount = process.listenerCount('SIGINT');
+    t.after(() => fs.rmSync(path.join(suiteHome, '.monkybot', 'tools'), { recursive: true, force: true }));
+    await tools.prepareMusicToolsForCli({ env: f.env });
+    assert.equal(process.listenerCount('SIGINT'), listenerCount);
+    assert.equal(displays.length, 2);
+    for (const [index, tool] of ['ytDlp', 'ffmpeg'].entries()) {
+      const display = displays[index];
+      assert.equal(display.label, cliT('music.downloadLabel', { tool: checks.MUSIC_TOOL_NAMES[tool] }));
+      assert.match(display.lines.join(''), new RegExp(`100% \\(${f.binaries[tool].length} B / ${f.binaries[tool].length} B\\)`));
+      assert.ok(display.lines.at(-1).endsWith('\n'));
+      if (!isTTY) assert.doesNotMatch(display.lines.join(''), /[\r\u001b]/);
+    }
+    assert.ok(stages.includes(cliT('music.extracting')));
+    assert.equal(f.extractions.length, 1);
+  });
+}
