@@ -1,9 +1,9 @@
-import type { CommandDefinition } from '@monky/bot-sdk';
-import { translate } from './i18n';
+import { translate, type LocalizedCommandDefinition } from './i18n';
 
-export const helpCommand: CommandDefinition = {
+export const helpCommand: LocalizedCommandDefinition = {
   name: 'ajuda',
   description: 'Lista todos os comandos disponíveis do MonkyBot.',
+  localizations: { en: { description: 'List all available MonkyBot commands.' } },
   handler: (ctx) => {
     if (ctx.signal.aborted) return;
     const commands = [

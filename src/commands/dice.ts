@@ -1,9 +1,12 @@
-import type { CommandDefinition } from '@monky/bot-sdk';
-import { translate } from './i18n';
+import { translate, type LocalizedCommandDefinition } from './i18n';
 
-export const diceCommand: CommandDefinition = {
+export const diceCommand: LocalizedCommandDefinition = {
   name: 'dado',
   description: 'Rola um dado. Padrão: 6 lados.',
+  localizations: { en: {
+    description: 'Roll a die. Default: 6 sides.',
+    options: { lados: { label: 'Sides', description: 'Number of die sides (default: 6)' } },
+  } },
   options: [
     {
       name: 'lados',

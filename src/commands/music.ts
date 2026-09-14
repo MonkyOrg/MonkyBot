@@ -6,23 +6,43 @@ import { LIMITS } from '@monky/bot-sdk';
 import { MusicQueues, type MusicActor, type MusicNotice } from '../music/queue';
 import { MusicError, aborted, musicError } from '../music/errors';
 import { IncompleteAudioError, MUSIC_PREVIEW_DURATION_MS, musicInput, videoUrl, YouTubeSource, type MusicSource, type Track } from '../music/source';
-import { bounded } from '../music/process';
-import { translate } from './i18n';
+import { bounded, errorDiagnostic } from '../music/process';
+import { translate, type LocalizedCommandDefinition } from './i18n';
+import { cliText } from '../cli/i18n';
 import { defaultMusicIdleSeconds, musicIdleMilliseconds, musicSettingsDefinition } from '../music/settings';
 
-export const musicDefinitions: Omit<CommandDefinition, 'handler'>[] = [
+export const musicDefinitions: Omit<LocalizedCommandDefinition, 'handler'>[] = [
   { name: 'play', voiceRequirement: 'same-bot-channel', description: 'Busca pelo nome ou adiciona um vídeo individual do YouTube à fila.',
+    localizations: { en: {
+      description: 'Search by name or add an individual YouTube video to the queue.',
+      options: { busca: {
+        label: 'Search', description: 'Name or individual YouTube video URL',
+        placeholder: 'Search for a public video or paste its URL',
+      } },
+    } },
     options: [{ name: 'busca', description: 'Nome ou link de vídeo individual do YouTube', type: 'string', required: true, autocomplete: true }] },
-  { name: 'queue', voiceRequirement: 'same-bot-channel', description: 'Mostra a faixa atual e a fila de próximas faixas.' },
-  { name: 'nowplaying', voiceRequirement: 'same-bot-channel', description: 'Mostra a faixa atual e a posição da reprodução.' },
-  { name: 'pause', voiceRequirement: 'same-bot-channel', description: 'Pausa a faixa atual sem perder a posição.' },
-  { name: 'resume', voiceRequirement: 'same-bot-channel', description: 'Retoma a faixa pausada na mesma posição.' },
-  { name: 'skip', voiceRequirement: 'same-bot-channel', description: 'Pula a faixa atual e avança para a próxima.' },
-  { name: 'stop', voiceRequirement: 'same-bot-channel', description: 'Para a reprodução e limpa a fila.' },
-  { name: 'leave', voiceRequirement: 'same-bot-channel', description: 'Para, limpa a fila e desconecta da sala de voz.' },
+  { name: 'queue', voiceRequirement: 'same-bot-channel', description: 'Mostra a faixa atual e a fila de próximas faixas.',
+    localizations: { en: { description: 'Show the current track and upcoming queue.' } } },
+  { name: 'nowplaying', voiceRequirement: 'same-bot-channel', description: 'Mostra a faixa atual e a posição da reprodução.',
+    localizations: { en: { description: 'Show the current track and playback position.' } } },
+  { name: 'pause', voiceRequirement: 'same-bot-channel', description: 'Pausa a faixa atual sem perder a posição.',
+    localizations: { en: { description: 'Pause the current track without losing its position.' } } },
+  { name: 'resume', voiceRequirement: 'same-bot-channel', description: 'Retoma a faixa pausada na mesma posição.',
+    localizations: { en: { description: 'Resume the paused track at the same position.' } } },
+  { name: 'skip', voiceRequirement: 'same-bot-channel', description: 'Pula a faixa atual e avança para a próxima.',
+    localizations: { en: { description: 'Skip the current track and advance to the next one.' } } },
+  { name: 'stop', voiceRequirement: 'same-bot-channel', description: 'Para a reprodução e limpa a fila.',
+    localizations: { en: { description: 'Stop playback and clear the queue.' } } },
+  { name: 'leave', voiceRequirement: 'same-bot-channel', description: 'Para, limpa a fila e desconecta da sala de voz.',
+    localizations: { en: { description: 'Stop, clear the queue and disconnect from voice.' } } },
   { name: 'remove', voiceRequirement: 'same-bot-channel', description: 'Remove uma posição da fila de próximas faixas.',
+    localizations: { en: {
+      description: 'Remove a position from the upcoming queue.',
+      options: { position: { label: 'Position', description: 'Position in the upcoming queue' } },
+    } },
     options: [{ name: 'position', description: 'Posição na fila de próximas faixas', type: 'integer', required: true, min: 1, max: 50 }] },
-  { name: 'clear', voiceRequirement: 'same-bot-channel', description: 'Limpa apenas as próximas faixas; não interrompe a atual.' },
+  { name: 'clear', voiceRequirement: 'same-bot-channel', description: 'Limpa apenas as próximas faixas; não interrompe a atual.',
+    localizations: { en: { description: 'Clear only upcoming tracks without interrupting the current track.' } } },
 ];
 
 async function actor(ctx: CommandContext): Promise<MusicActor> {
@@ -74,7 +94,7 @@ export function createMusicCommands(queues: MusicQueues, source: MusicSource): C
         },
       }));
     } catch (error: unknown) {
-      throw new Error(musicError(error, ctx.locale));
+      throw new Error(musicError(error, ctx.locale), { cause: error });
     }
   };
   const audioPreview = async (ctx: CommandAudioPreviewContext): Promise<CommandAudioPreviewData> => {
@@ -85,7 +105,7 @@ export function createMusicCommands(queues: MusicQueues, source: MusicSource): C
       aborted(ctx.signal);
       return { bytes, mimeType: 'audio/ogg' };
     } catch (error: unknown) {
-      throw new Error(musicError(error, ctx.locale));
+      throw new Error(musicError(error, ctx.locale), { cause: error });
     }
   };
   return musicDefinitions.map((definition) => ({
@@ -130,11 +150,17 @@ export function createMusicCommands(queues: MusicQueues, source: MusicSource): C
               leave: ['Reprodução parada, fila limpa e sala desconectada.', 'Playback stopped, queue cleared and voice disconnected.'],
               remove: ['Faixa removida da fila.', 'Track removed from the queue.'], clear: ['Próximas faixas removidas; faixa atual preservada.', 'Upcoming tracks cleared; current track preserved.'],
             };
-            ctx.reply(done[control][ctx.locale === 'en' ? 1 : 0]);
+            ctx.reply(translate(ctx.locale, done[control][0], done[control][1]));
           }
         }
       } catch (error: unknown) {
-        if (!ctx.signal.aborted) ctx.reply(`⚠️ ${musicError(error, ctx.locale)}`);
+        if (!ctx.signal.aborted) {
+          if (!(error instanceof MusicError) || error.detail ||
+              ['tools', 'runtime', 'unavailable', 'timeout', 'voice', 'voice_runtime', 'settings', 'bot_runtime'].includes(error.code)) {
+            console.error(`[music] ${cliText('Comando falhou', 'Command failed')} (command=${definition.name}, stage=execute): ${errorDiagnostic(error)}`);
+          }
+          ctx.reply(`⚠️ ${musicError(error, ctx.locale)}`);
+        }
       }
     },
   }));
@@ -156,13 +182,14 @@ export function registerMusicCommands(bot: BotClient): () => Promise<void> {
   for (const command of createMusicCommands(queues, source)) bot.command(command);
   const interrupted = new Map<string, { actor: MusicActor; sending: boolean }>();
   const disconnectQueue = (serverId: string, error?: unknown): void => {
-    void queues.disconnect(serverId, error).catch(() => console.error('[music] Voice teardown failed.'));
+    void queues.disconnect(serverId, error).catch((failure: unknown) =>
+      console.error(`[music] ${cliText('Falha ao encerrar voz.', 'Voice teardown failed.')} ${errorDiagnostic(failure)}`));
   };
   const rememberInterruption = (serverId: string): void => {
     const actor = queues.notificationActor(serverId);
     if (actor) {
       if (interrupted.has(serverId) || interrupted.size < 128) interrupted.set(serverId, { actor, sending: false });
-      else console.error('[music] Disconnection notice limit reached.');
+      else console.error(`[music] ${cliText('Limite de avisos de desconexão atingido.', 'Disconnection notice limit reached.')}`);
     }
   };
   const disconnected = ({ serverId }: { serverId: string }): void => {
@@ -184,7 +211,8 @@ export function registerMusicCommands(bot: BotClient): () => Promise<void> {
       '⚠️ The bot lost its server connection and playback was interrupted. The connection is back, but the queue was not resumed.')),
     new AbortController().signal, 10_000)
       .then(() => { if (interrupted.get(serverId) === interruption) interrupted.delete(serverId); })
-      .catch(() => console.error('[music] Could not deliver the disconnection notice.'))
+      .catch((error: unknown) => console.error(`[music] ${cliText('Não foi possível entregar o aviso de desconexão.',
+        'Could not deliver the disconnection notice.')} ${errorDiagnostic(error)}`))
       .finally(() => { interruption.sending = false; });
   };
   const voiceDisconnected = ({ serverId, reason, channelId }: { serverId: string; reason: string; channelId?: string }): void => {
@@ -204,7 +232,10 @@ export function registerMusicCommands(bot: BotClient): () => Promise<void> {
     queues.participantsChanged(event.serverId, event.channelId, event.humanParticipantCount);
   };
   let disposal: Promise<void> | undefined;
-  const onClosed = (): void => { void dispose().catch(() => console.error('[music] Shutdown failed.')); };
+  const onClosed = (): void => {
+    void dispose().catch((error: unknown) =>
+      console.error(`[music] ${cliText('Falha ao encerrar.', 'Shutdown failed.')} ${errorDiagnostic(error)}`));
+  };
   const dispose = (): Promise<void> => {
     bot.off('disconnected', disconnected);
     bot.off('connected', connected);

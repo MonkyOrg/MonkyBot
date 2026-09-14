@@ -1,9 +1,11 @@
-import { BotClient, PROTOCOL_VERSION, ProtocolErrorCode, validateBotPublicHost } from '@monky/bot-sdk';
+import { BotClient, PROTOCOL_VERSION, ProtocolErrorCode } from '@monky/bot-sdk';
 import { registerAllCommands } from './commands';
 import { DEFAULT_BOT_NAME, loadBotAvatar } from './profile';
 import { loadOrGenerateKeys, REGISTRATIONS_PATH } from './utils/keys';
 import { getManifestUrl } from './utils/manifest';
-import { safeDiagnostic } from './music/process';
+import { errorDiagnostic, safeDiagnostic } from './music/process';
+import { cliText } from './cli/i18n';
+import { validateCliPublicHost } from './cli/config';
 
 // ── Configuration ────────────────────────────────────────────────────
 // Todas as variáveis de ambiente são opcionais — veja README.md para detalhes.
@@ -44,26 +46,30 @@ async function main(): Promise<void> {
 
   // Eventos.
   bot.on('connected', (info: { serverId: string }) => {
-    console.log(`✅ Conectado ao servidor ${info.serverId} (${bot.serverCount} servidor(es) total)`);
+    console.log(cliText(`✅ Conectado ao servidor ${info.serverId} (${bot.serverCount} servidor(es) total)`,
+      `✅ Connected to server ${info.serverId} (${bot.serverCount} total server(s))`));
   });
 
   bot.on('disconnected', (info: { serverId: string }) => {
-    console.log(`⚠️  Desconectado do servidor ${info.serverId}`);
+    console.log(cliText(`⚠️  Desconectado do servidor ${info.serverId}`, `⚠️  Disconnected from server ${info.serverId}`));
   });
 
   bot.on('registered', (info: { serverId: string; serverName: string }) => {
-    console.log(`📥 Registrado no servidor "${info.serverName}" (${info.serverId})`);
+    console.log(cliText(`📥 Registrado no servidor "${info.serverName}" (${info.serverId})`,
+      `📥 Registered on server "${info.serverName}" (${info.serverId})`));
   });
 
   bot.on('error', (err: Error, info?: { serverId: string }) => {
-    console.error(info ? `❌ Erro no vínculo ${info.serverId}:` : '❌ Erro:', safeDiagnostic(err.message || err.name));
+    console.error(info ? cliText(`❌ Erro no vínculo ${safeDiagnostic(info.serverId)}:`, `❌ Link error ${safeDiagnostic(info.serverId)}:`)
+      : cliText('❌ Erro:', '❌ Error:'), errorDiagnostic(err));
   });
 
   bot.on('auth_failed', (failure: unknown) => {
     if (typeof failure === 'object' && failure !== null && 'code' in failure &&
         failure.code === ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED) {
       console.error(
-        `❌ O MonkyBot usa o protocolo ${PROTOCOL_VERSION}. Atualize o servidor Monky e o bot para versões compatíveis.`
+        cliText(`❌ O MonkyBot usa o protocolo ${PROTOCOL_VERSION}. Atualize o servidor Monky e o bot para versões compatíveis.`,
+          `❌ MonkyBot uses protocol ${PROTOCOL_VERSION}. Update the Monky server and bot to compatible versions.`)
       );
     }
   });
@@ -81,7 +87,7 @@ async function main(): Promise<void> {
   })();
   const onSignal = (): void => {
     void close().catch((error: unknown) => {
-      console.error('❌ Erro ao encerrar:', error instanceof Error ? error.message : String(error));
+      console.error(cliText('❌ Erro ao encerrar:', '❌ Shutdown error:'), errorDiagnostic(error));
       process.exitCode = 1;
     });
   };
@@ -93,13 +99,15 @@ async function main(): Promise<void> {
   try {
     if (config.serve) {
       if (!Number.isInteger(config.servePort) || config.servePort < 0 || config.servePort > 65535) {
-        throw new Error('MONKY_SERVE_PORT deve ser um número inteiro entre 0 e 65535.');
+        throw new Error(cliText('MONKY_SERVE_PORT deve ser um número inteiro entre 0 e 65535.',
+          'MONKY_SERVE_PORT must be an integer between 0 and 65535.'));
       }
-      const host = validateBotPublicHost(config.servePublicHost);
+      const host = validateCliPublicHost(config.servePublicHost);
       const server = await bot.serve({
         name: config.botName,
         icon: avatarBase64,
-        description: 'O bot oficial de referência do Monky — comandos utilitários, diversão e mais.',
+        description: cliText('O bot oficial de referência do Monky — comandos utilitários, diversão e mais.',
+          'The official Monky reference bot — utility commands, fun and more.'),
         port: config.servePort,
         host: config.serveHost,
         publicHost: host,
@@ -110,47 +118,55 @@ async function main(): Promise<void> {
       const manifestUrl = getManifestUrl(host, port);
       console.log('');
       console.log(`🌐 Manifest: ${manifestUrl}`);
-      console.log(`💾 Cadastros salvos: ${bot.registeredServerCount} (${REGISTRATIONS_PATH})`);
+      console.log(cliText(`💾 Cadastros salvos: ${bot.registeredServerCount} (${REGISTRATIONS_PATH})`,
+        `💾 Saved registrations: ${bot.registeredServerCount} (${REGISTRATIONS_PATH})`));
       if (bot.registeredServerCount > 0) {
-        console.log('♻️  Reconectando aos servidores salvos. Aguarde a confirmação de conexão nos logs.');
+        console.log(cliText('♻️  Reconectando aos servidores salvos. Aguarde a confirmação de conexão nos logs.',
+          '♻️  Reconnecting to saved servers. Wait for connection confirmation in the logs.'));
       }
       if (['localhost', '127.0.0.1', '::1', '[::1]'].includes(host.toLowerCase())) {
         console.log('');
-        console.log('⚠️  Host local — outros servidores não conseguirão acessar.');
-        console.log('   Use o IP ou domínio público. Reconfigure com: monkybot setup');
+        console.log(cliText('⚠️  Host local — outros servidores não conseguirão acessar.',
+          '⚠️  Local host — other servers cannot access it.'));
+        console.log(cliText('   Use o IP ou domínio público. Reconfigure com: monkybot setup',
+          '   Use the public IP or domain. Reconfigure with: monkybot setup'));
       }
       console.log('');
-      console.log('   Para vincular a um servidor Monky:');
-      console.log('   Cole a URL do manifest em Configurações do Servidor → Bots');
-      console.log(`   Cole: ${manifestUrl}`);
+      console.log(cliText('   Para vincular a um servidor Monky:', '   To link to a Monky server:'));
+      console.log(cliText('   Cole a URL do manifest em Configurações do Servidor → Bots',
+        '   Paste the manifest URL in Server Settings → Bots'));
+      console.log(cliText(`   Cole: ${manifestUrl}`, `   Paste: ${manifestUrl}`));
       console.log('');
-      console.log('⏳ Aguardando servidores...');
+      console.log(cliText('⏳ Aguardando servidores...', '⏳ Waiting for servers...'));
     } else if (config.serverUrl && config.token) {
       bot.connect({ serverUrl: config.serverUrl, token: config.token });
-      console.log(`🔌 Conectando a ${config.serverUrl}...`);
+      console.log(cliText(`🔌 Conectando a ${config.serverUrl}...`, `🔌 Connecting to ${config.serverUrl}...`));
     } else {
-      console.log('⚙️  Nenhuma configuração encontrada. Escolha um modo:');
+      console.log(cliText('⚙️  Nenhuma configuração encontrada. Escolha um modo:', '⚙️  No configuration found. Choose a mode:'));
       console.log('');
-      console.log('  🌐 Instalação por URL (recomendado):');
-      console.log('     Defina as variáveis de ambiente:');
+      console.log(cliText('  🌐 Instalação por URL (recomendado):', '  🌐 URL installation (recommended):'));
+      console.log(cliText('     Defina as variáveis de ambiente:', '     Set environment variables:'));
       console.log('       MONKY_SERVE=true');
       console.log('       MONKY_SERVE_PORT=7780');
-      console.log('       MONKY_SERVE_PUBLIC_HOST=seu-ip-ou-dominio');
+      console.log(cliText('       MONKY_SERVE_PUBLIC_HOST=seu-ip-ou-dominio', '       MONKY_SERVE_PUBLIC_HOST=your-ip-or-domain'));
       console.log('');
-      console.log('     Vincule o bot colando a URL do manifest nas configurações.');
-      console.log('     Nome e avatar são fornecidos pelo bot.');
+      console.log(cliText('     Vincule o bot colando a URL do manifest nas configurações.',
+        '     Link the bot by pasting its manifest URL in settings.'));
+      console.log(cliText('     Nome e avatar são fornecidos pelo bot.', '     The bot provides its name and avatar.'));
       console.log('');
-      console.log('  📌 Conexão manual por token (avançado):');
-      console.log('     Defina as variáveis de ambiente:');
-      console.log('       MONKY_SERVER_URL=ws://seu-servidor:3000');
-      console.log('       MONKY_BOT_TOKEN=token_do_bot');
+      console.log(cliText('  📌 Conexão manual por token (avançado):', '  📌 Manual token connection (advanced):'));
+      console.log(cliText('     Defina as variáveis de ambiente:', '     Set environment variables:'));
+      console.log(cliText('       MONKY_SERVER_URL=ws://seu-servidor:3000', '       MONKY_SERVER_URL=ws://your-server:3000'));
+      console.log(cliText('       MONKY_BOT_TOKEN=token_do_bot', '       MONKY_BOT_TOKEN=bot_token'));
       console.log('');
-      console.log('     Para obter o token:');
-      console.log('     1. No app Monky → Configurações do Servidor → Bots → Gerar vínculo/token');
-      console.log('     2. Abra "Mostrar opção avançada" e clique "Gerar token", sem definir nome ou avatar no cliente');
-      console.log('     3. Copie o token exibido (só aparece uma vez!)');
+      console.log(cliText('     Para obter o token:', '     To obtain the token:'));
+      console.log(cliText('     1. No app Monky → Configurações do Servidor → Bots → Gerar vínculo/token',
+        '     1. In Monky → Server Settings → Bots → Generate link token'));
+      console.log(cliText('     2. Abra "Mostrar opção avançada" e clique "Gerar token", sem definir nome ou avatar no cliente',
+        '     2. Open "Show advanced option" and click "Generate token", without client-side name or avatar fields'));
+      console.log(cliText('     3. Copie o token exibido (só aparece uma vez!)', '     3. Copy the token (shown only once!)'));
       console.log('');
-      console.log('  📖 Docs: https://monkyorg.github.io/Monky/bots');
+      console.log(cliText('  📖 Docs: https://monkyorg.github.io/Monky/bots', '  📖 Docs: https://monkyorg.github.io/Monky/en/bots'));
       process.exitCode = 1;
       await close();
     }
@@ -161,6 +177,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  console.error('Fatal:', err);
+  console.error('Fatal:', errorDiagnostic(err));
   process.exitCode = 1;
 });

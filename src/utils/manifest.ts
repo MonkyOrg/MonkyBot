@@ -1,4 +1,4 @@
-import { validateBotPublicHost, validateBotServePort } from '@monky/bot-sdk';
+import { validateCliPublicHost as validateBotPublicHost, validateCliServePort as validateBotServePort } from '../cli/config';
 
 export function getManifestUrl(publicHost: unknown, servePort: unknown): string {
   const host = validateBotPublicHost(publicHost);

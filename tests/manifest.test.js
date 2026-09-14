@@ -1,5 +1,8 @@
 const assert = require('node:assert/strict');
-const { test } = require('node:test');
+const { test, beforeEach } = require('node:test');
+const { setCliLocale } = require('../dist/cli/i18n');
+
+beforeEach(() => setCliLocale('en'));
 const { getManifestUrl } = require('../dist/utils/manifest');
 const { startCommand } = require('../dist/cli/commands/lifecycle');
 const config = require('../dist/cli/config');

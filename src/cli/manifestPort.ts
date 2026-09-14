@@ -1,4 +1,5 @@
 import { createServer, Socket } from 'node:net';
+import { cliText } from './i18n';
 
 export const DEFAULT_MANIFEST_PORT = 7780;
 
@@ -8,26 +9,31 @@ export function getManifestBindHost(previousHost?: string): string {
 
 function portError(error: unknown, port: number, host: string): Error {
   const code = typeof error === 'object' && error !== null && 'code' in error &&
-    typeof error.code === 'string' ? error.code : 'sem código';
+    typeof error.code === 'string' ? error.code : cliText('sem código', 'no code');
   const context = `${host}:${port} (${code})`;
 
   if (code === 'EADDRINUSE') {
     return new Error(
-      `A porta ${port} já está em uso por um bot ou outro serviço; escolha outra porta. ` +
+      cliText(`A porta ${port} já está em uso por um bot ou outro serviço; escolha outra porta. ` +
       `Se for este bot, execute monkybot stop antes de continuar. Endereço local: ${context}.`,
+      `Port ${port} is already in use by a bot or another service; choose another port. ` +
+      `If it is this bot, run monkybot stop before continuing. Local address: ${context}.`),
       { cause: error }
     );
   }
   if (code === 'EACCES') {
-    return new Error(`Sem permissão para usar a porta ${port} no endereço local ${context}.`, { cause: error });
+    return new Error(cliText(`Sem permissão para usar a porta ${port} no endereço local ${context}.`,
+      `Permission denied for port ${port} at local address ${context}.`), { cause: error });
   }
   const message = error instanceof Error ? error.message : String(error);
-  return new Error(`Não foi possível verificar a porta do manifest em ${context}: ${message}`, { cause: error });
+  return new Error(cliText(`Não foi possível verificar a porta do manifest em ${context}: ${message}`,
+    `Could not check the manifest port at ${context}: ${message}`), { cause: error });
 }
 
 export async function assertManifestPortAvailable(port: number, host = getManifestBindHost()): Promise<void> {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`Porta do manifest inválida para ${host}: ${port}. Use um inteiro entre 1 e 65535.`);
+    throw new Error(cliText(`Porta do manifest inválida para ${host}: ${port}. Use um inteiro entre 1 e 65535.`,
+      `Invalid manifest port for ${host}: ${port}. Use an integer between 1 and 65535.`));
   }
 
   await new Promise<void>((resolve, reject) => {

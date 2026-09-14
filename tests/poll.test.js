@@ -1,7 +1,10 @@
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { createRequire } = require('node:module');
-const { test } = require('node:test');
+const { test, beforeEach } = require('node:test');
+const { setCliLocale } = require('../dist/cli/i18n');
+
+beforeEach(() => setCliLocale('en'));
 const { pollCommand, pollResult, registerPollCommand } = require('../dist/commands/poll');
 const { botFormSchema, validateBotFormValues } = createRequire(require.resolve('@monky/bot-sdk'))('@monky/shared');
 

@@ -7,6 +7,7 @@ import { pollCommand, registerPollCommand } from './poll';
 import { helpCommand } from './help';
 import { musicDefinitions, registerMusicCommands } from './music';
 import { ticTacToeDefinition, registerTicTacToe } from './ticTacToe';
+import { cliText } from '../cli/i18n';
 
 const basicCommands: readonly CommandDefinition[] = [
   pingCommand, diceCommand, coinCommand, eightBallCommand, pollCommand, helpCommand,
@@ -22,7 +23,7 @@ export function registerAllCommands(bot: BotClient): () => Promise<void> {
   const disposePoll = registerPollCommand(bot);
   const disposeMusic = registerMusicCommands(bot);
   const disposeGames = registerTicTacToe(bot);
-  console.log(`📋 ${commands.length} comandos registrados.`);
+  console.log(cliText(`📋 ${commands.length} comandos registrados.`, `📋 ${commands.length} commands registered.`));
   return async () => {
     disposePoll();
     await Promise.all([disposeMusic(), disposeGames()]);
