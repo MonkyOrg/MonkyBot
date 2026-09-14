@@ -26,6 +26,9 @@ const { MusicError } = require('../dist/music/errors');
 const checks = require('../dist/music/toolChecks');
 const paths = require('../dist/music/toolPaths');
 const capture = require('../dist/music/process');
+// Native process fixtures must remain independent of the nested installer mocks below.
+const nativeCapture = capture.capture;
+const nativeSpawn = processes.spawn;
 const download = require('../dist/cli/musicToolDownload');
 const tools = require('../dist/cli/musicTools');
 const { cliT, setCliLocale } = require('../dist/cli/i18n');
@@ -160,6 +163,72 @@ test('diagnostics identify the failed tool without losing its safe technical rea
     error => error.tool === 'ffmpeg' && error.detail.includes('libopus'));
 });
 
+test('version probes reject empty, malformed or provider JSON output without exposing it', async () => {
+  const runtime = { node: 'node-fixture', ytDlp: 'yt-fixture', ffmpeg: 'ff-fixture' };
+  for (const [tool, values] of [
+    ['node', ['', 'v22.garbage', 'v22.0.0\nunexpected', '{"token":"fixture-secret"}']],
+    ['ytDlp', ['', 'another executable', '2026.08.19\nunexpected', '{"title":"fixture-secret"}']],
+    ['ffmpeg', ['--enable-libopus', 'libopus is unavailable', '{"libopus":"fixture-secret"}']],
+  ]) {
+    for (const value of values) {
+      await assert.rejects(checks.checkMusicTool(tool, runtime, signal(), async () => value), error => {
+        assert.equal(error.tool, tool);
+        assert.equal(error.code, tool === 'node' ? 'runtime' : 'tools');
+        assert.doesNotMatch(error.detail, /fixture-secret|"token"|"title"|"libopus"/);
+        return true;
+      });
+    }
+  }
+  for (const version of ['2026.08.19', '2026.08.19.232506', '2026.08.19+custom.1']) {
+    assert.equal(await checks.checkMusicTool('ytDlp', runtime, signal(), async () => `${version}\n`), version);
+  }
+});
+
+test('native checks retain finite per-tool deadlines and unchanged output bounds', async () => {
+  const runtime = { node: 'node-fixture', ytDlp: 'yt-fixture', ffmpeg: 'ff-fixture' };
+  const calls = [];
+  await checks.checkMusicTools(runtime, signal(), async (executable, _args, _signal, timeoutMs, limit) => {
+    calls.push({ executable, timeoutMs, limit });
+    return executable === runtime.node ? 'v22.0.0' : executable === runtime.ytDlp ? '2026.08.19' : ' A....D libopus Opus';
+  });
+  assert.deepEqual(calls, [
+    { executable: runtime.node, timeoutMs: 5000, limit: 65536 },
+    { executable: runtime.ytDlp, timeoutMs: 30_000, limit: 65536 },
+    { executable: runtime.ffmpeg, timeoutMs: 15_000, limit: 131072 },
+  ]);
+});
+
+test('a native cold-start fixture taking six seconds passes without bypassing executable checks', { timeout: 20_000 }, async () => {
+  const runtime = { node: process.execPath, ytDlp: 'slow-yt-fixture', ffmpeg: 'slow-ff-fixture' };
+  const started = performance.now();
+  const versions = await Promise.all(['ytDlp', 'ffmpeg'].map(tool =>
+    checks.checkMusicTool(tool, runtime, signal(), (_executable, _args, abortSignal, timeoutMs, limit) =>
+      nativeCapture(process.execPath, ['-e',
+        `setTimeout(() => console.log(${JSON.stringify(tool === 'ytDlp' ? '2026.08.19' : ' A....D libopus Opus')}), 6000)`,
+      ], abortSignal, timeoutMs, limit))));
+  assert.deepEqual(versions, ['2026.08.19', 'libopus']);
+  assert.ok(performance.now() - started >= 6000, 'The fixture must exercise the former five-second deadline.');
+});
+
+test('existing tools are checked exactly once before preparation returns without redundant probes', async t => {
+  const root = directory(t);
+  const calls = [];
+  const progress = [];
+  t.mock.method(capture, 'capture', async (executable, args) => {
+    assert.equal(calls.includes(executable), false, 'A repeat probe would fail after an available message.');
+    calls.push(executable);
+    if (executable === process.execPath) return 'v22.0.0';
+    if (args.includes('-encoders')) return ' A....D libopus Opus';
+    return '2026.08.19';
+  });
+  t.mock.method(global, 'fetch', () => assert.fail('Healthy tools must not download.'));
+  const result = await tools.ensureMusicTools({ directory: root, env: { PATH: '' }, progress: message => progress.push(message) });
+  assert.deepEqual(calls, [result.node, result.ytDlp, result.ffmpeg]);
+  assert.equal(progress.filter(message => message === cliT('music.available', { tool: checks.MUSIC_TOOL_NAMES.ytDlp })).length, 1);
+  assert.equal(progress.filter(message => message === cliT('music.available', { tool: checks.MUSIC_TOOL_NAMES.ffmpeg })).length, 1);
+  assert.deepEqual(fs.readdirSync(root), []);
+});
+
 for (const platform of ['linux', 'win32']) {
   test(`missing tools install privately and repeated preparation reuses them (${platform})`, async t => {
     const f = installation(t, { platform });
@@ -169,14 +238,21 @@ for (const platform of ['linux', 'win32']) {
     assert.equal(fs.readFileSync(result.ytDlp, 'utf8'), 'synthetic yt-dlp');
     assert.equal(fs.readFileSync(result.ffmpeg, 'utf8'), 'synthetic extracted FFmpeg');
     assert.equal(f.requests.length, 4);
+    assert.equal(f.probes.filter(probe => probe.executable === process.execPath).length, 1);
+    assert.equal(f.probes.filter(probe => probe.executable.includes('.install-')).length, 2,
+      'Each verified download must execute once before its rename, without a duplicate post-install probe.');
+    assert.equal(f.probes.some(probe => probe.executable === result.ytDlp || probe.executable === result.ffmpeg), false);
     assert.ok(!fs.readdirSync(f.root).some(name => name.startsWith('.install-')));
+    const probesBeforeReuse = f.probes.length;
+    const initialProgress = f.progress.slice();
     const again = await tools.ensureMusicTools(f.options);
     assert.deepEqual(again, result);
+    assert.deepEqual(f.probes.slice(probesBeforeReuse).map(probe => probe.executable), [result.node, result.ytDlp, result.ffmpeg]);
     assert.equal(f.requests.length, 4, 'Healthy tools must not download again.');
     assert.ok(f.progress.some(message => message.includes('SHA-256')));
     const checksumVerification = f.progress.indexOf(cliT('music.verifyingDownload', { tool: checks.MUSIC_TOOL_NAMES.ffmpeg }));
     const extraction = f.progress.indexOf(cliT('music.extracting'));
-    const verification = f.progress.indexOf(cliT('music.verifyingExecutable', { tool: checks.MUSIC_TOOL_NAMES.ffmpeg }));
+    const verification = initialProgress.lastIndexOf(cliT('music.verifyingExecutable', { tool: checks.MUSIC_TOOL_NAMES.ffmpeg }));
     assert.ok(checksumVerification >= 0 && extraction > checksumVerification && verification > extraction);
     assert.equal(f.extractions.length, 1, 'Progress must not add a second extraction/listing pass.');
     for (const tool of ['ytDlp', 'ffmpeg']) {
@@ -197,6 +273,22 @@ test('checksum mismatch never executes or publishes the downloaded file', async 
   await assert.rejects(tools.ensureMusicTools(f.options), /checksum/);
   assert.deepEqual(fs.readdirSync(f.root), []);
   assert.equal(f.probes.some(probe => probe.executable.includes('.install-')), false);
+});
+
+test('a verified download with an invalid executable version is never published or reported available', async t => {
+  const f = installation(t);
+  const run = capture.capture;
+  t.mock.method(capture, 'capture', async (executable, ...args) => {
+    if (executable.includes('.install-')) return '{"token":"fixture-secret","title":"provider JSON"}';
+    return run(executable, ...args);
+  });
+  await assert.rejects(tools.ensureMusicTools(f.options), error => {
+    assert.match(error.message, /yt-dlp version/);
+    assert.doesNotMatch(error.message, /fixture-secret|provider JSON/);
+    return true;
+  });
+  assert.deepEqual(fs.readdirSync(f.root), []);
+  assert.equal(f.progress.some(message => /disponível|instalado/.test(message)), false);
 });
 
 test('a slow compressed archive does not require a separately timed full listing before extraction', async t => {
@@ -277,6 +369,83 @@ test('a stalled existing executable is reported rather than silently replaced', 
   });
   await assert.rejects(tools.ensureMusicTools(f.options), /fixture stalled/);
   assert.deepEqual(f.requests, []);
+  assert.equal(f.progress.some(message => /disponível|instalado/.test(message)), false);
+});
+
+test('cancellation after the last successful probe still prevents preparation from succeeding', async t => {
+  const root = directory(t);
+  const controller = new AbortController();
+  t.mock.method(capture, 'capture', async (executable, args) => executable === process.execPath ? 'v22.0.0'
+    : args.includes('-encoders') ? ' A....D libopus Opus' : '2026.08.19');
+  t.mock.method(global, 'fetch', () => assert.fail('No downloads after cancellation.'));
+  await assert.rejects(tools.ensureMusicTools({
+    directory: root, env: { PATH: '' }, signal: controller.signal,
+    progress: message => {
+      if (message === cliT('music.available', { tool: checks.MUSIC_TOOL_NAMES.ffmpeg })) {
+        controller.abort(new Error('fixture cancelled after checks'));
+      }
+    },
+  }), /fixture cancelled after checks/);
+  assert.deepEqual(fs.readdirSync(root), []);
+});
+
+for (const locale of ['pt-BR', 'en']) {
+  test(`music tool errors include localized guidance and safe bounded native details (${locale})`, async t => {
+    setCliLocale(locale);
+    t.after(() => setCliLocale('pt-BR'));
+    const native = 'Media process exceeded 30000 ms. https://rr1.googlevideo.com/videoplayback?sig=fixture-secret token=fixture-secret';
+    const failure = new checks.MusicToolError('ytDlp', 'fixture-ytdlp', 'timeout', native);
+    const result = download.toolDownloadError(failure);
+    assert.match(result.message, locale === 'en' ? /Music tool preparation failed.*Loading timed out/ : /Preparação.*excedeu o tempo limite/);
+    assert.match(result.message, /yt-dlp: Media process exceeded 30000 ms/);
+    assert.doesNotMatch(capture.errorDiagnostic(result), /fixture-secret|googlevideo/);
+    assert.ok(capture.errorDiagnostic(result).length <= 1024);
+    const logs = [];
+    t.mock.method(console, 'log', () => {});
+    t.mock.method(console, 'error', message => logs.push(message));
+    t.mock.method(checks, 'checkMusicTool', async tool => {
+      if (tool === 'ytDlp') throw failure;
+      return tool === 'node' ? 'v22.0.0' : 'libopus';
+    });
+    await assert.rejects(tools.checkMusicToolsCommand(), /monkybot music-setup/);
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], locale === 'en' ? /Loading timed out/ : /excedeu o tempo limite/);
+    assert.doesNotMatch(logs[0], /fixture-secret|googlevideo/);
+  });
+}
+
+test('queue-slot timeouts have a distinct bounded diagnostic and release their slots', { timeout: 15_000 }, async t => {
+  const controllers = Array.from({ length: 5 }, () => new AbortController());
+  const started = [];
+  t.mock.method(processes, 'spawn', (...args) => {
+    const child = nativeSpawn(...args);
+    if (args[0] === process.execPath) started.push(child);
+    return child;
+  });
+  const active = controllers.slice(0, 4).map(controller =>
+    nativeCapture(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], controller.signal, 60_000)
+      .catch(error => error));
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(started.length, 4);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const waiting = nativeCapture(process.execPath, ['-e', 'process.exit(0)'], controllers[4].signal);
+    const rejected = assert.rejects(waiting, error => {
+      assert.equal(error.code, 'timeout');
+      assert.match(error.detail, /Waiting for a media process slot exceeded 30000 ms/);
+      return true;
+    });
+    t.mock.timers.tick(30_000);
+    await rejected;
+    assert.equal(started.length, 4, 'A timed-out waiter must never start a native process.');
+  } finally {
+    t.mock.timers.reset();
+    controllers.forEach(controller => controller.abort());
+    const failures = await Promise.all(active);
+    assert.deepEqual(failures.map(error => error.code), ['cancelled', 'cancelled', 'cancelled', 'cancelled']);
+  }
+  assert.ok(started.every(child => child.exitCode !== null || child.signalCode !== null));
+  assert.equal(await nativeCapture(process.execPath, ['-e', "process.stdout.write('released')"], signal()), 'released');
 });
 
 test('public tool downloads reject unapproved redirects before making another request', async t => {

@@ -68,22 +68,32 @@ function requireCompleteAudio(expectedMs: number, packets: number): void {
 }
 
 const ID = /^[a-zA-Z0-9_-]{11}$/;
+const VIDEO_HOSTS = new Set(['youtu.be', 'youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com']);
 export function videoUrl(input: string): string {
+  if (typeof input !== 'string' || /[\\\u0000-\u001f\u007f]/.test(input)) throw new MusicError('unsupported');
+  const value = input.trim();
+  // Inspect the authority before URL normalizes empty userinfo or default ports away.
+  const host = /^https?:\/\/([^/?#]+)/i.exec(value)?.[1]?.toLowerCase();
+  if (!host || !VIDEO_HOSTS.has(host)) throw new MusicError('unsupported');
   let url: URL;
-  try { url = new URL(input); } catch { throw new MusicError('unsupported'); }
-  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.port ||
-      url.searchParams.has('list') || url.searchParams.has('index')) throw new MusicError('unsupported');
-  const host = url.hostname.toLowerCase();
+  try { url = new URL(value); }
+  catch (error: unknown) {
+    if (error instanceof TypeError) throw new MusicError('unsupported');
+    throw error;
+  }
   let id: string | undefined;
   if (host === 'youtu.be') id = url.pathname.slice(1);
-  else if (['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com'].includes(host)) {
-    if (url.pathname === '/watch') id = url.searchParams.get('v') ?? undefined;
-    else {
+  else {
+    if (url.pathname === '/watch') {
+      const videos = url.searchParams.getAll('v');
+      if (videos.length === 1) id = videos[0];
+    } else {
       const match = url.pathname.match(/^\/(?:shorts|embed)\/([a-zA-Z0-9_-]{11})$/);
       id = match?.[1];
     }
   }
-  if (!id || !ID.test(id)) throw new MusicError('unsupported');
+  if (!id || id.length !== 11 || !ID.test(id)) throw new MusicError('unsupported');
+  // Playlist/radio context must never reach the single-video extractor.
   return `https://www.youtube.com/watch?v=${id}`;
 }
 
@@ -127,7 +137,7 @@ function metadata(json: string): Record<string, unknown> {
 
 export function parseTrack(value: unknown, requirePublic = false): Track {
   const data = record(value);
-  if (typeof data.id !== 'string' || !ID.test(data.id) || typeof data.title !== 'string' ||
+  if (typeof data.id !== 'string' || data.id.length !== 11 || !ID.test(data.id) || typeof data.title !== 'string' ||
       typeof data.duration !== 'number' || !Number.isFinite(data.duration) || data.duration <= 0 ||
       data.duration > 3600 || data.is_live === true || data.was_live === true ||
       (data.live_status !== undefined && data.live_status !== null && data.live_status !== 'not_live') ||

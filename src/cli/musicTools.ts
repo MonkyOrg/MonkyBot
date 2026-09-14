@@ -6,12 +6,12 @@ import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import readline from 'node:readline';
 import { MUSIC_TOOLS_DIR } from '../utils/paths';
-import { MusicToolError, MUSIC_TOOL_NAMES, checkMusicTool, checkMusicTools } from '../music/toolChecks';
+import { MusicToolError, MUSIC_TOOL_NAMES, checkMusicTool } from '../music/toolChecks';
 import { absoluteMusicToolPaths, managedMusicTool, musicToolPaths, MUSIC_TOOL_ENV, type MusicToolPaths } from '../music/toolPaths';
 import { capture, safeDiagnostic, terminate } from '../music/process';
-import { MusicError } from '../music/errors';
+import { MusicError, musicError } from '../music/errors';
 import { downloadToolAsset, ffmpegArchiveEntry, findToolAsset, toolDownloadError } from './musicToolDownload';
-import { cliT, cliText } from './i18n';
+import { cliT, cliText, getCliLocale } from './i18n';
 import { createDownloadProgress, type DownloadProgress } from './progress';
 
 export interface MusicPreparationOptions {
@@ -167,9 +167,11 @@ export async function ensureMusicTools(options: MusicPreparationOptions = {}): P
   if (options.signal?.aborted) cancel();
   const timeout = setTimeout(() => controller.abort(new Error(cliT('music.timeout'))), 10 * 60_000);
   try {
+    options.progress?.(cliT('music.verifyingExecutable', { tool: MUSIC_TOOL_NAMES.node }));
     await checkMusicTool('node', paths, controller.signal);
     for (const tool of ['ytDlp', 'ffmpeg'] as const) {
       try {
+        options.progress?.(cliT('music.verifyingExecutable', { tool: MUSIC_TOOL_NAMES[tool] }));
         await checkMusicTool(tool, paths, controller.signal);
         options.progress?.(cliT('music.available', { tool: MUSIC_TOOL_NAMES[tool] }));
       } catch (error: unknown) {
@@ -180,7 +182,8 @@ export async function ensureMusicTools(options: MusicPreparationOptions = {}): P
         paths[tool] = await installTool(tool, paths, options, directory, platform, controller.signal);
       }
     }
-    await checkMusicTools(paths, controller.signal);
+    // Existing tools were checked above; installed candidates were checked before the atomic rename.
+    controller.signal.throwIfAborted();
     return paths;
   } catch (error: unknown) {
     throw toolDownloadError(controller.signal.aborted ? controller.signal.reason : error);
@@ -197,10 +200,11 @@ export async function checkMusicToolsCommand(): Promise<void> {
   for (const tool of ['node', 'ytDlp', 'ffmpeg'] as const) {
     try {
       const version = await checkMusicTool(tool, paths, controller.signal);
-      console.log(`OK ${MUSIC_TOOL_NAMES[tool]}: ${paths[tool]} (${version})`);
+      console.log(`OK ${MUSIC_TOOL_NAMES[tool]}: ${safeDiagnostic(paths[tool])} (${safeDiagnostic(version)})`);
     } catch (error: unknown) {
       failed = true;
-      console.error(error instanceof MusicToolError ? error.detail : safeDiagnostic(String(error)));
+      console.error(safeDiagnostic(error instanceof MusicToolError
+        ? `${musicError(error, getCliLocale())} ${error.detail}` : String(error)));
     }
   }
   if (failed) throw new Error(cliT('music.unavailable'));

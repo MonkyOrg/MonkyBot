@@ -4,6 +4,7 @@ import { MusicError, aborted } from './errors';
 let activeCaptures = 0;
 const waitingCaptures: (() => void)[] = [];
 const terminations = new WeakMap<ChildProcess, Promise<void>>();
+const CAPTURE_SLOT_TIMEOUT_MS = 30_000;
 
 export interface CaptureOptions {
   readonly rejectStderr?: boolean;
@@ -12,10 +13,22 @@ export interface CaptureOptions {
 export function safeDiagnostic(value: string): string {
   return value
     .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/gi, '[redacted key]')
+    .replace(/(?:\{\s*"[^"]+"\s*:|\[\s*(?:\{|\[|"))[\s\S]*/g, '[redacted JSON]')
     .replace(/https?:\/\/[^\s"'<>]+/gi, '[redacted URL]')
+    .replace(/\b(?:set-cookie|cookie)\s*:\s*[^\r\n]*/gi, 'cookie=[redacted]')
     .replace(/\b(authorization)\s*[:=]\s*(?:Bearer|Basic)\s+[^\s,;]+/gi, '$1=[redacted]')
     .replace(/\b(token|password|passwd|cookie|authorization|api[_-]?key|ice-pwd)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1=[redacted]')
+    .replace(/\bUse\s+--cookies(?:-from-browser)?\b[\s\S]*/gi, '[authentication guidance omitted]')
     .replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 1024);
+}
+
+export type YouTubeProviderCause = 'YOUTUBE_BOT_CHALLENGE' | 'UNRESOLVED';
+
+export function youtubeProviderCause(error: unknown): YouTubeProviderCause {
+  if (!(error instanceof MusicError) || error.code !== 'unavailable' || !error.detail) return 'UNRESOLVED';
+  // Only this explicit extractor error establishes a challenge, not HTTP status or missing-title warnings.
+  return /(?:^|\s)ERROR:\s*\[youtube\]\s+[A-Za-z0-9_-]{11}:\s*Sign in to confirm you['\u2019]re not a bot\b/i
+    .test(safeDiagnostic(error.detail)) ? 'YOUTUBE_BOT_CHALLENGE' : 'UNRESOLVED';
 }
 
 export function errorDiagnostic(error: unknown): string {
@@ -24,7 +37,7 @@ export function errorDiagnostic(error: unknown): string {
   let current = error;
   while (current instanceof Error && !visited.has(current) && visited.size < 4) {
     visited.add(current);
-    details.push(current instanceof MusicError ? `${current.code}: ${current.detail || current.message}`
+    details.push(current instanceof MusicError ? `${current.code}${current.detail ? `: ${current.detail}` : ''}`
       : current.message || current.name);
     current = current.cause;
   }
@@ -45,9 +58,12 @@ function captureSlot(signal: AbortSignal): Promise<() => void> {
       const index = waitingCaptures.indexOf(start);
       if (index !== -1) waitingCaptures.splice(index, 1);
     };
-    const fail = (code: 'cancelled' | 'timeout'): void => { clear(); reject(new MusicError(code)); };
+    const fail = (code: 'cancelled' | 'timeout'): void => {
+      clear();
+      reject(new MusicError(code, code === 'timeout' ? `Waiting for a media process slot exceeded ${CAPTURE_SLOT_TIMEOUT_MS} ms.` : undefined));
+    };
     const cancel = (): void => fail('cancelled');
-    const timer = setTimeout(() => fail('timeout'), 30_000);
+    const timer = setTimeout(() => fail('timeout'), CAPTURE_SLOT_TIMEOUT_MS);
     const start = (): void => {
       clear();
       activeCaptures++;

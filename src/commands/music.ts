@@ -13,7 +13,8 @@ import { defaultMusicIdleSeconds, musicIdleMilliseconds, musicSettingsDefinition
 
 export const musicDefinitions: Omit<LocalizedCommandDefinition, 'handler'>[] = [
   { name: 'play', voiceRequirement: 'same-bot-channel', description: 'Busca pelo nome ou adiciona um vídeo individual do YouTube à fila.',
-    localizations: { en: {
+    localizations: { 'pt-BR': { name: 'tocar' }, en: {
+      name: 'play',
       description: 'Search by name or add an individual YouTube video to the queue.',
       options: { busca: {
         label: 'Search', description: 'Name or individual YouTube video URL',
@@ -22,27 +23,28 @@ export const musicDefinitions: Omit<LocalizedCommandDefinition, 'handler'>[] = [
     } },
     options: [{ name: 'busca', description: 'Nome ou link de vídeo individual do YouTube', type: 'string', required: true, autocomplete: true }] },
   { name: 'queue', voiceRequirement: 'same-bot-channel', description: 'Mostra a faixa atual e a fila de próximas faixas.',
-    localizations: { en: { description: 'Show the current track and upcoming queue.' } } },
+    localizations: { 'pt-BR': { name: 'fila' }, en: { name: 'queue', description: 'Show the current track and upcoming queue.' } } },
   { name: 'nowplaying', voiceRequirement: 'same-bot-channel', description: 'Mostra a faixa atual e a posição da reprodução.',
-    localizations: { en: { description: 'Show the current track and playback position.' } } },
+    localizations: { 'pt-BR': { name: 'tocando' }, en: { name: 'nowplaying', description: 'Show the current track and playback position.' } } },
   { name: 'pause', voiceRequirement: 'same-bot-channel', description: 'Pausa a faixa atual sem perder a posição.',
-    localizations: { en: { description: 'Pause the current track without losing its position.' } } },
+    localizations: { 'pt-BR': { name: 'pausar' }, en: { name: 'pause', description: 'Pause the current track without losing its position.' } } },
   { name: 'resume', voiceRequirement: 'same-bot-channel', description: 'Retoma a faixa pausada na mesma posição.',
-    localizations: { en: { description: 'Resume the paused track at the same position.' } } },
+    localizations: { 'pt-BR': { name: 'retomar' }, en: { name: 'resume', description: 'Resume the paused track at the same position.' } } },
   { name: 'skip', voiceRequirement: 'same-bot-channel', description: 'Pula a faixa atual e avança para a próxima.',
-    localizations: { en: { description: 'Skip the current track and advance to the next one.' } } },
+    localizations: { 'pt-BR': { name: 'pular' }, en: { name: 'skip', description: 'Skip the current track and advance to the next one.' } } },
   { name: 'stop', voiceRequirement: 'same-bot-channel', description: 'Para a reprodução e limpa a fila.',
-    localizations: { en: { description: 'Stop playback and clear the queue.' } } },
+    localizations: { 'pt-BR': { name: 'parar' }, en: { name: 'stop', description: 'Stop playback and clear the queue.' } } },
   { name: 'leave', voiceRequirement: 'same-bot-channel', description: 'Para, limpa a fila e desconecta da sala de voz.',
-    localizations: { en: { description: 'Stop, clear the queue and disconnect from voice.' } } },
+    localizations: { 'pt-BR': { name: 'sair' }, en: { name: 'leave', description: 'Stop, clear the queue and disconnect from voice.' } } },
   { name: 'remove', voiceRequirement: 'same-bot-channel', description: 'Remove uma posição da fila de próximas faixas.',
-    localizations: { en: {
+    localizations: { 'pt-BR': { name: 'remover' }, en: {
+      name: 'remove',
       description: 'Remove a position from the upcoming queue.',
       options: { position: { label: 'Position', description: 'Position in the upcoming queue' } },
     } },
     options: [{ name: 'position', description: 'Posição na fila de próximas faixas', type: 'integer', required: true, min: 1, max: 50 }] },
   { name: 'clear', voiceRequirement: 'same-bot-channel', description: 'Limpa apenas as próximas faixas; não interrompe a atual.',
-    localizations: { en: { description: 'Clear only upcoming tracks without interrupting the current track.' } } },
+    localizations: { 'pt-BR': { name: 'limpar' }, en: { name: 'clear', description: 'Clear only upcoming tracks without interrupting the current track.' } } },
 ];
 
 async function actor(ctx: CommandContext): Promise<MusicActor> {
