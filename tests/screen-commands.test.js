@@ -16,6 +16,13 @@ function ref(screen) {
   return { id: screen.id, instanceId: screen.instanceId };
 }
 
+function screenErrors(logged) {
+  // Older Node runtimes also emit MockTimers warnings through console.error.
+  return logged.mock.calls
+    .filter(call => typeof call.arguments[0] === 'string' && call.arguments[0].startsWith('[screens] '))
+    .map(call => call.arguments.join(' '));
+}
+
 function fixture(t, lifetime) {
   const bot = new EventEmitter();
   const screens = new Map(), updates = [], closed = [], replies = [];
@@ -120,13 +127,15 @@ test('shared screen command localizes, serializes racing joins and rejects stale
 test('games close their exact ref on uncertain acknowledgements and expiry, but not after disconnect', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const logged = t.mock.method(console, 'error', () => {});
+  console.error('(node:fixture) ExperimentalWarning: unrelated runtime diagnostic');
   const f = fixture(t, 30);
   const first = await f.create();
   f.bot.updateScreen = async () => { throw new Error('lost acknowledgement'); };
   f.action(first.screen, 'o', 'join');
   await tick();
   assert.deepEqual(f.closed, [{ serverId: 'server', ref: ref(first.screen) }]);
-  assert.equal(logged.mock.callCount(), 1);
+  assert.equal(screenErrors(logged).length, 1);
+  assert.match(screenErrors(logged)[0], /lost acknowledgement/);
   const second = await f.create();
   f.disconnect();
   const third = await f.create();
@@ -184,7 +193,7 @@ test('creator/admin END immediately releases quotas and timers without another c
   await tick();
   assert.deepEqual(f.closed, []);
   assert.equal(f.replies.length, messages);
-  assert.equal(logged.mock.callCount(), 0);
+  assert.equal(screenErrors(logged).length, 0);
   for (let i = 0; i < 16; i++) {
     await f.create();
     assert.match(f.replies.at(-1), /Game created/);
@@ -317,7 +326,7 @@ for (const completion of ['ack', 'reject']) {
     assert.equal(f.screen(current.id).state.board[0], 'X');
     assert.deepEqual(f.closed, []);
     assert.equal(f.replies.length, 2);
-    assert.equal(logged.mock.callCount(), 0);
+    assert.equal(screenErrors(logged).length, 0);
   });
 }
 
@@ -331,7 +340,7 @@ test('a mismatched update acknowledgement closes only its own ref, never the ret
   await tick();
   assert.deepEqual(f.closed, [{ serverId: 'server', ref: ref(first.screen) }]);
   assert.ok(f.screen(other.id));
-  assert.equal(logged.mock.callCount(), 1);
+  assert.equal(screenErrors(logged).length, 1);
 });
 
 test('human END during pending creation is normal and a late create ack cannot revive the game', async t => {
@@ -354,7 +363,7 @@ test('human END during pending creation is normal and a late create ack cannot r
   assert.deepEqual(f.replies, []);
   assert.deepEqual(f.closed, []);
   assert.deepEqual(f.updates, []);
-  assert.equal(logged.mock.callCount(), 0);
+  assert.equal(screenErrors(logged).length, 0);
   for (let i = 0; i < 16; i++) {
     await f.create();
     assert.match(f.replies.at(-1), /Game created/);
@@ -396,7 +405,7 @@ test('END cancellation of an active SDK invocation makes a rejected pending crea
   await creating;
   assert.deepEqual(f.replies, []);
   assert.deepEqual(f.closed, []);
-  assert.equal(logged.mock.callCount(), 0);
+  assert.equal(screenErrors(logged).length, 0);
   await f.create();
   assert.match(f.replies.at(-1), /Game created/);
 });
@@ -415,8 +424,8 @@ test('failed cancellation cleanup remains visible to the operator without a priv
   response.resolve(snapshot);
   await creating;
   assert.deepEqual(f.replies, []);
-  assert.equal(logged.mock.callCount(), 1);
-  assert.match(logged.mock.calls[0].arguments.join(' '), /cleanup transport failed/);
+  assert.equal(screenErrors(logged).length, 1);
+  assert.match(screenErrors(logged)[0], /cleanup transport failed/);
 });
 
 test('duplicate stale removals do not consume pending tracking capacity', async t => {
@@ -446,8 +455,8 @@ test('bounded pending-removal overflow fails explicitly instead of accepting unc
   });
   assert.match(f.replies.at(-1), /Could not open/);
   assert.deepEqual(f.closed, [{ serverId: 'server', ref: ref(returned) }]);
-  assert.equal(logged.mock.callCount(), 1);
-  assert.match(logged.mock.calls[0].arguments.join(' '), /removal tracking exceeded its limit/);
+  assert.equal(screenErrors(logged).length, 1);
+  assert.match(screenErrors(logged)[0], /removal tracking exceeded its limit/);
   await f.create();
   assert.match(f.replies.at(-1), /Game created/);
 });
