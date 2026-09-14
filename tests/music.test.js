@@ -73,13 +73,39 @@ function fixture(t, options = {}) {
 }
 
 test('accepts only canonical individual YouTube URLs and bounded search text', () => {
-  for (const value of ['https://youtu.be/abcdefghijk?t=2', 'https://www.youtube.com/watch?v=abcdefghijk', 'http://m.youtube.com/shorts/abcdefghijk']) {
+  for (const value of [
+    'https://youtu.be/abcdefghijk?t=2',
+    'https://www.youtube.com/watch?v=abcdefghijk',
+    'http://m.youtube.com/shorts/abcdefghijk',
+    'https://youtu.be/abcdefghijk?list=RDabcdefghijk&start_radio=1',
+    'https://www.youtube.com/watch?v=abcdefghijk&list=PLfixture&index=7&t=2',
+    'https://youtube.com/watch?list=PLfixture&index=7&v=abcdefghijk&start_radio=1',
+    'https://music.youtube.com/watch?v=abcdefghijk&list=RDabcdefghijk&si=fixture',
+    'http://m.youtube.com/shorts/abcdefghijk?list=PLfixture&index=2',
+    'https://www.youtube.com/embed/abcdefghijk?list=PLfixture&index=2#t=3',
+  ]) {
     assert.equal(videoUrl(value), 'https://www.youtube.com/watch?v=abcdefghijk');
+    assert.deepEqual(musicInput(value), { kind: 'url', value: 'https://www.youtube.com/watch?v=abcdefghijk' });
   }
-  for (const value of ['https://youtu.be/abcdefghijk?list=abc', 'https://youtube.com/playlist?list=abc',
+  assert.equal(videoUrl('https://www.youtube.com/watch?v=x5A9Aa-WU5E&list=RDx5A9Aa-WU5E&start_radio=1'),
+    'https://www.youtube.com/watch?v=x5A9Aa-WU5E');
+  for (const value of ['https://youtube.com/playlist?list=abc',
     'https://spotify.com/track/foo', 'file:///etc/passwd', 'http://127.0.0.1/x', 'https://youtube.com.evil.com/watch?v=abcdefghijk',
     'https://user:pass@youtube.com/watch?v=abcdefghijk', 'https://youtube.com:444/watch?v=abcdefghijk',
-    'https://youtube.com/live/abcdefghijk', 'https://youtu.be/abcdefghijk/extra', 'https://youtu.be/%61bcdefghijk']) {
+    'https://youtube.com/live/abcdefghijk', 'https://youtu.be/abcdefghijk/extra', 'https://youtu.be/%61bcdefghijk',
+    'https://youtube.com/playlist?list=abc&v=abcdefghijk', 'https://youtube.com/watch?list=abc&index=2',
+    'https://youtu.be/?list=abc', 'https://youtube.com/watch?v=&list=abc', 'https://youtube.com/watch?v=abcdefghij&list=abc',
+    'https://youtube.com/watch?v=abcdefghijkl&index=2', 'https://youtube.com/watch?v=abcdefghijk%0A&list=abc',
+    'https://youtube.com/watch?v=abcdefghijk%00&list=abc', 'https://youtube.com/watch?v=abcdefghij%2F&list=abc',
+    'https://youtube.com/watch?v=abcdefghijk&v=12345678901&list=abc',
+    'https://youtube.com/watch?v=abcdefghijk&v=abcdefghijk',
+    'https://fixture-user:fixture-password@youtube.com/watch?v=abcdefghijk&list=abc',
+    'https://@youtube.com/watch?v=abcdefghijk', 'https://youtube.com:443/watch?v=abcdefghijk',
+    'http://youtube.com:80/watch?v=abcdefghijk', 'https://youtube.com:/watch?v=abcdefghijk',
+    'ftp://youtube.com/watch?v=abcdefghijk', '//youtube.com/watch?v=abcdefghijk',
+    'https:youtube.com/watch?v=abcdefghijk', 'https:////youtube.com/watch?v=abcdefghijk',
+    'https://%79outube.com/watch?v=abcdefghijk', 'https://youtube.com\\watch?v=abcdefghijk',
+    'https://youtube.com/watch?v=abcde\nfghijk', 'https://you\ttube.com/watch?v=abcdefghijk']) {
     assert.throws(() => videoUrl(value), { code: 'unsupported' });
   }
   assert.deepEqual(musicInput(' ambient original '), { kind: 'search', value: 'ambient original' });
@@ -96,7 +122,8 @@ test('metadata rejects live, excessive duration, restricted and invalid items', 
   const base = { id: 'abcdefghijk', title: 'Example', duration: 60, live_status: 'not_live', availability: 'public' };
   assert.equal(parseTrack(base).duration, 60);
   for (const change of [{ duration: Infinity }, { duration: 0 }, { duration: 3601 }, { is_live: true },
-    { was_live: true }, { live_status: 'is_upcoming' }, { availability: 'subscriber_only' }, { age_limit: 18 }]) {
+    { was_live: true }, { live_status: 'is_upcoming' }, { availability: 'subscriber_only' }, { age_limit: 18 },
+    { id: 'abcdefghijk\n' }]) {
     assert.throws(() => parseTrack({ ...base, ...change }, true));
   }
 });

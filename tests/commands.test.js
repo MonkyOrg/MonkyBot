@@ -12,12 +12,26 @@ const { generateEcosystem } = require('../dist/cli/pm2');
 const { setCliLocale, normalizeCliLocale } = require('../dist/cli/i18n');
 const sdk = require('@monky/bot-sdk');
 
-test('every official command and option declares English text without changing canonical names', () => {
+const presentations = [
+  ['ping', 'ping', 'ping'], ['dado', 'dado', 'dice'], ['moeda', 'moeda', 'coin'],
+  ['8ball', 'bola-magica', '8ball'], ['enquete', 'enquete', 'poll'], ['ajuda', 'ajuda', 'help'],
+  ['play', 'tocar', 'play'], ['queue', 'fila', 'queue'], ['nowplaying', 'tocando', 'nowplaying'],
+  ['pause', 'pausar', 'pause'], ['resume', 'retomar', 'resume'], ['skip', 'pular', 'skip'],
+  ['stop', 'parar', 'stop'], ['leave', 'sair', 'leave'], ['remove', 'remover', 'remove'],
+  ['clear', 'limpar', 'clear'], ['jogo-da-velha', 'jogo-da-velha', 'tic-tac-toe'],
+];
+
+test('all 17 official definitions declare the expected presentation names and retain translated option text', () => {
+  assert.equal(commands.length, 17);
+  assert.deepEqual(commands.map(command => command.name), presentations.map(([canonical]) => canonical));
   for (const command of commands) {
     const text = command.localizations.en;
+    const [, ptName, enName] = presentations.find(([canonical]) => canonical === command.name);
     assert.ok(text.description.trim() && text.description.length <= 100, command.name);
     assert.notEqual(text.description, command.description, command.name);
-    assert.equal(text.name, undefined, 'Command names are never translated');
+    assert.equal(text.name, enName);
+    assert.equal(command.localizations['pt-BR'].name, ptName);
+    assert.equal(command.localizations['pt-BR'].description, undefined, 'Portuguese names reuse base descriptions');
     assert.deepEqual(Object.keys(text.options ?? {}).sort(), (command.options ?? []).map(option => option.name).sort());
     for (const option of command.options ?? []) {
       const field = text.options[option.name];
@@ -30,19 +44,38 @@ test('every official command and option declares English text without changing c
 
 test('localized schemas survive SDK registration and canonical language normalization', async () => {
   assert.equal(typeof sdk.localizeCommand, 'function');
+  assert.equal(typeof sdk.getCommandPresentation, 'function');
+  const definitionsBefore = JSON.stringify(commands);
   const bot = new BotClient({ publicKey: 'test-public-key' });
   const dispose = registerAllCommands(bot);
   try {
     for (const command of commands) {
       const registered = bot.commands.get(command.name);
       assert.deepEqual(registered.localizations, command.localizations);
-      const english = sdk.localizeCommand(registered, 'en-US');
-      assert.equal(english.name, command.name);
-      assert.equal(english.description, command.localizations.en.description);
-      for (const option of english.options ?? []) {
-        assert.equal(option.label, command.localizations.en.options[option.name].label);
+      const original = structuredClone({ name: registered.name, localizations: registered.localizations, options: registered.options });
+      const [, ptName, enName] = presentations.find(([canonical]) => canonical === command.name);
+      for (const [locale, expectedName] of [['pt-BR', ptName], ['en', enName], ['pt-BR', ptName]]) {
+        const localized = sdk.localizeCommand(registered, locale);
+        const presentation = sdk.getCommandPresentation(registered, locale);
+        assert.equal(localized.name, command.name);
+        assert.equal(localized.description, locale === 'en' ? command.localizations.en.description : command.description);
+        assert.equal(presentation.canonicalName, command.name);
+        assert.equal(presentation.displayName, expectedName);
+        assert.ok(presentation.inputNames.includes(command.name));
+        assert.ok(presentation.inputNames.includes(expectedName));
+        assert.equal(new Set(presentation.inputNames).size, presentation.inputNames.length);
+        assert.deepEqual((localized.options ?? []).map(option => option.name), (command.options ?? []).map(option => option.name));
+        assert.deepEqual((localized.options ?? []).map(option => option.choices?.map(choice => choice.value)),
+          (command.options ?? []).map(option => option.choices?.map(choice => choice.value)));
+        for (const option of localized.options ?? []) {
+          if (locale === 'en') assert.equal(option.label, command.localizations.en.options[option.name].label);
+        }
       }
+      assert.deepEqual({ name: registered.name, localizations: registered.localizations, options: registered.options }, original);
     }
+    assert.ok(sdk.getCommandPresentation(bot.commands.get('8ball'), 'pt-BR').inputNames.includes('bola-magica'));
+    assert.equal(sdk.getCommandPresentation(bot.commands.get('8ball'), 'en').inputNames.includes('bola-magica'), false);
+    assert.equal(JSON.stringify(commands), definitionsBefore);
     for (const locale of ['pt', 'pt-BR', 'pt_PT', 'en', 'en-US', 'EN_us', 'en-GB', undefined]) {
       assert.equal(normalizeCliLocale(locale), sdk.resolveBotLocale(locale));
     }
@@ -124,8 +157,11 @@ for (const locale of ['pt-BR', 'en']) {
       if (command === pingCommand) assert.match(state.replies[0], locale === 'en' ? /is online/ : /está online/);
       if (command === helpCommand) {
         assert.match(state.replies[0], locale === 'en' ? /Replies are private/ : /respostas são privadas/);
-        assert.match(state.replies[0], /\*\*\/enquete\*\*/);
-        assert.match(state.replies[0], /\/8ball <pergunta>/);
+        assert.ok(state.replies[0].includes(`**/${sdk.getCommandPresentation(pollCommand, locale).displayName}**`));
+        assert.match(state.replies[0], locale === 'en' ? /\/8ball <question>/ : /\/bola-magica <pergunta>/);
+        assert.match(state.replies[0], locale === 'en' ? /\/dice \[sides\]/ : /\/dado \[lados\]/);
+        assert.match(state.replies[0], locale === 'en' ? /\/play <search>/ : /\/tocar <busca>/);
+        assert.match(state.replies[0], locale === 'en' ? /\/remove <position>/ : /\/remover <posição>/);
         assert.match(state.replies[0], locale === 'en' ? /Submitting the poll form publishes/ : /Ao enviar o formulário de enquete/);
         assert.match(state.replies[0], locale === 'en' ? /Music requires voice membership/ : /Música exige estar em voz/);
         assert.match(state.replies[0], locale === 'en' ? /invitation on the stage/ : /convite no palco/);
@@ -175,6 +211,35 @@ test('per-user command language is independent of the operator CLI language', ()
     pingCommand.handler(legacy.ctx);
     assert.match(legacy.replies[0], /is online/);
   } finally { setCliLocale('pt-BR'); }
+});
+
+test('private help matches every registered display name without changing another user locale', async () => {
+  const bot = new BotClient({ publicKey: 'test-public-key' });
+  const dispose = registerAllCommands(bot);
+  const original = JSON.stringify(commands);
+  try {
+    for (const [operator, user] of [['en', 'pt-BR'], ['pt-BR', 'en'], ['en', 'pt-BR']]) {
+      setCliLocale(operator);
+      const state = context({ locale: user });
+      helpCommand.handler(state.ctx);
+      assert.equal(state.published.length, 0);
+      assert.equal(state.replies.length, 1);
+      assert.ok(state.replies[0].length < 2000);
+      for (const registered of bot.commands.values()) {
+        const { displayName } = sdk.getCommandPresentation(registered, user);
+        assert.match(state.replies[0], new RegExp(`/${displayName}(?![a-z0-9-])`));
+        assert.ok(state.replies[0].includes(sdk.localizeCommand(registered, user).description));
+        if (registered.name !== displayName) {
+          assert.doesNotMatch(state.replies[0], new RegExp(`/${registered.name}(?![a-z0-9-])`));
+        }
+      }
+    }
+    assert.equal(JSON.stringify(commands), original);
+  } finally {
+    setCliLocale('pt-BR');
+    await dispose();
+    await bot.close();
+  }
 });
 
 test('PM2 passes the configured bot identity in both modes', () => {

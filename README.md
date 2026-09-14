@@ -6,9 +6,14 @@ O **bot oficial de referência** do Monky — comandos utilitários, diversão e
 
 ## Compatibilidade
 
-Esta versão exige **protocolo Monky 16**. Atualize o aplicativo e o servidor Monky
+Esta versão exige **protocolo Monky 17**. Atualize o aplicativo e o servidor Monky
 juntos antes de atualizar o bot; servidores com protocolos anteriores não são compatíveis.
 O SDK incluído no pacote é verificado no build e não precisa ser instalado à parte.
+
+Este checkout usa o SDK oficial
+[19.0.1-beta](https://github.com/MonkyOrg/Monky/releases/tag/v19.0.1-beta),
+com origem e SHA-256 documentados em [vendor/README.md](vendor/README.md).
+O pacote em `vendor/`, a dependência e o lockfile fixam os mesmos bytes publicados.
 
 Todo push na `main` gera uma versão `-beta`, marcada como pré-release, sem
 substituir a stable, independentemente do canal do SDK. Uma stable só é
@@ -311,29 +316,32 @@ Nome e avatar vêm do bot; não há criação ou edição de perfil no cliente.
 
 ## Comandos
 
-| Comando | Descrição |
+| Comando (PT-BR) | Descrição |
 |---------|-----------|
 | `/ping` | Verifica se o bot está respondendo |
 | `/dado [lados]` | Rola um dado (padrão: 6, máx: 100) |
 | `/moeda` | Cara ou coroa |
-| `/8ball <pergunta>` | Responde à pergunta completa obrigatória, em privado |
+| `/bola-magica <pergunta>` | Responde à pergunta completa obrigatória, em privado |
 | `/enquete` | Formulário privado que publica uma votação com encerramento automático |
-| `/play <busca>` | Busca por nome ou link do YouTube, prévia privada e seleção para adicionar à fila |
-| `/queue` | Faixa atual e fila numerada de próximas faixas |
-| `/nowplaying` | Faixa atual, pausa/carregamento e posição |
-| `/pause` / `/resume` | Pausa e retoma na mesma posição, sem reiniciar |
-| `/skip` | Pula a faixa atual (ou o primeiro carregamento pendente) |
-| `/stop` | Para e limpa toda a fila; permanece conectado durante a carência |
-| `/leave` | Para, limpa a fila e sai da voz |
-| `/remove <position>` | Remove uma posição, a partir de 1, das próximas faixas |
-| `/clear` | Limpa somente as próximas faixas, preservando a atual |
+| `/tocar <busca>` | Busca por nome ou link do YouTube, prévia privada e seleção para adicionar à fila |
+| `/fila` | Faixa atual e fila numerada de próximas faixas |
+| `/tocando` | Faixa atual, pausa/carregamento e posição |
+| `/pausar` / `/retomar` | Pausa e retoma na mesma posição, sem reiniciar |
+| `/pular` | Pula a faixa atual (ou o primeiro carregamento pendente) |
+| `/parar` | Para e limpa toda a fila; permanece conectado durante a carência |
+| `/sair` | Para, limpa a fila e sai da voz |
+| `/remover <posição>` | Remove uma posição, a partir de 1, das próximas faixas |
+| `/limpar` | Limpa somente as próximas faixas, preservando a atual |
 | `/jogo-da-velha` | Tela compartilhada para 2 jogadores, com espectadores |
 | `/ajuda` | Lista todos os comandos |
 
 Digite `/`, selecione o comando e preencha seus parâmetros nomeados. Por exemplo,
 `lados` em `/dado` é um **inteiro entre 2 e 100**, não texto; perguntas com espaços
-são preservadas. Os nomes dos comandos permanecem iguais em todos os idiomas.
-Descrições, campos, respostas e formulários suportam **PT-BR e inglês**.
+são preservadas. Nomes de apresentação/entrada, descrições, campos, respostas e
+formulários suportam **PT-BR e inglês**. Por exemplo, `/dado` aparece como `/dice`
+em inglês, e `/play` como `/tocar` em PT-BR. Os identificadores internos e os
+nomes/valores dos argumentos não mudam. Os nomes canônicos continuam aceitos em
+qualquer idioma, inclusive os usados nos exemplos abaixo.
 Por padrão, acompanham o idioma selecionado no cliente. Nas preferências pessoais
 do bot, **Idioma do bot** permite manter **Seguir o Monky** ou escolher um idioma
 somente para aquele bot. Não é uma configuração compartilhada do servidor.
@@ -398,6 +406,12 @@ O progresso do download usa os bytes realmente recebidos e o tamanho publicado.
 A conclusão do download não significa fim da preparação: a conferência de
 SHA-256, a extração e a validação do executável aparecem como etapas separadas.
 
+Uma ferramenta válida é verificada uma única vez em cada preparação; candidatos
+baixados são verificados antes da instalação atômica. Os limites por processo
+são **5 segundos para Node.js, 30 para yt-dlp e 15 para FFmpeg**, permitindo
+inicializações mais lentas sem remover a validação. O prazo total continua em
+dez minutos. Um timeout não provoca a instalação silenciosa de outro executável.
+
 - **Ubuntu/Debian e outros Linux com glibc:** instalação automática em x64 e
   arm64. É necessário `tar` com suporte a xz; GNU tar usa também `xz-utils`.
 - **Windows:** instalação automática em x64, arm64 e x86, usando o `tar`
@@ -456,6 +470,12 @@ pode mostrar o timeout da listagem do arquivo, mesmo depois de instalar o pacote
 corrigido. Execute `monkybot restart` como um comando separado para usar o código
 novo. Não é necessário refazer o setup nem apagar as ferramentas já preparadas.
 
+A partir de `7.0.0-beta`, o atualizador relança o CLI recém-instalado em outro
+processo. Isso não altera um atualizador antigo já em execução: uma atualização
+iniciada em `6.0.4-beta` ainda pode usar seu reinício antigo. Se a instalação
+terminou, mas esse reinício falhou, confira `monkybot --version` e execute
+`monkybot restart` separadamente para usar a versão instalada.
+
 #### Quando a busca funciona, mas o áudio público não é resolvido
 
 A busca usa metadados resumidos; encontrar uma sugestão **não comprova** que o
@@ -482,10 +502,18 @@ monkybot logs --no-follow --lines 100
 segundos**, consulta somente metadados com as mesmas validações do `/play` e
 nunca baixa/reproduz áudio ou instala ferramentas. Exibe versões, identificação
 do vídeo e etapa da falha, **não** JSON do provedor nem endereço assinado.
-Em falhas, `providerCause=UNRESOLVED` deixa claro que a causa ainda precisa ser
-confirmada; conserve a linha sanitizada para análise, junto da versão, sistema e
-horário do teste. Um resultado aceito valida metadados/endereço, não a transferência
-de áudio. Sucesso em outra máquina não prova funcionamento nesse host.
+Sem uma assinatura específica de erro, `providerCause=UNRESOLVED` deixa claro
+que a causa ainda precisa ser confirmada; conserve a linha sanitizada para
+análise, junto da versão, sistema e horário do teste. Um resultado aceito valida
+metadados/endereço, não a transferência de áudio. Sucesso em outra máquina não
+prova funcionamento nesse host.
+
+`providerCause=YOUTUBE_BOT_CHALLENGE` identifica a resposta explícita do YouTube
+pedindo confirmação de que o acesso não é de um bot, na etapa `resolve`. É uma
+recusa da aplicação, não evidência de bloqueio geral de saída da VPS. O critério
+de IP/reputação não foi comprovado e o acesso ao host de áudio ainda não foi
+exercitado. Isso é diferente de um timeout ao verificar os executáveis.
+As instruções nativas de autenticação são omitidas do diagnóstico.
 
 Não envie `.keys`, `config.json`, `.env`, cookies, tokens nem URLs assinadas.
 Não habilite autenticação, proxies ou componentes EJS remotos para contornar uma
@@ -593,7 +621,10 @@ A pausa manual preserva a posição, e as prévias privadas continuam limitadas
 a dez segundos, sem adotar essa espera persistente.
 
 **Sem Spotify, playlists, álbuns, lives ou conteúdo com autenticação/paywall
-nesta versão.** Links com playlist são rejeitados, mesmo contendo um vídeo.
+nesta versão.** Links de um vídeo individual podem conter `list`, `index` ou
+`start_radio`: esse contexto é descartado e somente o vídeo selecionado entra
+na fila. Links apenas de playlist, sem vídeo individual válido, são rejeitados;
+isso não adiciona reprodução de playlists ou rádios contínuas.
 URLs arbitrárias não são aceitas. A extração com yt-dlp **não é uma API oficial
 de áudio do YouTube**: pode deixar de funcionar e está sujeita aos termos da
 plataforma. Utilize somente mídia própria ou autorizada e respeite direitos
@@ -611,6 +642,14 @@ O cartão continua no palco junto de câmeras e compartilhamentos, mesmo fechado
 **Abrir miniapp** inicia a visualização local; **Sair do miniapp** a fecha sem
 remover o cartão ou encerrar a partida. Focar ou voltar à grade só muda o layout,
 sem reiniciar a tela nem alterar vagas de jogador.
+
+**Encerrar miniapp** encerra a partida para todos e remove seu cartão e convites.
+Essa ação é autorizada pelo servidor somente para um administrador ou para quem
+invocou o comando criador, mantendo as verificações de acesso à sala. O criador
+continua reconhecido após reconectar. O bot libera o estado, os prazos e a cota
+daquela instância; ações e respostas atrasadas não reabrem o jogo nem alteram uma
+nova partida. Para jogar novamente, execute um novo comando.
+
 Quem criou joga como **X**; outra pessoa na sala clica **Jogar como O**. Os demais assistem.
 Use clique ou Tab + Enter/Espaço para jogar. O bot valida identidade, turno,
 casa livre, revisão e vitória/empate; cliques concorrentes não sobrescrevem jogadas.
@@ -619,7 +658,7 @@ Os controles seguem o idioma de cada participante e se atualizam ao trocar
 o idioma do aplicativo, sem reiniciar a partida. Jogos expiram em 30min e são
 removidos ao desconectar/reiniciar o bot ou perder a autorização de acesso à sala; não são persistidos.
 Sair ou mudar de sala fecha a visualização local e impede novas ações. O estado
-e as vagas dos jogadores são mantidos até a expiração ou o encerramento pelo bot,
+e as vagas dos jogadores são mantidos até a expiração ou o encerramento do miniapp,
 inclusive se a sala ficar vazia; não há reinício nem liberação automática de vaga.
 Há até quatro miniapps simultâneos por sala. Fechar a visualização não encerra a partida dos demais.
 Telas removidas liberam imediatamente a cota de jogos. Erro de sincronização fecha a tela
@@ -702,8 +741,8 @@ global é instalado, parado ou reiniciado.
 A CI executa esse teste **antes de publicar**. A variável de repositório
 `MONKY_SDK_RELEASE` pode fixar a tag da release do Monky que fornece o SDK; sem ela,
 usa-se o SDK publicado mais recente, betas inclusive. Em ambos os casos, o build
-falha se o SDK não corresponder ao protocolo 16 ou não oferecer seletores duráveis,
-voz e telas. O pacote preserva as dependências transitivas do SDK (incluindo
+falha se o SDK não corresponder ao protocolo 17 ou não oferecer seletores duráveis,
+voz, telas e nomes de comandos localizados. O pacote preserva as dependências transitivas do SDK (incluindo
 WebRTC/werift), mesmo quando o SDK é um workspace `file:`. Publique a release compatível do
 Monky antes de publicar este bot.
 

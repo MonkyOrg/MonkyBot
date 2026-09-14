@@ -51,7 +51,8 @@ const responses = {
 export const eightBallCommand: LocalizedCommandDefinition = {
   name: '8ball',
   description: 'A bola mágica responde sua pergunta.',
-  localizations: { en: {
+  localizations: { 'pt-BR': { name: 'bola-magica' }, en: {
+    name: '8ball',
     description: 'The magic ball answers your question.',
     options: { pergunta: { label: 'Question', description: 'Your question for the magic ball' } },
   } },

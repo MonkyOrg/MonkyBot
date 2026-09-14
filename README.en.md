@@ -6,9 +6,14 @@ The **official reference bot** for Monky — utility commands, fun and more.
 
 ## Compatibility
 
-This version requires **Monky protocol 16**. Update the Monky app and server
+This version requires **Monky protocol 17**. Update the Monky app and server
 together before updating the bot; earlier protocol versions are not compatible.
 The bundled SDK is checked during the build and needs no separate installation.
+
+This checkout uses the official
+[19.0.1-beta SDK](https://github.com/MonkyOrg/Monky/releases/tag/v19.0.1-beta),
+with its origin and SHA-256 documented in [vendor/README.md](vendor/README.md).
+The archive in `vendor/`, dependency and lockfile pin the same published bytes.
 
 Every push to `main` produces a `-beta` prerelease without replacing stable,
 regardless of the SDK channel. A stable release is published only through
@@ -309,14 +314,14 @@ come from the bot; the client does not create or edit its profile.
 
 ## Commands
 
-| Command | Description |
+| Command (English) | Description |
 |---------|-------------|
 | `/ping` | Check whether the bot is responding |
-| `/dado [lados]` | Roll a die (default: 6, max: 100) |
-| `/moeda` | Coin flip |
-| `/8ball <pergunta>` | Answer the required complete question privately |
-| `/enquete` | Private form that publishes voting with automatic closing |
-| `/play <busca>` | Search by YouTube name or URL, preview privately, and select to add to queue |
+| `/dice [sides]` | Roll a die (default: 6, max: 100) |
+| `/coin` | Coin flip |
+| `/8ball <question>` | Answer the required complete question privately |
+| `/poll` | Private form that publishes voting with automatic closing |
+| `/play <search>` | Search by YouTube name or URL, preview privately, and select to add to queue |
 | `/queue` | Current track and numbered upcoming queue |
 | `/nowplaying` | Current track, pause/loading state and position |
 | `/pause` / `/resume` | Pause and resume at the same position, without restarting |
@@ -325,14 +330,17 @@ come from the bot; the client does not create or edit its profile.
 | `/leave` | Stop, clear and disconnect voice |
 | `/remove <position>` | Remove a 1-based position from the upcoming queue |
 | `/clear` | Clear only upcoming tracks, preserving the current track |
-| `/jogo-da-velha` | Shared screen for 2 players and spectators |
-| `/ajuda` | List all commands |
+| `/tic-tac-toe` | Shared screen for 2 players and spectators |
+| `/help` | List all commands |
 
 Type `/`, select a command, and fill its named parameters. For example, `lados`
-in `/dado` is an **integer from 2 to 100**, not text; questions retain their spaces.
-Command names stay the same in every language. Descriptions, fields, replies
-and forms support **Brazilian Portuguese and English**, following the client's
-selected language by default. In personal bot preferences, **Bot language**
+in `/dice` is an **integer from 2 to 100**, not text; questions retain their spaces.
+Display/input names, descriptions, fields, replies and forms support
+**Brazilian Portuguese and English**. For example, `/dado` appears as `/dice`
+in English, and `/play` as `/tocar` in PT-BR. Internal command identifiers and
+argument names/values do not change. Canonical names remain accepted in every
+language, including those used in the examples below. Presentation follows the
+client's selected language by default. In personal bot preferences, **Bot language**
 offers **Follow Monky** or a language override for that bot. This is not a shared
 server setting. Generated public content, such as poll results and queue notices,
 retains the language of the person whose interaction created it.
@@ -343,7 +351,7 @@ Ordinary replies appear **only in the invoking user's chat**, without
 interrupting the channel. The poll form is private, but submitting it publishes
 the question and voting buttons for channel participants.
 
-1. Run `/enquete`, without comma-separated parameters.
+1. Run `/poll` (canonical `/enquete`), without comma-separated parameters.
 2. Enter a question (up to 200 characters) and **2–10 different options**.
    Each option has its own field, up to 80 characters; commas can be part of an
    option's text.
@@ -394,6 +402,12 @@ a separate 30-second limit; the CLI distinguishes downloading, extraction and ve
 Download progress uses actual received bytes and the published size. Download
 completion does not mean preparation has finished: SHA-256 verification,
 extraction and executable validation are separate stages.
+
+A working tool is checked only once per preparation; downloaded candidates are
+validated before atomic installation. Per-process limits are **5 seconds for
+Node.js, 30 for yt-dlp, and 15 for FFmpeg**, allowing slower cold starts without
+removing validation. The overall limit remains ten minutes. A timeout does not
+silently install a replacement executable.
 
 - **Ubuntu/Debian and other glibc Linux distributions:** automatic installation
   on x64 and arm64. Requires `tar` with xz support; GNU tar also uses `xz-utils`.
@@ -453,6 +467,12 @@ archive-listing timeout even after installing the corrected package. Run
 `monkybot restart` as a separate command to use the new code. Do not repeat setup
 or delete tools that were already prepared successfully.
 
+Starting with `7.0.0-beta`, the updater launches the newly installed CLI in a
+fresh process. This cannot change an older updater already running: an update
+started from `6.0.4-beta` may still use its old restart code. If installation
+finished but that restart failed, check `monkybot --version` and run
+`monkybot restart` separately to use the installed version.
+
 #### When search works but public audio cannot be resolved
 
 Search uses flat metadata; finding a suggestion **does not prove** that the
@@ -478,11 +498,18 @@ monkybot logs --no-follow --lines 100
 `music-diagnose` requires an explicit valid URL. It has a **45-second** overall
 deadline, queries metadata with the same validation as `/play`, and never
 downloads/plays audio or installs tools. It prints versions, the video ID, and
-failure stage, **not** provider JSON or a signed audio address. On failure,
-`providerCause=UNRESOLVED` states that the cause still needs confirmation; keep
-the sanitized line with the version, OS and test time. An accepted result
-validates metadata/address, not audio transfer. Success on another machine does
-not prove operation on the affected host.
+failure stage, **not** provider JSON or a signed audio address. Without a
+specific error signature, `providerCause=UNRESOLVED` states that the cause still
+needs confirmation; keep the sanitized line with the version, OS and test time.
+An accepted result validates metadata/address, not audio transfer. Success on
+another machine does not prove operation on the affected host.
+
+`providerCause=YOUTUBE_BOT_CHALLENGE` identifies YouTube's explicit response
+requesting confirmation that access is not automated, at the `resolve` stage.
+It is an application-level refusal, not evidence of a general VPS egress block.
+The IP/reputation criterion is unproven, and access to the audio host has not
+been exercised. This is distinct from an executable-check timeout.
+Native authentication instructions are omitted from the diagnostic.
 
 Do not share `.keys`, `config.json`, `.env`, cookies, tokens or signed URLs.
 Do not enable authentication, proxies or remote EJS components to get around a
@@ -589,7 +616,10 @@ recovery. Manual pause preserves position, and private previews remain limited
 to ten seconds without adopting this persistent wait.
 
 **No Spotify, playlists, albums, live streams or authenticated/paywalled media
-in this version.** Playlist links are rejected even when they contain a video.
+in this version.** Individual video links may include `list`, `index` or
+`start_radio`: that context is discarded and only the selected video is queued.
+Playlist-only URLs without a valid individual video are rejected; this does not
+add playlist or continuous-radio playback.
 Arbitrary URLs are not accepted. yt-dlp extraction **is not an official YouTube
 audio API**: it can stop working and is subject to platform terms. Use only
 your own or authorized media and respect copyright. The bot never collects
@@ -599,7 +629,7 @@ remain explicit.
 
 ### Demo: shared tic-tac-toe screen
 
-Join a voice room and run `/jogo-da-velha` in an accessible text channel.
+Join a voice room and run `/tic-tac-toe` (canonical `/jogo-da-velha`) in an accessible text channel.
 An invitation appears in the same corner as screen-sharing notices; open it
 to view the miniapp **on the voice stage**, not in a chat card.
 Only participants in that room may view or interact.
@@ -607,6 +637,14 @@ The tile stays on the stage alongside cameras and screen shares, even when close
 **Open miniapp** starts local viewing; **Leave miniapp** closes the view without
 removing the tile or ending the game. Focusing or returning to the grid only
 changes the layout, without restarting the screen or changing player seats.
+
+**End miniapp** ends the game for everyone and removes its tile and invitations.
+The server authorizes this action only for an administrator or the user who
+invoked the creating command, while retaining room-access checks. The creator
+is still recognized after reconnecting. The bot releases that instance's state,
+timers and quota; late actions and responses cannot reopen the game or alter a
+new instance. Run a fresh command to play again.
+
 The creator plays **X**; a second person in the room clicks **Join as O**. Others can watch.
 Click or use Tab + Enter/Space to play. The bot validates identity, turn, empty
 cells, revision and win/draw; concurrent clicks cannot overwrite moves.
@@ -615,7 +653,7 @@ Controls follow each viewer's app language and update when that language
 changes without resetting the game. Games expire after 30min and disappear on
 bot disconnect/restart or loss of room authorization; they are not persisted.
 Leaving or changing rooms closes local viewing and blocks further actions. Game
-state and player seats remain until expiry or closure by the bot, even when the
+state and player seats remain until expiry or termination of the miniapp, even when the
 room becomes empty; there is no automatic reset or seat reassignment.
 Up to four miniapps may coexist in a room. Closing local viewing does not end the other participants' game.
 Removed screens immediately release their game quota. Synchronization failure closes the
@@ -698,8 +736,8 @@ does not change global installations or stop/restart existing bot or pm2 process
 CI runs the smoke test **before publishing**. The repository variable
 `MONKY_SDK_RELEASE` can pin the Monky release tag providing the SDK; otherwise,
 the latest published SDK is used, including betas. Either way, the build fails
-unless the SDK matches protocol 16 and supports durable selectors, voice and
-screens. Packaging preserves transitive SDK dependencies (including WebRTC/werift),
+unless the SDK matches protocol 17 and supports durable selectors, voice,
+screens and localized command names. Packaging preserves transitive SDK dependencies (including WebRTC/werift),
 even with a `file:` workspace SDK. Publish the compatible Monky release before
 publishing this bot.
 

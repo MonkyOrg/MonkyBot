@@ -3,7 +3,8 @@ import { translate, type LocalizedCommandDefinition } from './i18n';
 export const diceCommand: LocalizedCommandDefinition = {
   name: 'dado',
   description: 'Rola um dado. Padrão: 6 lados.',
-  localizations: { en: {
+  localizations: { 'pt-BR': { name: 'dado' }, en: {
+    name: 'dice',
     description: 'Roll a die. Default: 6 sides.',
     options: { lados: { label: 'Sides', description: 'Number of die sides (default: 6)' } },
   } },

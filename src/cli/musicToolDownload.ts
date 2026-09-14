@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { safeDiagnostic } from '../music/process';
-import { MusicError } from '../music/errors';
-import { cliT } from './i18n';
+import { MusicError, musicError } from '../music/errors';
+import { cliT, getCliLocale } from './i18n';
 import type { DownloadCallbacks } from './progress';
 
 export type ToolRepository = 'yt-dlp/yt-dlp' | 'yt-dlp/FFmpeg-Builds';
@@ -166,6 +166,7 @@ export function ffmpegArchiveEntry(archiveName: string): string {
 
 export function toolDownloadError(error: unknown): Error {
   return new Error(cliT('music.failed', { reason: safeDiagnostic(
-    error instanceof MusicError ? error.detail || error.message : error instanceof Error ? error.message : String(error),
+    error instanceof MusicError ? `${musicError(error, getCliLocale())}${error.detail ? ` ${error.detail}` : ''}`
+      : error instanceof Error ? error.message : String(error),
   ) }), { cause: error });
 }

@@ -99,7 +99,10 @@ function readDraft(values: BotFormValues): PollDraft | null {
 export const pollCommand: LocalizedCommandDefinition = {
   name: 'enquete',
   description: 'Publica uma enquete com votação e encerramento automático.',
-  localizations: { en: { description: 'Publish a poll with voting and automatic closing.' } },
+  localizations: {
+    'pt-BR': { name: 'enquete' },
+    en: { name: 'poll', description: 'Publish a poll with voting and automatic closing.' },
+  },
   handler: async (ctx) => {
     if (ctx.signal.aborted) return;
     let previous: BotFormValues = {};

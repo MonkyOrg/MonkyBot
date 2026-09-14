@@ -3,10 +3,36 @@ const { test } = require('node:test');
 const { createMusicCommands } = require('../dist/commands/music');
 const { MusicQueues } = require('../dist/music/queue');
 const { MusicError } = require('../dist/music/errors');
+const { getCommandPresentation, localizeCommand } = require('@monky/bot-sdk');
 
 const video = { id: 'abcdefghijk', title: 'Authorized original', url: 'https://www.youtube.com/watch?v=abcdefghijk', duration: 20 };
 const request = (locale, query = 'original', signal = new AbortController().signal) => ({
   locale, query, optionName: 'busca', args: {}, serverId: 'server', signal,
+});
+
+test('localized music presentation preserves handler IDs, wire options and voice requirements', () => {
+  const portuguese = {
+    play: 'tocar', queue: 'fila', nowplaying: 'tocando', pause: 'pausar', resume: 'retomar',
+    skip: 'pular', stop: 'parar', leave: 'sair', remove: 'remover', clear: 'limpar',
+  };
+  const commands = createMusicCommands({}, {});
+  assert.deepEqual(commands.map(command => command.name), Object.keys(portuguese));
+  for (const command of commands) {
+    const original = JSON.stringify(command);
+    const pt = getCommandPresentation(command, 'pt-BR');
+    const en = getCommandPresentation(command, 'en');
+    assert.equal(pt.canonicalName, command.name);
+    assert.equal(pt.displayName, portuguese[command.name]);
+    assert.ok(pt.inputNames.includes(command.name) && pt.inputNames.includes(portuguese[command.name]));
+    assert.equal(en.displayName, command.name);
+    for (const locale of ['pt-BR', 'en']) {
+      const localized = localizeCommand(command, locale);
+      assert.equal(localized.name, command.name);
+      assert.equal(localized.voiceRequirement, 'same-bot-channel');
+      assert.deepEqual((localized.options ?? []).map(option => option.name), (command.options ?? []).map(option => option.name));
+    }
+    assert.equal(JSON.stringify(command), original);
+  }
 });
 
 function context(locale, args = {}) {
