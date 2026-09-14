@@ -41,8 +41,9 @@ export function mediaAssetName(tool: 'ytDlp' | 'ffmpeg', platform: NodeJS.Platfo
     `Instale um executavel compativel e configure ${MUSIC_TOOL_ENV[tool]}.`);
 }
 
-async function extractFfmpeg(archive: string, destination: string, binary: string, signal: AbortSignal): Promise<void> {
-  const entry = await ffmpegArchiveEntry(archive, binary, signal);
+async function extractFfmpeg(archive: string, destination: string, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  const entry = ffmpegArchiveEntry(path.basename(archive));
   const child = spawn('tar', ['-xOf', archive, '--', entry], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   let diagnostic = '';
   child.stderr.on('data', (chunk: Buffer) => { diagnostic = (diagnostic + chunk.toString()).slice(0, 4096); });
@@ -136,8 +137,12 @@ async function installTool(
     const download = path.join(staging, tool === 'ytDlp' ? path.basename(target) : asset.name);
     await downloadToolAsset(asset, download, signal);
     const candidate = tool === 'ytDlp' ? download : path.join(staging, path.basename(target));
-    if (tool === 'ffmpeg') await extractFfmpeg(download, candidate, path.basename(target), signal);
+    if (tool === 'ffmpeg') {
+      options.progress?.('Download de FFmpeg conferido por SHA-256. Extraindo o executavel...');
+      await extractFfmpeg(download, candidate, signal);
+    }
     await fs.chmod(candidate, 0o755);
+    options.progress?.(`Verificando ${MUSIC_TOOL_NAMES[tool]}...`);
     await checkMusicTool(tool, { ...paths, [tool]: candidate }, signal);
     signal.throwIfAborted();
     await fs.rename(candidate, target);
