@@ -6,7 +6,8 @@ beforeEach(() => setCliLocale('en'));
 const { BotClient } = require('@monky/bot-sdk');
 const { EventEmitter } = require('node:events');
 const { registerMusicCommands } = require('../dist/commands/music');
-const { IncompleteAudioError, YouTubeSource } = require('../dist/music/source');
+const { IncompleteAudioError } = require('../dist/music/source');
+const { LocalMusicSourceFactory } = require('../dist/music/localSource');
 const { SourceRecoveryError } = require('../dist/music/errors');
 const {
   MUSIC_IDLE_SETTING, defaultMusicIdleSeconds, musicSettingsDefinition, musicIdleMilliseconds,
@@ -25,17 +26,19 @@ async function until(predicate) {
 }
 
 function registered(t, { frames = 1, open } = {}) {
-  t.mock.method(YouTubeSource.prototype, 'check', async () => {});
-  t.mock.method(YouTubeSource.prototype, 'resolve', async () => ({
-    id: 'abcdefghijk', title: 'An authorized original recording', duration: 20,
-    url: 'https://www.youtube.com/watch?v=abcdefghijk', audioUrl: '',
+  t.mock.method(LocalMusicSourceFactory.prototype, 'bind', async () => ({
+    check: async () => {},
+    resolve: async () => ({
+      id: 'abcdefghijk', title: 'An authorized original recording', duration: 20,
+      url: 'https://www.youtube.com/watch?v=abcdefghijk',
+    }),
+    open: open ?? (async (_track, signal) => ({
+      frames: (async function* () {
+        for (let i = 0; i < frames && !signal.aborted; i++) yield Uint8Array.of(248, 255, 254);
+      })(),
+      close: async () => {},
+    })),
   }));
-  t.mock.method(YouTubeSource.prototype, 'open', open ?? (async (_track, signal) => ({
-    frames: (async function* () {
-      for (let i = 0; i < frames && !signal.aborted; i++) yield Uint8Array.of(248, 255, 254);
-    })(),
-    close: async () => {},
-  })));
   const commands = new Map(), settings = new Map(), connections = new Map(), chats = [], writes = [];
   let declaration;
   const bot = Object.assign(new EventEmitter(), {
@@ -127,7 +130,8 @@ test('registered music announces the end in persistent chat before its configure
   const { controller, replies } = await f.play();
   controller.abort();
   await until(() => f.chats.some(message => /Queue finished/.test(message.content)));
-  assert.match(replies[0], /Added to queue/);
+  assert.match(replies[0], /Track received/);
+  assert.match(replies.at(-1), /Added to queue/);
   assert.ok(f.connections.has('a'));
   assert.equal(f.chats.filter(message => /Queue finished/.test(message.content)).length, 1);
   assert.ok(f.chats.every(message => message.serverId === 'a' && message.channelId === 'text-a'));
@@ -167,13 +171,13 @@ test('healthy playback keeps generic SDK and recovered peer errors in local diag
   await wait(70);
   assert.ok(f.writes.length > before);
   assert.equal(f.connections.get('a'), connection);
-  assert.equal(f.chats.length, 1);
+  assert.equal(f.chats.length, 2);
   assert.equal(logs.mock.callCount(), 1);
   assert.match(logs.mock.calls[0].arguments[0], /Runtime diagnostic.*Retired peer failed/);
   assert.doesNotMatch(logs.mock.calls[0].arguments[0], /private\.example|secret/);
 });
 
-test('a skipped failed track stays silent until a replacement actually writes audio', async t => {
+test('a skipped failed track reports preparation but not playback until a replacement actually writes audio', async t => {
   const logs = t.mock.method(console, 'error', () => {});
   const failed = gate(), nextFrame = gate();
   let opened = 0;
@@ -194,11 +198,14 @@ test('a skipped failed track stays silent until a replacement actually writes au
   } });
   t.after(() => { failed.release(); nextFrame.release(); });
   await f.play();
-  await until(() => f.chats.length === 1);
+  await until(() => f.chats.some(message => /Now playing/.test(message.content)));
   await f.play();
   failed.release();
   await until(() => opened === 2);
-  assert.equal(f.chats.length, 1, 'Metadata/roster presence alone is not evidence that the replacement can play.');
+  assert.equal(f.chats.length, 3);
+  assert.equal(f.chats.filter(message => /Preparing to play/.test(message.content)).length, 2);
+  assert.equal(f.chats.filter(message => /Now playing/.test(message.content)).length, 1,
+    'Metadata/roster presence alone is not evidence that the replacement can play.');
   nextFrame.release();
   await until(() => f.chats.some(message => /Queue finished/.test(message.content)));
   assert.equal(f.chats.filter(message => /Now playing/.test(message.content)).length, 2);
@@ -224,7 +231,7 @@ for (const locale of ['en', 'pt-BR']) {
     } });
     t.after(failed.release);
     await f.play('a', locale);
-    await until(() => f.chats.length === 1);
+    await until(() => f.chats.some(message => /Now playing|Tocando:/.test(message.content)));
     await f.play('a', locale);
     failed.release();
     await until(() => f.chats.some(message => /Queue finished|Fim da fila/.test(message.content)));
@@ -246,7 +253,7 @@ test('recovery budget: an exhausted last track is reported once without a mislea
   await f.play();
   await until(() => f.chats.some(message => /Could not resume/.test(message.content)));
   await tick();
-  assert.equal(f.chats.length, 1);
+  assert.equal(f.chats.length, 2);
   assert.equal(f.chats.some(message => /Queue finished|Playback stopped/.test(message.content)), false);
 });
 
@@ -266,7 +273,7 @@ test('several failed queued tracks produce one stopping error and never a succes
   } });
   t.after(failed.release);
   await f.play();
-  await until(() => f.chats.length === 1);
+  await until(() => f.chats.some(message => /Now playing/.test(message.content)));
   await f.play();
   failed.release();
   await until(() => f.chats.some(message => /Playback stopped/.test(message.content)));
@@ -298,13 +305,14 @@ test('manual stop cancels an unproven replacement without resurrecting the earli
   } });
   t.after(() => { failed.release(); nextFrame.release(); });
   await f.play();
-  await until(() => f.chats.length === 1);
+  await until(() => f.chats.some(message => /Now playing/.test(message.content)));
   await f.play();
   failed.release();
   await until(() => opened === 2);
   await f.control('stop');
   await tick();
-  assert.equal(f.chats.length, 1, 'A deliberate stop is not an automatic playback failure or normal EOF.');
+  assert.equal(f.chats.length, 3, 'A deliberate stop is not an automatic playback failure or normal EOF.');
+  assert.equal(f.chats.some(message => /Playback stopped|Queue finished/.test(message.content)), false);
 });
 
 test('confirmed transport loss stops playback once, independently of an earlier generic SDK error', async t => {
@@ -313,7 +321,7 @@ test('confirmed transport loss stops playback once, independently of an earlier 
   await f.play();
   await until(() => f.chats.some(message => /Now playing/.test(message.content)));
   f.bot.emit('error', new Error('ICE temporarily disconnected.'), { serverId: 'a' });
-  assert.equal(f.chats.length, 1);
+  assert.equal(f.chats.length, 2);
   f.loseVoice('transport_failed');
   f.loseVoice('transport_failed');
   await until(() => f.chats.some(message => /Playback stopped/.test(message.content)));
@@ -335,7 +343,7 @@ test('a retired voice callback cannot stop a newer healthy SDK connection', asyn
   await wait(50);
   assert.equal(f.connections.get('a'), connection);
   assert.ok(f.writes.length > before);
-  assert.equal(f.chats.length, 1);
+  assert.equal(f.chats.length, 2);
 });
 
 test('server reconnection reports interrupted playback once without claiming the old queue resumed', async t => {

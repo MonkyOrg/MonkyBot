@@ -16,8 +16,6 @@ import { runSync } from '../process';
 import { assertManifestPortAvailable, DEFAULT_MANIFEST_PORT, getManifestBindHost } from '../manifestPort';
 import { DEFAULT_BOT_NAME } from '../../profile';
 import { getManifestUrl } from '../../utils/manifest';
-import { prepareMusicToolsForCli } from '../musicTools';
-import { managedMusicTool, MUSIC_TOOL_ENV } from '../../music/toolPaths';
 import { cliText } from '../i18n';
 
 function loadConfigOrDie() {
@@ -77,18 +75,6 @@ function managedManifestHost(proc: Pm2Process | null): string {
   return getManifestBindHost(proc?.pm2_env?.MONKY_SERVE_HOST ?? proc?.pm2_env?.env?.MONKY_SERVE_HOST);
 }
 
-function managedMusicEnvironment(proc: Pm2Process | null): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  for (const tool of ['node', 'ytDlp', 'ffmpeg'] as const) {
-    const key = MUSIC_TOOL_ENV[tool];
-    const previous = proc?.pm2_env?.[key] ?? proc?.pm2_env?.env?.[key];
-    if (env[key] === undefined && previous && (tool === 'node' || previous !== managedMusicTool(tool))) {
-      env[key] = previous;
-    }
-  }
-  return env;
-}
-
 function managedBotProcess(config: BotConfig): (Pm2Process & { pm_id: number }) | null {
   const proc = findBotProcess();
   if (!proc) return null;
@@ -121,9 +107,8 @@ export async function startCommand(): Promise<void> {
   ensurePm2();
   ensureBotBuilt(config.botDir);
 
-  const musicTools = await prepareMusicToolsForCli({ env: managedMusicEnvironment(proc) });
   await checkManifestPort(config, host);
-  const ecosystemPath = writeEcosystem(config, host, musicTools);
+  const ecosystemPath = writeEcosystem(config, host);
   const result = runSync('pm2', ['startOrRestart', ecosystemPath], { stdio: 'inherit' });
   if (result.error || result.status !== 0) {
     throw new Error(cliText('Falha ao iniciar o bot via pm2.', 'Failed to start the bot with pm2.'), { cause: result.error });
@@ -169,7 +154,6 @@ export async function restartBot(config: BotConfig, fresh = false): Promise<void
   manifestUrl(config);
   const proc = managedBotProcess(config);
   const host = managedManifestHost(proc);
-  const musicTools = await prepareMusicToolsForCli({ env: managedMusicEnvironment(proc) });
 
   if (proc) {
     const stopped = runSync('pm2', ['stop', String(proc.pm_id)], { stdio: 'inherit' });
@@ -191,7 +175,7 @@ export async function restartBot(config: BotConfig, fresh = false): Promise<void
     }
   }
 
-  const ecosystemPath = writeEcosystem(config, host, musicTools);
+  const ecosystemPath = writeEcosystem(config, host);
   const result = runSync('pm2', ['startOrRestart', ecosystemPath], { stdio: 'inherit' });
   if (result.error || result.status !== 0) {
     throw new Error(cliText('Falha ao reiniciar o bot.', 'Failed to restart the bot.'), { cause: result.error });

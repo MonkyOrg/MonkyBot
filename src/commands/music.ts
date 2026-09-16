@@ -1,15 +1,16 @@
 import type {
-  BotClient, CommandAudioPreviewContext, CommandAudioPreviewData,
-  CommandAutocompleteContext, CommandContext, CommandDefinition,
+  BotClient, CommandAudioPreviewContext, CommandAudioPreviewData, CommandAudioPreviewResponse,
+  CommandAutocompleteContext, CommandContext, CommandDefinition, LocalExecutionProvider, LocalMediaTrack,
 } from '@monky/bot-sdk';
 import { LIMITS } from '@monky/bot-sdk';
 import { MusicQueues, type MusicActor, type MusicNotice } from '../music/queue';
 import { MusicError, aborted, musicError } from '../music/errors';
-import { IncompleteAudioError, MUSIC_PREVIEW_DURATION_MS, musicInput, videoUrl, YouTubeSource, type MusicSource, type Track } from '../music/source';
+import { IncompleteAudioError, MUSIC_PREVIEW_DURATION_MS, musicInput, videoUrl, type MusicSource, type Track } from '../music/source';
 import { bounded, errorDiagnostic } from '../music/process';
 import { translate, type LocalizedCommandDefinition } from './i18n';
 import { cliText } from '../cli/i18n';
 import { defaultMusicIdleSeconds, musicIdleMilliseconds, musicSettingsDefinition } from '../music/settings';
+import { LocalMusicSourceFactory, localMusicAutocomplete, localMusicPreview } from '../music/localSource';
 
 export const musicDefinitions: Omit<LocalizedCommandDefinition, 'handler'>[] = [
   { name: 'play', voiceRequirement: 'same-bot-channel', description: 'Busca pelo nome ou adiciona um vídeo individual do YouTube à fila.',
@@ -50,8 +51,10 @@ export const musicDefinitions: Omit<LocalizedCommandDefinition, 'handler'>[] = [
 async function actor(ctx: CommandContext): Promise<MusicActor> {
   const voiceChannelId = await ctx.getVoiceChannel();
   return {
-    serverId: ctx.serverId, voiceChannelId, textChannelId: ctx.channelId,
+    botId: ctx.botId, serverId: ctx.serverId, voiceChannelId, textChannelId: ctx.channelId,
     locale: ctx.locale, invocationId: ctx.invocationId,
+    invokerId: ctx.invokerId, invokerSessionId: ctx.invokerSessionId,
+    invokerNickname: ctx.invokerNickname,
   };
 }
 function time(seconds: number): string {
@@ -74,24 +77,29 @@ function replyLines(ctx: CommandContext, text: string): void {
   if (part.trim()) ctx.reply(part);
 }
 
-export function createMusicCommands(queues: MusicQueues, source: MusicSource): CommandDefinition[] {
+interface MusicInteractions<T extends Track> {
+  tracks(ctx: CommandAutocompleteContext): Promise<T[]>;
+  preview(ctx: CommandAudioPreviewContext): Promise<CommandAudioPreviewResponse>;
+  resourceId(track: T): string;
+  local: boolean;
+}
+
+function createMusicCommandSet<TQueue extends Track, TLookup extends Track>(
+  queues: MusicQueues<TQueue>,
+  interactions: MusicInteractions<TLookup>,
+): CommandDefinition[] {
   const autocomplete = async (ctx: CommandAutocompleteContext) => {
     if (ctx.signal.aborted) return [];
     try {
       if (ctx.optionName !== 'busca') throw new MusicError('input');
-      const input = musicInput(ctx.query);
-      await source.check(ctx.signal);
-      aborted(ctx.signal);
-      const tracks = input.kind === 'url'
-        ? [await source.resolve(input.value, ctx.signal)]
-        : await source.search(input.value, ctx.signal);
+      const tracks = await interactions.tracks(ctx);
       if (ctx.signal.aborted) return [];
       return tracks.map((track) => ({
         value: track.url,
         label: label(track).slice(0, 100),
         description: translate(ctx.locale, 'YouTube · Prévia privada de 10 segundos', 'YouTube · Private 10-second preview'),
         audio: {
-          resourceId: track.url, fileName: `youtube-${track.id}-preview.ogg`,
+          resourceId: interactions.resourceId(track), fileName: `youtube-${track.id}-preview.ogg`,
           durationMs: MUSIC_PREVIEW_DURATION_MS,
         },
       }));
@@ -99,20 +107,23 @@ export function createMusicCommands(queues: MusicQueues, source: MusicSource): C
       throw new Error(musicError(error, ctx.locale), { cause: error });
     }
   };
-  const audioPreview = async (ctx: CommandAudioPreviewContext): Promise<CommandAudioPreviewData> => {
+  const audioPreview = async (ctx: CommandAudioPreviewContext): Promise<CommandAudioPreviewResponse> => {
     try {
       aborted(ctx.signal);
       if (ctx.optionName !== 'busca') throw new MusicError('input');
-      const bytes = await source.preview(videoUrl(ctx.resourceId), ctx.signal);
+      const result = await interactions.preview(ctx);
       aborted(ctx.signal);
-      return { bytes, mimeType: 'audio/ogg' };
+      return result;
     } catch (error: unknown) {
       throw new Error(musicError(error, ctx.locale), { cause: error });
     }
   };
   return musicDefinitions.map((definition) => ({
     ...definition,
-    ...(definition.name === 'play' ? { autocomplete, audioPreview } : {}),
+    ...(definition.name === 'play' ? {
+      autocomplete, audioPreview,
+      ...(interactions.local ? { localCapabilities: ['youtube-audio'] as const } : {}),
+    } : {}),
     handler: async (ctx) => {
       if (ctx.signal.aborted) return;
       try {
@@ -127,7 +138,8 @@ export function createMusicCommands(queues: MusicQueues, source: MusicSource): C
           const upcoming = definition.name === 'queue'
             ? `\n\n${translate(ctx.locale, 'Próximas faixas', 'Up next')}:\n${state.upcoming.map((item, index) =>
               `${index + 1}. ${item.pending ? translate(ctx.locale, 'Carregando…', 'Loading…')
-                : item.title}`).join('\n') ||
+                : item.title}${item.waitingForRequester
+                ? translate(ctx.locale, ' — aguardando solicitante', ' — waiting for requester') : ''}`).join('\n') ||
               translate(ctx.locale, 'Fila vazia.', 'Queue empty.')}` : '';
           replyLines(ctx, `${current}${upcoming}`);
           return;
@@ -135,15 +147,21 @@ export function createMusicCommands(queues: MusicQueues, source: MusicSource): C
         if (definition.name === 'play') {
           const input = musicInput(ctx.args.busca);
           if (input.kind !== 'url') throw new MusicError('selection');
+          ctx.reply(translate(ctx.locale,
+            '⏳ Recebi a música. Estou validando os dados para adicioná-la à fila…',
+            '⏳ Track received. I am checking its details before adding it to the queue…'));
           const track = await queues.enqueue(caller, input.value, ctx.signal, () => actor(ctx));
           if (!ctx.signal.aborted) ctx.reply(translate(ctx.locale,
-            `➕ Adicionado à fila: ${label(track)}. O aviso de reprodução aparece quando a faixa começa a avançar.`,
-            `➕ Added to queue: ${label(track)}. A playback notice appears when the track starts advancing.`));
+            `➕ Adicionado à fila: ${label(track)}.`,
+            `➕ Added to queue: ${label(track)}.`));
         } else {
           const control = definition.name;
           if (control !== 'pause' && control !== 'resume' && control !== 'skip' && control !== 'stop' &&
               control !== 'leave' && control !== 'remove' && control !== 'clear') return;
           const position = typeof ctx.args.position === 'number' ? ctx.args.position : undefined;
+          if (control === 'skip') ctx.reply(translate(ctx.locale,
+            '⏳ Recebi o pedido para pular a faixa. Encerrando o áudio atual…',
+            '⏳ Skip received. Stopping the current audio…'));
           await queues.control(caller, control, position);
           if (!ctx.signal.aborted) {
             const done = {
@@ -158,7 +176,8 @@ export function createMusicCommands(queues: MusicQueues, source: MusicSource): C
       } catch (error: unknown) {
         if (!ctx.signal.aborted) {
           if (!(error instanceof MusicError) || error.detail ||
-              ['tools', 'runtime', 'unavailable', 'timeout', 'voice', 'voice_runtime', 'settings', 'bot_runtime'].includes(error.code)) {
+              ['tools', 'runtime', 'unavailable', 'timeout', 'voice', 'voice_runtime', 'settings', 'bot_runtime',
+                'local_permission', 'local_client_unavailable', 'local_transport'].includes(error.code)) {
             console.error(`[music] ${cliText('Comando falhou', 'Command failed')} (command=${definition.name}, stage=execute): ${errorDiagnostic(error)}`);
           }
           ctx.reply(`⚠️ ${musicError(error, ctx.locale)}`);
@@ -168,8 +187,39 @@ export function createMusicCommands(queues: MusicQueues, source: MusicSource): C
   }));
 }
 
+export function createMusicCommands(queues: MusicQueues, source: MusicSource): CommandDefinition[] {
+  return createMusicCommandSet(queues, {
+    local: false,
+    resourceId: (track) => track.url,
+    tracks: async (ctx) => {
+      const input = musicInput(ctx.query);
+      await source.check(ctx.signal);
+      aborted(ctx.signal);
+      return input.kind === 'url'
+        ? [await source.resolve(input.value, ctx.signal)]
+        : source.search(input.value, ctx.signal);
+    },
+    preview: async (ctx): Promise<CommandAudioPreviewData> => ({
+      bytes: await source.preview(videoUrl(ctx.resourceId), ctx.signal),
+      mimeType: 'audio/ogg',
+    }),
+  });
+}
+
+export function createLocalMusicCommands(
+  queues: MusicQueues<LocalMediaTrack>,
+  provider: LocalExecutionProvider,
+): CommandDefinition[] {
+  return createMusicCommandSet(queues, {
+    local: true,
+    resourceId: (track) => track.id,
+    tracks: (ctx) => localMusicAutocomplete(provider, ctx),
+    preview: (ctx) => localMusicPreview(provider, ctx),
+  });
+}
+
 export function registerMusicCommands(bot: BotClient): () => Promise<void> {
-  const source = new YouTubeSource();
+  const source = new LocalMusicSourceFactory(bot);
   const seconds = defaultMusicIdleSeconds();
   bot.settings(musicSettingsDefinition(seconds));
   const notice = async (event: MusicNotice, signal?: AbortSignal): Promise<void> => {
@@ -181,7 +231,7 @@ export function registerMusicCommands(bot: BotClient): () => Promise<void> {
   const queues = new MusicQueues(source, bot, notice, seconds * 1000,
     (serverId) => musicIdleMilliseconds(bot.getServerSettings(serverId)));
   const detachSettings = bot.onSettingsChanged((_snapshot, { serverId }) => queues.refreshGracePeriod(serverId));
-  for (const command of createMusicCommands(queues, source)) bot.command(command);
+  for (const command of createLocalMusicCommands(queues, bot)) bot.command(command);
   const interrupted = new Map<string, { actor: MusicActor; sending: boolean }>();
   const disconnectQueue = (serverId: string, error?: unknown): void => {
     void queues.disconnect(serverId, error).catch((failure: unknown) =>
@@ -258,9 +308,13 @@ export function registerMusicCommands(bot: BotClient): () => Promise<void> {
   return dispose;
 }
 
-function musicNoticeText(event: MusicNotice): string {
+export function musicNoticeText(event: MusicNotice): string {
   const locale = event.actor.locale;
   switch (event.type) {
+    case 'loading':
+      return translate(locale,
+        `⏳ Preparando para tocar: ${label(event.track)}. Aguarde o início do áudio…`,
+        `⏳ Preparing to play: ${label(event.track)}. Waiting for audio to start…`);
     case 'started':
       return translate(locale, `▶ Tocando: ${label(event.track)}`, `▶ Now playing: ${label(event.track)}`);
     case 'ended':
@@ -275,6 +329,14 @@ function musicNoticeText(event: MusicNotice): string {
       return translate(locale,
         `⚠️ Falha ao retomar ${label(event.track)} após ${event.attempts} tentativas consecutivas sem avanço do áudio. A faixa foi removida da fila.`,
         `⚠️ Could not resume ${label(event.track)} after ${event.attempts} consecutive attempts without audio progress. The track was removed from the queue.`);
+    case 'requester-left':
+      return translate(locale,
+        `⏭️ ${event.actor.invokerNickname} saiu da voz. ${label(event.track)} foi interrompida e pulada; as próximas faixas continuam na fila.`,
+        `⏭️ ${event.actor.invokerNickname} left voice. ${label(event.track)} was stopped and skipped; upcoming tracks remain queued.`);
+    case 'requester-disconnected':
+      return translate(locale,
+        `⏭️ O cliente de ${event.actor.invokerNickname} foi desconectado. ${label(event.track)} foi interrompida e pulada; as próximas faixas continuam na fila.`,
+        `⏭️ ${event.actor.invokerNickname}'s client disconnected. ${label(event.track)} was stopped and skipped; upcoming tracks remain queued.`);
     case 'failed': {
       const reason = event.error instanceof IncompleteAudioError
         ? translate(locale,

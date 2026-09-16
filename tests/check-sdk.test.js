@@ -14,20 +14,23 @@ function sdkFixture(t, { version = protocolVersion, missing } = {}) {
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ monky: { protocolVersion } }));
   fs.writeFileSync(path.join(sdk, 'package.json'), JSON.stringify({ main: 'index.js' }));
   const methods = ['close', 'createSelector', 'listSelectors', 'updateSelector', 'closeSelector', 'finalizeSelector',
-    'joinVoice', 'getVoiceConnection', 'leaveVoice', 'createScreen', 'updateScreen', 'closeScreen', 'listScreens']
+    'joinVoice', 'getVoiceConnection', 'leaveVoice', 'createScreen', 'updateScreen', 'closeScreen', 'listScreens', 'localExecution']
     .filter((name) => name !== missing).map((name) => `${name}() {}`).join('\n');
   const registrations = missing === 'registeredServerCount' ? '' : 'get registeredServerCount() { return 0; }';
   const commandPresentation = missing === 'getCommandPresentation' ? '' : 'exports.getCommandPresentation = () => ({});';
+  const localErrors = ['LocalExecutionError', 'LocalExecutionRpcError'].filter(name => name !== missing)
+    .map(name => `exports.${name} = class extends Error {};`).join('\n');
   fs.writeFileSync(path.join(sdk, 'index.js'),
-    `exports.PROTOCOL_VERSION = ${version}; exports.BotClient = class { ${methods}\n${registrations} }; ${commandPresentation}`);
+    `exports.PROTOCOL_VERSION = ${version}; exports.BotClient = class { ${methods}\n${registrations} }; ${commandPresentation}\n${localErrors}`);
   return root;
 }
 
-test('SDK compatibility requires matching protocol, selectors, voice, screens and command localization', (t) => {
+test('SDK compatibility requires matching protocol, selectors, voice, local execution, screens and command localization', (t) => {
   assert.equal(checkSdk(sdkFixture(t)), protocolVersion);
   assert.throws(() => checkSdk(sdkFixture(t, { version: protocolVersion - 1 })), /requires the bot-sdk/);
   for (const missing of ['close', 'registeredServerCount', 'createSelector', 'listSelectors', 'updateSelector', 'closeSelector', 'finalizeSelector',
-    'joinVoice', 'getVoiceConnection', 'leaveVoice', 'createScreen', 'updateScreen', 'closeScreen', 'listScreens', 'getCommandPresentation']) {
+    'joinVoice', 'getVoiceConnection', 'leaveVoice', 'createScreen', 'updateScreen', 'closeScreen', 'listScreens',
+    'getCommandPresentation', 'localExecution', 'LocalExecutionError', 'LocalExecutionRpcError']) {
     assert.throws(() => checkSdk(sdkFixture(t, { missing })), /durable selectors/, missing);
   }
 });

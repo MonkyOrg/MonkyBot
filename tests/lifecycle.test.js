@@ -31,9 +31,6 @@ function managedProcess(status = 'online') {
 
 function fixture(t, initial, proc = null) {
   setBindHost(t);
-  t.mock.method(musicTools, 'prepareMusicToolsForCli', async () => ({
-    node: process.execPath, ytDlp: 'fixture-ytdlp', ffmpeg: 'fixture-ffmpeg',
-  }));
   const state = {
     current: structuredClone(initial),
     effects: [], lines: [],
@@ -90,36 +87,18 @@ test('generated runtime locale follows the operator, independently of bot profil
   }
 });
 
-test('restart prepares music before stopping the running process and preserves it on failure', async (t) => {
-  const initial = marketplace(await freePort(t));
-  const state = fixture(t, initial, managedProcess());
-  t.mock.method(musicTools, 'prepareMusicToolsForCli', async () => {
-    assert.deepEqual(state.effects, []);
-    throw new Error('fixture media download failed');
+for (const action of ['start', 'restart']) {
+  test(`${action} never prepares or injects host media tools`, async t => {
+    const proc = action === 'start' ? null : managedProcess();
+    const state = fixture(t, marketplace(await freePort(t)), proc);
+    const preparation = t.mock.method(musicTools, 'prepareMusicToolsForCli', () =>
+      assert.fail('Normal lifecycle must not prepare host media tools.'));
+    if (action === 'start') await lifecycle.startCommand();
+    else await lifecycle.restartBot(state.current);
+    assert.equal(preparation.mock.callCount(), 0);
+    assert.deepEqual(state.ecosystem.mock.calls[0].arguments, [state.current, '0.0.0.0']);
   });
-  await assert.rejects(lifecycle.restartBot(initial), /fixture media download failed/);
-  assert.deepEqual(state.effects, []);
-  assert.deepEqual(state.current, initial);
-});
-
-test('start pins the prepared media executables into the PM2 ecosystem', async (t) => {
-  const state = fixture(t, marketplace(await freePort(t)));
-  const prepared = { node: process.execPath, ytDlp: '/managed/yt-dlp', ffmpeg: '/managed/ffmpeg' };
-  t.mock.method(musicTools, 'prepareMusicToolsForCli', async () => prepared);
-  await lifecycle.startCommand();
-  assert.deepEqual(state.ecosystem.mock.calls[0].arguments[2], prepared);
-});
-
-test('start rechecks the manifest port after preparing external tools', async (t) => {
-  const port = await freePort(t);
-  const state = fixture(t, marketplace(port));
-  t.mock.method(musicTools, 'prepareMusicToolsForCli', async () => {
-    await listen(t, undefined, port);
-    return { node: process.execPath, ytDlp: 'fixture-ytdlp', ffmpeg: 'fixture-ffmpeg' };
-  });
-  await assert.rejects(lifecycle.startCommand(), /já está em uso/);
-  assert.deepEqual(state.effects, ['ensure']);
-});
+}
 
 test('prepared tool paths survive generated ecosystem serialization', () => {
   const prepared = { node: process.execPath, ytDlp: "C:\\media's tools\\yt-dlp.exe", ffmpeg: '/tools/line\nbreak/ffmpeg' };
@@ -130,38 +109,6 @@ test('prepared tool paths survive generated ecosystem serialization', () => {
   assert.equal(env.MONKY_MUSIC_YTDLP, prepared.ytDlp);
   assert.equal(env.MONKY_MUSIC_FFMPEG, prepared.ffmpeg);
 });
-
-for (const action of ['start', 'restart']) {
-  test(`${action} preserves media overrides from the owned PM2 process, with the shell taking precedence`, async t => {
-    const previous = {};
-    for (const key of ['MONKY_MUSIC_NODE', 'MONKY_MUSIC_YTDLP', 'MONKY_MUSIC_FFMPEG']) {
-      previous[key] = process.env[key];
-      delete process.env[key];
-    }
-    t.after(() => {
-      for (const [key, value] of Object.entries(previous)) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-    });
-    process.env.MONKY_MUSIC_FFMPEG = '/operator/ffmpeg';
-    const proc = managedProcess(action === 'start' ? 'stopped' : 'online');
-    proc.pm2_env.MONKY_MUSIC_YTDLP = '/previous/yt-dlp';
-    proc.pm2_env.env = { MONKY_MUSIC_NODE: '/previous/node', MONKY_MUSIC_FFMPEG: '/previous/ffmpeg' };
-    const state = fixture(t, marketplace(await freePort(t)), proc);
-    t.mock.method(musicTools, 'prepareMusicToolsForCli', async ({ env }) => {
-      assert.equal(env.MONKY_MUSIC_YTDLP, '/previous/yt-dlp');
-      assert.equal(env.MONKY_MUSIC_NODE, '/previous/node');
-      assert.equal(env.MONKY_MUSIC_FFMPEG, '/operator/ffmpeg');
-      return { node: env.MONKY_MUSIC_NODE, ytDlp: env.MONKY_MUSIC_YTDLP, ffmpeg: env.MONKY_MUSIC_FFMPEG };
-    });
-    if (action === 'start') await lifecycle.startCommand();
-    else await lifecycle.restartBot(state.current);
-    assert.deepEqual(state.ecosystem.mock.calls[0].arguments[2], {
-      node: '/previous/node', ytDlp: '/previous/yt-dlp', ffmpeg: '/operator/ffmpeg',
-    });
-  });
-}
 
 for (const proc of [null, managedProcess('stopped')]) {
   test(`start rejects a real conflict before installing, writing or starting (${proc ? 'stopped' : 'unregistered'})`, async (t) => {
@@ -271,9 +218,7 @@ for (const [name, action, previousEnv, override, expected] of [
     else await lifecycle.restartCommand(action === 'fresh' ? ['--fresh'] : []);
     assert.deepEqual(binds, Array.from({ length: action === 'start' ? 2 : 1 },
       () => ({ port, host: expected, exclusive: true })));
-    assert.deepEqual(state.ecosystem.mock.calls[0].arguments, [state.current, expected, {
-      node: process.execPath, ytDlp: 'fixture-ytdlp', ffmpeg: 'fixture-ffmpeg',
-    }]);
+    assert.deepEqual(state.ecosystem.mock.calls[0].arguments, [state.current, expected]);
     assert.equal(ownListener.listening, false);
   });
 }

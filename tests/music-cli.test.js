@@ -78,8 +78,14 @@ for (const locale of ['pt-BR', 'en']) {
     const runner = `
       global.fetch = () => { throw new Error('UNEXPECTED_NETWORK'); };
       const { MusicError } = require(${JSON.stringify(errors)});
-      require(${JSON.stringify(musicProcess)}).capture = async (_executable, args) => {
+      require(${JSON.stringify(musicProcess)}).capture = async (executable, args) => {
         if (args.includes('--version')) return args.length === 1 ? 'v24.20.0' : '2026.08.19';
+        if (args[0] === '-version') {
+          if (executable !== (process.env.MONKY_MUSIC_FFMPEG || 'ffmpeg') || args.length !== 1) {
+            throw new Error('UNEXPECTED_MEDIA_OPERATION');
+          }
+          return 'ffmpeg version 7.1-fixture';
+        }
         if (args.includes('-encoders')) return ' A....D libopus Opus';
         if (!args.includes('--skip-download') || !args.includes('--no-playlist') ||
           args.at(-1) !== ${JSON.stringify(video)}) throw new Error('UNEXPECTED_MEDIA_OPERATION');

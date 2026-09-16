@@ -6,14 +6,16 @@ O **bot oficial de referência** do Monky — comandos utilitários, diversão e
 
 ## Compatibilidade
 
-Esta versão exige **protocolo Monky 17**. Atualize o aplicativo e o servidor Monky
+Esta versão exige **protocolo Monky 19**. Atualize o aplicativo e o servidor Monky
 juntos antes de atualizar o bot; servidores com protocolos anteriores não são compatíveis.
 O SDK incluído no pacote é verificado no build e não precisa ser instalado à parte.
 
-Este checkout usa o SDK oficial
-[19.0.1-beta](https://github.com/MonkyOrg/Monky/releases/tag/v19.0.1-beta),
+Esta versão usa o SDK oficial da
+[release Monky v21.0.2-beta](https://github.com/MonkyOrg/Monky/releases/tag/v21.0.2-beta),
 com origem e SHA-256 documentados em [vendor/README.md](vendor/README.md).
-O pacote em `vendor/`, a dependência e o lockfile fixam os mesmos bytes publicados.
+O pacote em `vendor/`, a dependência e o lockfile fixam os mesmos bytes.
+Use cliente e servidor compatíveis com o protocolo 19; nenhum SDK temporário
+de desenvolvimento é distribuído.
 
 Todo push na `main` gera uma versão `-beta`, marcada como pré-release, sem
 substituir a stable, independentemente do canal do SDK. Uma stable só é
@@ -77,11 +79,9 @@ manual ele pede a URL do servidor e o token; nos dois modos ele preserva o
 `botDir` e o nome atuais por padrão ao reconfigurar. Na instalação global, use
 `monkybot setup` e `monkybot start`.
 
-Antes de salvar, o setup também prepara as ferramentas de música. Ele reaproveita
-executáveis válidos ou baixa os que faltam para `~/.monkybot/tools`. No Linux e
-Windows, não usa `sudo` nem instala essas ferramentas globalmente; no macOS, pede
-autorização antes de instalar FFmpeg com Homebrew. Confira os requisitos por plataforma
-na seção de música abaixo. Falhas ou cancelamento preservam a configuração anterior.
+O setup do bot não instala ferramentas de mídia. Quando uma pessoa usa música,
+o próprio cliente Monky solicita consentimento e prepara suas ferramentas locais;
+o host do bot permanece somente com o runtime geral Node.js 18+.
 
 ### Vincule ao servidor
 
@@ -115,9 +115,9 @@ monkybot logs --lines 100    # Últimas 100 linhas
 monkybot logs --no-follow    # Imprime logs recentes e sai
 monkybot config              # Exibe a configuração
 monkybot config set <k> <v>  # Altera uma configuração
-monkybot music-check         # Diagnostica Node.js, yt-dlp e FFmpeg/libopus, sem instalar
-monkybot music-setup         # Prepara/repara as ferramentas de música sem refazer o vínculo
-monkybot music-diagnose --url <url> # Diagnóstico de um vídeo público, somente metadados
+monkybot music-check         # Diagnóstico manual legado das ferramentas do host
+monkybot music-setup         # Prepara ferramentas do host somente quando solicitado
+monkybot music-diagnose --url <url> # Diagnóstico manual legado, somente metadados
 monkybot language en         # Salva o idioma do CLI (pt-BR ou en)
 monkybot --version           # Versão instalada
 monkybot update              # Atualiza para a stable mais recente
@@ -216,8 +216,8 @@ continuam os mesmos. Atualize cliente e servidor para um protocolo compatível.
 O updater confere a versão e a entrada do CLI no prefixo global informado pelo
 npm e executa o **CLI recém-instalado em um novo processo Node**, preservando
 `PM2_HOME`, idioma e overrides de host/ferramentas. Um bot parado não é iniciado.
-Falha no reinício é informada separadamente da instalação concluída, e a
-preparação de música continua ocorrendo antes de parar o processo em execução.
+Falha no reinício é informada separadamente da instalação concluída. O reinício
+não prepara ferramentas de música no host.
 
 Um atualizador antigo já carregado não recebe essa correção retroativamente.
 Na primeira atualização, se o pacote instalar mas o reinício antigo falhar,
@@ -385,12 +385,31 @@ limite de votantes permanece aberta até atingir esse limite.
 
 ### Música: pré-requisitos, limites e uso responsável
 
-A música roda **no processo externo do bot**, nunca no servidor Monky. O
-`monkybot setup` prepara [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation)
-e [FFmpeg](https://ffmpeg.org/download.html) com **libopus** antes de salvar a
-configuração. `start` de um bot parado e `restart` também fazem essa preparação;
-um `start` de bot já online continua sem efeitos. Falha na preparação interrompe
-o reinício **antes de parar o bot que estava funcionando**.
+A busca, a resolução e o processamento de cada faixa pública do YouTube rodam
+**anonimamente no cliente Monky da pessoa que fez o pedido**. O servidor e o
+host/VPS do MonkyBot não baixam mídia, não exigem Node 22, yt-dlp ou FFmpeg e
+não são usados como fallback. O cliente prepara suas ferramentas gerenciadas
+após consentimento local; login, cookies e credenciais do provedor não são
+aceitos. Os demais participantes continuam ouvindo a publicação normal do bot.
+
+Ao selecionar `/play` (`/tocar` em PT-BR), o cliente verifica os requisitos
+antes da busca. O modal do Monky descreve Node.js, yt-dlp e FFmpeg, suas
+finalidades e o espaço previsto, e só prepara as ferramentas após a autorização.
+O progresso e a opção **Tentar novamente** aparecem no mesmo modal.
+Ferramentas prontas são reutilizadas; pesquisas seguintes não repetem a instalação.
+A aba de ferramentas de bots nas configurações do Monky permite rever permissões,
+remover ferramentas e limpar cache com confirmação e feedback próprios do aplicativo.
+
+Pausar, retomar, pular, parar, limpar, remover e sair continuam disponíveis
+sem instalar ferramentas locais. Esses controles e suas permissões não mudam.
+
+#### Diagnóstico manual do host (legado)
+
+Os comandos `monkybot music-check` e `monkybot music-diagnose` verificam somente
+o runtime de mídia instalado no **host do bot**. `monkybot music-setup` permite
+preparar ferramentas nesse host manualmente para usos legados. Eles não são
+executados na inicialização normal e nunca servem de fallback para a execução
+local aprovada.
 
 Os executáveis não vêm no tarball. Ferramentas válidas são reaproveitadas;
 as ausentes ou incompatíveis são baixadas das releases oficiais de
@@ -430,9 +449,9 @@ No start/restart, overrides anteriores do próprio processo são preservados se
 não houver uma nova definição no shell. Configure variáveis no ambiente do
 processo/PM2; `.env.example` é referência, não é carregado automaticamente.
 
-Para música, também é necessário **Node.js 22+** para os desafios JavaScript
-atuais do YouTube (os comandos sem música mantêm os requisitos gerais do bot).
-O setup exige esse runtime para preparar a música; não atualiza o Node global.
+Para a resolução manual legada no host, é necessário **Node.js 22+** para os
+desafios JavaScript atuais do YouTube. O setup legado exige esse runtime;
+não atualiza o Node global nem altera os requisitos do executor no cliente.
 O bot habilita explicitamente `--js-runtimes node:<executável>`, usando o Node
 que o iniciou ou `MONKY_MUSIC_NODE`; não depende da descoberta automática do
 yt-dlp. Use o executável oficial do yt-dlp, que inclui **EJS**, ou instale/atualize
@@ -451,32 +470,19 @@ monkybot music-check
 npm run check:music
 ```
 
-`music-check` mostra o estado e o motivo de falha de cada ferramenta. Não instala,
-não baixa mídia e não promete disponibilidade do YouTube. Faltando ferramentas
-ou libopus, indica `music-setup`; o bot não diz que tocou ou enfileirou um item
-válido. Os demais comandos de um bot já iniciado continuam funcionando.
+`music-check` mostra o estado e o motivo de falha de cada ferramenta do host.
+Não instala, não baixa mídia e não promete disponibilidade do YouTube. Seu
+resultado não representa a prontidão do cliente que executará uma faixa local.
 
-**Instalações existentes:** depois de atualizar um CLI que ainda não preparava
-essas ferramentas (como `6.0.2-beta`), execute `monkybot restart` com o CLI novo.
-Não é necessário refazer o setup, recriar vínculos ou apagar `.keys`. O reinício
-feito pelo atualizador antigo ainda usa seu código já carregado e pode não
-preparar as dependências nessa primeira atualização. `monkybot music-setup`
-também permite preparar sem parar o processo; nesse caso reinicie depois para
-aplicar os caminhos ao PM2. Execução direta com `npm start`/`npm run dev` não
-instala ferramentas automaticamente: prepare antes com `npm run cli -- music-setup`.
-
-Ao atualizar a partir de `6.0.3-beta`, o reinício disparado pelo CLI antigo ainda
-pode mostrar o timeout da listagem do arquivo, mesmo depois de instalar o pacote
-corrigido. Execute `monkybot restart` como um comando separado para usar o código
-novo. Não é necessário refazer o setup nem apagar as ferramentas já preparadas.
-
-A partir de `7.0.0-beta`, o atualizador relança o CLI recém-instalado em outro
-processo. Isso não altera um atualizador antigo já em execução: uma atualização
-iniciada em `6.0.4-beta` ainda pode usar seu reinício antigo. Se a instalação
-terminou, mas esse reinício falhou, confira `monkybot --version` e execute
-`monkybot restart` separadamente para usar a versão instalada.
+Ferramentas de host preparadas por versões antigas podem permanecer instaladas,
+mas não precisam ser atualizadas nem removidas para a execução local. Reiniciar
+ou iniciar o MonkyBot não prepara ferramentas de música automaticamente.
 
 #### Quando a busca funciona, mas o áudio público não é resolvido
+
+Este roteiro investiga apenas o host legado, não as ferramentas ou a rede do
+cliente solicitante. Na execução local atual, confira o estado e os erros na
+aba de ferramentas de bots do Monky.
 
 A busca usa metadados resumidos; encontrar uma sugestão **não comprova** que o
 extrator conseguirá obter um endereço de áudio público elegível. A resposta
@@ -533,6 +539,10 @@ Sem o diagnóstico do host, a causa do provedor permanece **não confirmada**.
    Clicar na sugestão ou confirmá-la pelo teclado executa `/play` uma única vez.
    Não há `/query` separado nem uma segunda janela de seleção.
 3. A fila conecta à sala de quem adicionou o primeiro item e toca em ordem.
+   Os pedidos de adicionar e pular recebem uma resposta imediata de processamento.
+   Antes da primeira faixa e de cada próxima, o chat mostra **Preparando para tocar**.
+   A invocação mantém seu indicador animado enquanto estiver em execução; não há
+   percentual inventado para consulta da fonte ou início do áudio.
    O aviso público **Tocando** só é enviado quando o primeiro quadro de áudio
    começa a avançar na reprodução.
    Falhas durante a adição geram resposta privada. Para uma faixa já aceita,
@@ -561,13 +571,14 @@ Isso não altera `/pause`: uma pausa manual continua parada até `/resume`.
 Há uma fila/conexão independente por servidor, até **50 próximas faixas**
 (incluindo adições em resolução) e vídeos de no máximo **1 hora**. Adições
 concorrentes mantêm a ordem de confirmação, mesmo com resoluções fora de ordem.
-Busca/resolução têm limite de 30s (até 30s de espera por um dos 4 processos de
-captura). Prévias compartilham esse limite de processos, têm prazo total de 30s
-no protocolo, até 256 KiB de áudio Ogg/Opus em memória e são canceladas ao fechar
-ou trocar a busca, sair da voz ou mudar de sala. O envio usa o WebSocket existente, sem porta pública adicional
-nem arquivos de mídia persistidos. As operações de rede, conexões, processos e
-buffers são limitados, sem impor um prazo total à recuperação bem-sucedida ou à
-pausa manual. Não há persistência da fila após reinício.
+O cliente prepara consentimento e ferramentas antes dos prazos de **15s para
+autocomplete** e **30s para prévia**. A prévia permanece no cliente de origem:
+somente um identificador opaco atravessa o protocolo, nunca os bytes de áudio
+cliente → VPS → cliente. A reprodução usa um canal WebRTC privado, confiável,
+ordenado e somente de dados para entregar pacotes Opus de 20 ms ao bot; áudio
+não usa o WebSocket genérico e não há captura de microfone. Conexões e buffers
+são limitados, sem impor um prazo total à pausa manual. Não há persistência da
+fila após reinício.
 
 Sala vazia **ou** fila ociosa desconecta após **60s** por padrão. Configure em
 **botão direito no bot → Configurações do bot → Comportamento neste servidor → Música → Tempo de inatividade (segundos)**,
@@ -577,8 +588,21 @@ salva no servidor. Alterações valem imediatamente, inclusive para contadores
 em andamento: o tempo já decorrido conta, sem reiniciar a espera inteira.
 `MONKY_MUSIC_GRACE_SECONDS` define somente o valor padrão oferecido pelo host.
 Voltar antes do prazo cancela a saída por sala vazia, sem
-reiniciar a música ou limpar a fila. Desconexão, troca de modo de voz e encerramento do bot cancelam
-carregamentos, esvaziam a fila e liberam voz/FFmpeg. Cancelar uma invocação
+reiniciar a música ou limpar a fila. Se a pessoa que pediu a faixa **atual**
+sair da voz ou se o cliente dela for desconectado, somente essa faixa é
+interrompida: o chat recebe um aviso explícito e a fila avança. As faixas futuras
+dessa pessoa continuam na fila e não são
+transferidas para outro usuário ou dispositivo. Enquanto a sessão solicitante
+estiver ausente, essas faixas ficam adiadas sem impedir as faixas de outras
+pessoas; somente uma confirmação do servidor para o contexto local retido pode
+torná-las elegíveis novamente. `/fila` identifica essas entradas como
+**aguardando solicitante**. Voltar à voz na mesma conexão reavalia as fontes
+automaticamente, sem precisar enviar outro comando. Reconectar o cliente cria
+uma conexão nova e não reativa fontes da anterior, mesmo com o mesmo ID de
+sessão; remova essas entradas e adicione-as novamente. Uma nova faixa autorizada
+não herda o bloqueio dos contextos antigos. Desconexão do bot, troca de modo de voz
+e encerramento do bot cancelam carregamentos, esvaziam a fila e liberam a voz e
+os contextos locais retidos. Cancelar uma invocação
 cancela a adição pendente, não a reprodução já aceita; cancelar uma prévia
 não interfere na fila.
 
@@ -628,9 +652,9 @@ isso não adiciona reprodução de playlists ou rádios contínuas.
 URLs arbitrárias não são aceitas. A extração com yt-dlp **não é uma API oficial
 de áudio do YouTube**: pode deixar de funcionar e está sujeita aos termos da
 plataforma. Utilize somente mídia própria ou autorizada e respeite direitos
-autorais. O bot não coleta cookies do navegador/credenciais, ignora configurações
-locais do yt-dlp e não contorna restrições de acesso. Mantenha ambas as ferramentas
-atualizadas; erros definitivos do provedor continuam explícitos.
+autorais. A execução local não recebe login, cookies ou credenciais, ignora
+configurações locais do yt-dlp e não contorna restrições de acesso. O cliente
+gerencia as ferramentas; erros definitivos do provedor continuam explícitos.
 
 ### Demo: tela compartilhada de jogo da velha
 
@@ -741,8 +765,8 @@ global é instalado, parado ou reiniciado.
 A CI executa esse teste **antes de publicar**. A variável de repositório
 `MONKY_SDK_RELEASE` pode fixar a tag da release do Monky que fornece o SDK; sem ela,
 usa-se o SDK publicado mais recente, betas inclusive. Em ambos os casos, o build
-falha se o SDK não corresponder ao protocolo 17 ou não oferecer seletores duráveis,
-voz, telas e nomes de comandos localizados. O pacote preserva as dependências transitivas do SDK (incluindo
+falha se o SDK não corresponder ao protocolo 19 ou não oferecer seletores duráveis,
+voz, telas, execução local concreta e nomes de comandos localizados. O pacote preserva as dependências transitivas do SDK (incluindo
 WebRTC/werift), mesmo quando o SDK é um workspace `file:`. Publique a release compatível do
 Monky antes de publicar este bot.
 

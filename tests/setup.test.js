@@ -19,9 +19,6 @@ const { setCliLocale } = require('../dist/cli/i18n');
 
 beforeEach((t) => {
   setCliLocale('pt-BR');
-  t.mock.method(musicTools, 'prepareMusicToolsForCli', async () => ({
-    node: process.execPath, ytDlp: 'fixture-ytdlp', ffmpeg: 'fixture-ffmpeg',
-  }));
 });
 
 function captureLogs(t) {
@@ -116,52 +113,15 @@ for (const locale of ['pt-BR', 'en']) {
   });
 }
 
-test('setup keeps an existing profile unchanged when music preparation fails', async (t) => {
-  const existing = {
-    mode: 'manual', botDir: CONFIG_DIR, serverUrl: 'ws://localhost:3000/',
-    botToken: 'existing-token', botName: DEFAULT_BOT_NAME,
-  };
-  const state = mockConfig(t, existing);
-  interactiveAnswers(t, ['', '', '', '', '']);
-  const lines = captureLogs(t);
-  t.mock.method(musicTools, 'prepareMusicToolsForCli', async () => {
-    assert.deepEqual(state.current, existing);
-    throw new Error('fixture checksum mismatch');
-  });
-  await assert.rejects(setupCommand(), /fixture checksum mismatch/);
-  assert.deepEqual(state.current, existing);
-  assert.doesNotMatch(lines.join('\n'), /Configuração salva/);
-});
-
-test('setup cancellation aborts pending music preparation without saving a new profile', async (t) => {
-  const existing = {
-    mode: 'manual', botDir: CONFIG_DIR, serverUrl: 'ws://localhost:3000/',
-    botToken: 'existing-token', botName: DEFAULT_BOT_NAME,
-  };
-  const state = mockConfig(t, existing);
-  let terminal;
-  interactiveAnswers(t, ['', '', '', '', rl => { terminal = rl; return 'Changed name'; }]);
-  captureLogs(t);
-  t.mock.method(musicTools, 'prepareMusicToolsForCli', async ({ signal }) => {
-    assert.equal(signal.aborted, false);
-    terminal.emit('SIGINT');
-    assert.equal(signal.aborted, true);
-    throw signal.reason;
-  });
-  await assert.rejects(setupCommand(), /Setup cancelado/);
-  assert.deepEqual(state.current, existing);
-});
-
-test('setup asks before a system-wide music dependency install and honors refusal', async (t) => {
+test('setup saves configuration without preparing host media tools', async (t) => {
   const state = mockConfig(t);
-  interactiveAnswers(t, ['2', '', 'localhost:3000', 'fixture-token', '', 'n']);
+  interactiveAnswers(t, ['2', '', 'localhost:3000', 'fixture-token', '']);
   captureLogs(t);
-  t.mock.method(musicTools, 'prepareMusicToolsForCli', async ({ approveSystemInstall }) => {
-    assert.equal(await approveSystemInstall('Authorize fixture system install?', new AbortController().signal), false);
-    throw new Error('fixture install not authorized');
-  });
-  await assert.rejects(setupCommand(), /fixture install not authorized/);
-  assert.equal(state.current, null);
+  const preparation = t.mock.method(musicTools, 'prepareMusicToolsForCli', () =>
+    assert.fail('Normal setup must not prepare host media tools.'));
+  await setupCommand();
+  assert.equal(preparation.mock.callCount(), 0);
+  assert.equal(state.current.botToken, 'fixture-token');
 });
 
 test('setup defaults to the recommended URL installation for fresh configs', async (t) => {
