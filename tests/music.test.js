@@ -7,11 +7,12 @@ const { performance } = require('node:perf_hooks');
 const { EventEmitter } = require('node:events');
 const { MusicQueues } = require('../dist/music/queue');
 const { MusicError } = require('../dist/music/errors');
+const { LocalMusicSourceFactory } = require('../dist/music/localSource');
 const { musicInput, videoUrl, audioUrl, parseTrack, YouTubeSource } = require('../dist/music/source');
 const { OggOpusParser } = require('../dist/music/ogg');
 const { capture, captureBytes, safeDiagnostic } = require('../dist/music/process');
 const { LIMITS } = require('@monky/bot-sdk');
-const { registerMusicCommands } = require('../dist/commands/music');
+const { createMusicCommands, registerMusicCommands } = require('../dist/commands/music');
 const { setCliLocale } = require('../dist/cli/i18n');
 
 beforeEach(() => setCliLocale('en'));
@@ -27,7 +28,11 @@ function deferred() {
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-const actor = (serverId = 'a', voiceChannelId = 'voice') => ({ serverId, voiceChannelId, textChannelId: 'text', locale: 'en', invocationId: `invocation-${serverId}` });
+const actor = (serverId = 'a', voiceChannelId = 'voice') => ({
+  botId: 'bot', serverId, voiceChannelId, textChannelId: 'text', locale: 'en',
+  invocationId: `invocation-${serverId}`, invokerId: `user-${serverId}`,
+  invokerSessionId: `session-${serverId}`, invokerNickname: `Requester ${serverId}`,
+});
 const track = id => ({ id, title: id, url: id, duration: 10, audioUrl: 'unused by fake' });
 function fixture(t, options = {}) {
   const connections = new Map();
@@ -188,12 +193,19 @@ test('external resolver ignores user config, uses bounded search and checks libo
   const run = async (exe, args) => {
     calls.push({ exe, args });
     if (args.includes('--version')) return exe === 'node-local' ? 'v22.0.0' : '2026.01.01';
+    if (args[0] === '-version') {
+      assert.equal(exe, 'ffmpeg-local');
+      assert.deepEqual(args, ['-version']);
+      return 'ffmpeg version 7.1-fixture';
+    }
     if (args.includes('-encoders')) return ' A....D libopus';
     return JSON.stringify({ entries: Array.from({ length: 10 }, (_, i) => ({ id: `abcdefghij${i}`, title: 'Result', duration: 10 })) });
   };
   const source = new YouTubeSource('yt-dlp-local', 'ffmpeg-local', run, 'node-local');
   const signal = new AbortController().signal;
   await source.check(signal);
+  const versionCheck = calls.findIndex(call => call.args[0] === '-version');
+  assert.ok(versionCheck >= 0 && versionCheck < calls.findIndex(call => call.args.includes('-encoders')));
   assert.equal((await source.search('name', signal)).length, 8);
   const search = calls.find(call => call.args.includes('--flat-playlist')).args;
   assert.ok(search.includes('--ignore-config'));
@@ -268,8 +280,9 @@ test('a voice write failure is identified as voice, never provider success or a 
   await f.queues.enqueue(actor(), 'transport-failure');
   await until(() => f.notices.some(notice => notice.type === 'failed'));
   assert.equal(f.notices.some(notice => notice.type === 'started'), false);
-  assert.equal(f.notices[0].error.code, 'voice_runtime');
-  assert.match(f.notices[0].error.detail, /SRTP/);
+  const failed = f.notices.find(notice => notice.type === 'failed');
+  assert.equal(failed.error.code, 'voice_runtime');
+  assert.match(failed.error.detail, /SRTP/);
   assert.match(logs.mock.calls[0].arguments[0], /stage=write, code=voice_runtime, advancedMs=0/);
 });
 
@@ -294,7 +307,542 @@ test('queue explicitly enables silent persistent recovery without retaining comm
   invocation.abort();
   await until(() => f.notices.some(notice => notice.type === 'ended'));
   assert.deepEqual(f.writes.map(write => write.frame), [11, 22]);
-  assert.deepEqual(f.notices.map(notice => notice.type), ['started', 'ended']);
+  assert.deepEqual(f.notices.map(notice => notice.type), ['loading', 'started', 'ended']);
+});
+
+test('per-item sources retain requester identity and outlive the command signal', async t => {
+  const command = new AbortController();
+  const frame = deferred();
+  const connections = new Map();
+  const bindings = [];
+  const releases = [];
+  let sourceSignal, playbackSignal;
+  const factory = {
+    bind: async (requester, url, signal) => {
+      bindings.push({ requester, url });
+      sourceSignal = signal;
+      return {
+        check: async () => {},
+        resolve: async value => ({ id: value, title: value, url: value, duration: 10 }),
+        open: async (_item, signal) => {
+          playbackSignal = signal;
+          return {
+            frames: (async function* () {
+              yield Uint8Array.of(1);
+              await frame.promise;
+            })(),
+            close: async () => { frame.resolve(); },
+          };
+        },
+        release: async () => { releases.push(url); },
+      };
+    },
+  };
+  const voice = {
+    getVoiceConnection: id => connections.get(id),
+    joinVoice: async (id, channelId) => {
+      const connection = {
+        channelId, humanParticipantCount: 1, writeOpus: async () => {}, close: async () => {},
+      };
+      connections.set(id, connection);
+      return connection;
+    },
+    leaveVoice: async id => { connections.delete(id); },
+  };
+  const queues = new MusicQueues(factory, voice, async () => {}, 10_000);
+  t.after(() => queues.dispose());
+  const requester = {
+    ...actor(), invokerId: 'human', invokerSessionId: 'physical-session',
+    invokerNickname: 'Original requester',
+  };
+  const accepted = await queues.enqueue(requester, 'local-track', command.signal);
+  assert.equal('audioUrl' in accepted, false);
+  await until(() => playbackSignal !== undefined);
+  command.abort();
+  assert.equal(sourceSignal.aborted, false, 'Command completion must not revoke an accepted source context.');
+  assert.equal(playbackSignal.aborted, false, 'Command completion must not stop accepted playback.');
+  assert.deepEqual(releases, []);
+  assert.deepEqual(bindings, [{ requester, url: 'local-track' }]);
+  await queues.control(requester, 'stop');
+  assert.equal(sourceSignal.aborted, true);
+  assert.equal(playbackSignal.aborted, true);
+  await until(() => releases.length === 1);
+  assert.deepEqual(releases, ['local-track']);
+});
+
+test('requester departure defers existing source slots without blocking new valid work', async t => {
+  const left = deferred();
+  const finishSecond = deferred();
+  const connections = new Map();
+  const writes = [];
+  const notices = [];
+  const bindings = [];
+  const releases = new Map();
+  const factory = {
+    bind: async (requester, url) => {
+      bindings.push({ requester: requester.invokerSessionId, url });
+      return {
+        check: async () => {},
+        resolve: async value => ({ id: value, title: value, url: value, duration: 10 }),
+        open: async item => ({
+          frames: (async function* () {
+            yield Uint8Array.of(item.id === 'first' ? 1 : item.id === 'future' ? 2 : 3);
+            if (item.id === 'first') {
+              await left.promise;
+              throw new MusicError('requester_left_voice');
+            }
+            if (item.id === 'future') await finishSecond.promise;
+          })(),
+          close: async () => {},
+        }),
+        release: async () => releases.set(url, (releases.get(url) ?? 0) + 1),
+      };
+    },
+  };
+  const voice = {
+    getVoiceConnection: id => connections.get(id),
+    joinVoice: async (id, channelId) => {
+      const connection = {
+        channelId, humanParticipantCount: 2,
+        writeOpus: async frame => writes.push(frame[0]),
+        close: async () => {},
+      };
+      connections.set(id, connection);
+      return connection;
+    },
+    leaveVoice: async id => { connections.delete(id); },
+  };
+  const queues = new MusicQueues(factory, voice, async notice => { notices.push(notice); }, 10_000);
+  t.after(() => { finishSecond.resolve(); return queues.dispose(); });
+  const firstRequester = {
+    ...actor(), invocationId: 'first-invocation', invokerId: 'first-user',
+    invokerSessionId: 'first-session', invokerNickname: 'First',
+  };
+  const otherRequester = {
+    ...actor(), invocationId: 'other-invocation', invokerId: 'other-user',
+    invokerSessionId: 'other-session', invokerNickname: 'Other',
+  };
+  await queues.enqueue(firstRequester, 'first');
+  await until(() => writes.includes(1));
+  await queues.enqueue(firstRequester, 'future');
+  await queues.enqueue(otherRequester, 'other');
+  queues.participantsChanged('a', 'voice', 1);
+  left.resolve();
+  await until(() => notices.some(notice => notice.type === 'started' && notice.track.id === 'other'));
+  await until(() => releases.get('other') === 1);
+  assert.deepEqual(queues.snapshot('a').upcoming, [{ title: 'future', pending: false, waitingForRequester: true }]);
+  const departureNotice = notices.findIndex(notice => notice.type === 'requester-left');
+  const otherStarted = notices.findIndex(notice => notice.type === 'started' && notice.track.id === 'other');
+  assert.ok(departureNotice >= 0 && otherStarted > departureNotice);
+  assert.equal(releases.get('first'), 1);
+  assert.equal(releases.has('future'), false);
+  queues.assertControl(firstRequester);
+  const readReplies = [];
+  await createMusicCommands(queues, {}).find(command => command.name === 'queue').handler({
+    serverId: 'a', channelId: 'text', locale: 'en', args: {},
+    invocationId: 'read-invocation', invokerId: firstRequester.invokerId,
+    invokerSessionId: firstRequester.invokerSessionId, invokerNickname: firstRequester.invokerNickname,
+    invokerVoiceChannelId: 'voice', getVoiceChannel: async () => 'voice',
+    signal: new AbortController().signal, reply: value => readReplies.push(value),
+  });
+  await tick();
+  assert.equal(queues.snapshot('a').current, null, 'Read-only authorization must not reactivate held playback.');
+  assert.match(readReplies.join('\n'), /future/);
+  queues.assertControl({ ...firstRequester, invokerSessionId: 'replacement-session' });
+  queues.participantsChanged('a', 'voice', 2);
+  await tick();
+  assert.equal(queues.snapshot('a').current, null, 'Another physical session must not inherit retained work.');
+  queues.participantsChanged('a', 'voice', 3);
+  await tick();
+  assert.equal(queues.snapshot('a').current, null, 'Participant counts cannot authorize an existing retained source.');
+  await queues.enqueue(firstRequester, 'new');
+  await until(() => releases.get('new') === 1);
+  assert.deepEqual(queues.snapshot('a').upcoming, [{ title: 'future', pending: false, waitingForRequester: true }]);
+  await queues.control(firstRequester, 'remove', 1);
+  assert.deepEqual(bindings, [
+    { requester: 'first-session', url: 'first' },
+    { requester: 'first-session', url: 'future' },
+    { requester: 'other-session', url: 'other' },
+    { requester: 'first-session', url: 'new' },
+  ]);
+  assert.deepEqual([...releases.entries()], [['first', 1], ['other', 1], ['new', 1], ['future', 1]]);
+});
+
+test('requester disconnection interrupts paused playback and preserves old source slots', async t => {
+  const disconnected = new AbortController();
+  const currentBlocked = deferred();
+  const finishOther = deferred();
+  const connections = new Map();
+  const writes = [];
+  const notices = [];
+  const paused = [];
+  const releases = new Map();
+  const factory = {
+    bind: async (_requester, url) => ({
+      check: async () => {},
+      resolve: async value => ({ id: value, title: value, url: value, duration: 10 }),
+      open: async item => ({
+        signal: item.id === 'current' ? disconnected.signal : undefined,
+        frames: (async function* () {
+          yield Uint8Array.of(item.id === 'current' ? 1 : item.id === 'future' ? 2 : 3);
+          if (item.id === 'current') await currentBlocked.promise;
+          if (item.id === 'other') await finishOther.promise;
+        })(),
+        setPaused: async value => { if (item.id === 'current') paused.push(value); },
+        close: async () => { if (item.id === 'current') currentBlocked.resolve(); },
+      }),
+      release: async () => releases.set(url, (releases.get(url) ?? 0) + 1),
+    }),
+  };
+  const voice = {
+    getVoiceConnection: id => connections.get(id),
+    joinVoice: async (id, channelId) => {
+      const connection = {
+        channelId, humanParticipantCount: 2,
+        writeOpus: async frame => writes.push(frame[0]),
+        close: async () => {},
+      };
+      connections.set(id, connection);
+      return connection;
+    },
+    leaveVoice: async id => { connections.delete(id); },
+  };
+  const queues = new MusicQueues(factory, voice, async notice => { notices.push(notice); }, 10_000);
+  t.after(() => {
+    finishOther.resolve();
+    currentBlocked.resolve();
+    return queues.dispose();
+  });
+  const firstRequester = {
+    ...actor(), invocationId: 'first-invocation', invokerId: 'same-user',
+    invokerSessionId: 'first-session', invokerNickname: 'First',
+  };
+  const otherRequester = {
+    ...actor(), invocationId: 'other-invocation', invokerId: 'other-user',
+    invokerSessionId: 'other-session', invokerNickname: 'Other',
+  };
+  await queues.enqueue(firstRequester, 'current');
+  await until(() => writes.includes(1));
+  await queues.enqueue(firstRequester, 'future');
+  await queues.enqueue(otherRequester, 'other');
+  await queues.control(firstRequester, 'pause');
+  queues.participantsChanged('a', 'voice', 1);
+  disconnected.abort(new MusicError('requester_disconnected'));
+  await until(() => notices.some(notice => notice.type === 'requester-disconnected'));
+  await until(() => queues.snapshot('a').current?.id === 'other' && queues.snapshot('a').started);
+  assert.deepEqual(paused, [false, true]);
+  assert.deepEqual(queues.snapshot('a').upcoming, [{ title: 'future', pending: false, waitingForRequester: true }]);
+  const departureNotice = notices.findIndex(notice => notice.type === 'requester-disconnected');
+  const otherStarted = notices.findIndex(notice => notice.type === 'started' && notice.track.id === 'other');
+  assert.ok(otherStarted > departureNotice);
+  assert.equal(releases.get('current'), 1);
+  assert.equal(releases.has('future'), false);
+
+  finishOther.resolve();
+  await until(() => queues.snapshot('a').current === null);
+  queues.participantsChanged('a', 'voice', 2);
+  await tick();
+  assert.equal(queues.snapshot('a').current, null, 'A replacement device must not inherit the retained source.');
+  queues.participantsChanged('a', 'voice', 3);
+  await tick();
+  assert.equal(queues.snapshot('a').current, null, 'Participant counts cannot revive an old socket-bound source.');
+  await queues.enqueue(firstRequester, 'new');
+  await until(() => releases.get('new') === 1);
+  assert.deepEqual(queues.snapshot('a').upcoming, [{ title: 'future', pending: false, waitingForRequester: true }]);
+  await queues.control(firstRequester, 'remove', 1);
+  assert.deepEqual(writes, [1, 3, 3]);
+  assert.deepEqual([...releases.entries()], [['current', 1], ['other', 1], ['new', 1], ['future', 1]]);
+});
+
+test('deferred tracks resume only after a source-bound availability check without another command', async t => {
+  const left = deferred();
+  const checks = [], opened = [], released = [];
+  let available = false;
+  const f = fixture(t, { grace: 10_000, source: {
+    bind: async (_requester, url) => ({
+      check: async () => {},
+      checkAvailability: async () => {
+        checks.push(url);
+        if (!available) throw new MusicError('requester_left_voice');
+      },
+      resolve: async () => track(url),
+      open: async () => {
+        opened.push(url);
+        return {
+          frames: (async function* () {
+            yield Uint8Array.of(1);
+            if (url === 'current') { await left.promise; throw new MusicError('requester_left_voice'); }
+          })(),
+          close: async () => {},
+        };
+      },
+      release: async () => { released.push(url); },
+    }),
+  } });
+  await f.queues.enqueue(actor(), 'current');
+  await until(() => f.writes.length === 1);
+  await f.queues.enqueue(actor(), 'future');
+  left.resolve();
+  await until(() => f.queues.snapshot('a').current === null && checks.length === 1);
+  assert.equal(f.queues.snapshot('a').upcoming[0].waitingForRequester, true);
+  f.queues.participantsChanged('a', 'voice', 2);
+  await until(() => checks.length === 2);
+  assert.deepEqual(opened, ['current'], 'Another participant does not authorize the original source');
+  available = true;
+  f.queues.participantsChanged('a', 'voice', 3);
+  await until(() => released.includes('future'));
+  assert.deepEqual(opened, ['current', 'future']);
+  assert.deepEqual(released, ['current', 'future']);
+  assert.equal(f.notices.filter(notice => notice.type === 'requester-left').length, 1);
+});
+
+test('availability rechecks coalesce and removal cannot resurrect a source from a late positive reply', async t => {
+  const left = deferred();
+  const replies = [], checks = [], opened = [], released = [];
+  const f = fixture(t, { grace: 10_000, source: {
+    bind: async (_requester, url) => ({
+      check: async () => {},
+      checkAvailability: async signal => {
+        const reply = deferred();
+        replies.push(reply);
+        checks.push({ url, signal });
+        await reply.promise;
+      },
+      resolve: async () => track(url),
+      open: async () => {
+        opened.push(url);
+        return {
+          frames: (async function* () {
+            yield Uint8Array.of(1);
+            await left.promise;
+            throw new MusicError('requester_left_voice');
+          })(),
+          close: async () => {},
+        };
+      },
+      release: async () => { released.push(url); },
+    }),
+  } });
+  t.after(() => { for (const reply of replies) reply.resolve(); });
+  await f.queues.enqueue(actor(), 'current');
+  await until(() => f.writes.length === 1);
+  await f.queues.enqueue(actor(), 'first');
+  await f.queues.enqueue(actor(), 'second');
+  left.resolve();
+  await until(() => checks.length === 1 && f.queues.snapshot('a').current === null);
+  for (let event = 0; event < 20; event++) f.queues.participantsChanged('a', 'voice', 2);
+  await tick();
+  assert.equal(checks.length, 1, 'Membership notifications share one in-flight source check');
+  await f.queues.control(actor(), 'remove', 1);
+  await until(() => checks.length === 2);
+  assert.equal(checks[0].signal.aborted, true);
+  assert.equal(checks[1].url, 'second');
+  replies[0].resolve();
+  await tick();
+  assert.deepEqual(opened, ['current']);
+  await f.queues.control(actor(), 'clear');
+  replies[1].resolve();
+  await tick();
+  assert.deepEqual(opened, ['current']);
+  assert.deepEqual(released, ['current', 'first', 'second']);
+  assert.deepEqual(f.queues.snapshot('a').upcoming, []);
+});
+
+for (const command of ['stop', 'remove', 'clear']) {
+  test(`${command} never starts requester-deferred work before applying the control`, async t => {
+    const left = deferred();
+    const connections = new Map();
+    const opens = [];
+    const writes = [];
+    const factory = {
+      bind: async (_requester, url) => ({
+        check: async () => {},
+        resolve: async value => ({ id: value, title: value, url: value, duration: 10 }),
+        open: async item => {
+          opens.push(item.id);
+          assert.equal(item.id, 'current', 'A held future item must not start before the requested control.');
+          return {
+            frames: (async function* () {
+              yield Uint8Array.of(1);
+              await left.promise;
+              throw new MusicError('requester_left_voice');
+            })(),
+            close: async () => {},
+          };
+        },
+        release: async () => {},
+      }),
+    };
+    const voice = {
+      getVoiceConnection: id => connections.get(id),
+      joinVoice: async (id, channelId) => {
+        const connection = {
+          channelId, humanParticipantCount: 1,
+          writeOpus: async frame => writes.push(frame[0]),
+          close: async () => {},
+        };
+        connections.set(id, connection);
+        return connection;
+      },
+      leaveVoice: async id => { connections.delete(id); },
+    };
+    const queues = new MusicQueues(factory, voice, async () => {}, 10_000);
+    t.after(() => queues.dispose());
+    const requester = actor();
+    await queues.enqueue(requester, 'current');
+    await until(() => writes.length === 1);
+    await queues.enqueue(requester, 'held-one');
+    await queues.enqueue(requester, 'held-two');
+    left.resolve();
+    await until(() => queues.snapshot('a').current === null);
+    queues.assertControl(requester);
+    await queues.control(requester, command, command === 'remove' ? 1 : undefined);
+    assert.deepEqual(opens, ['current']);
+    assert.equal(queues.snapshot('a').upcoming.length, command === 'remove' ? 1 : 0);
+  });
+}
+
+test('an all-deferred queue follows idle cleanup and releases retained sources', async t => {
+  const left = deferred();
+  const connections = new Map();
+  const releases = new Map();
+  const factory = {
+    bind: async (_requester, url) => ({
+      check: async () => {},
+      resolve: async value => ({ id: value, title: value, url: value, duration: 10 }),
+      open: async item => ({
+        frames: (async function* () {
+          yield Uint8Array.of(1);
+          if (item.id === 'current') {
+            await left.promise;
+            throw new MusicError('requester_left_voice');
+          }
+        })(),
+        close: async () => {},
+      }),
+      release: async () => releases.set(url, (releases.get(url) ?? 0) + 1),
+    }),
+  };
+  const voice = {
+    getVoiceConnection: id => connections.get(id),
+    joinVoice: async (id, channelId) => {
+      const connection = {
+        channelId, humanParticipantCount: 1,
+        writeOpus: async () => {},
+        close: async () => {},
+      };
+      connections.set(id, connection);
+      return connection;
+    },
+    leaveVoice: async id => { connections.delete(id); },
+  };
+  const queues = new MusicQueues(factory, voice, async () => {}, 20);
+  t.after(() => queues.dispose());
+  await queues.enqueue(actor(), 'current');
+  await until(() => queues.snapshot('a').started);
+  await queues.enqueue(actor(), 'held');
+  left.resolve();
+  await until(() => queues.snapshot('a').channelId === null);
+  assert.deepEqual([...releases.entries()], [['current', 1], ['held', 1]]);
+  assert.equal(connections.has('a'), false);
+});
+
+test('queue mutations await and release each owned source context exactly once', async t => {
+  const currentFrame = deferred();
+  const removableRelease = deferred();
+  const connections = new Map();
+  const releases = new Map();
+  const factory = {
+    bind: async (_requester, url) => ({
+      check: async () => {},
+      resolve: async value => {
+        if (value === 'failed') throw new MusicError('unavailable');
+        return { id: value, title: value, url: value, duration: 10 };
+      },
+      open: async item => ({
+        frames: (async function* () {
+          yield Uint8Array.of(1);
+          if (item.id === 'current') await currentFrame.promise;
+        })(),
+        close: async () => { currentFrame.resolve(); },
+      }),
+      release: async () => {
+        releases.set(url, (releases.get(url) ?? 0) + 1);
+        if (url === 'remove') await removableRelease.promise;
+      },
+    }),
+  };
+  const voice = {
+    getVoiceConnection: id => connections.get(id),
+    joinVoice: async (id, channelId) => {
+      const connection = {
+        channelId, humanParticipantCount: 1, writeOpus: async () => {}, close: async () => {},
+      };
+      connections.set(id, connection);
+      return connection;
+    },
+    leaveVoice: async id => { connections.delete(id); },
+  };
+  const queues = new MusicQueues(factory, voice, async () => {}, 10_000);
+  t.after(() => { removableRelease.resolve(); currentFrame.resolve(); return queues.dispose(); });
+  await assert.rejects(queues.enqueue(actor(), 'failed'), { code: 'unavailable' });
+  await queues.enqueue(actor(), 'current');
+  await queues.enqueue(actor(), 'remove');
+  await queues.enqueue(actor(), 'clear-one');
+  let removed = false;
+  const removal = queues.control(actor(), 'remove', 1).then(() => { removed = true; });
+  await tick();
+  assert.equal(removed, false, 'A control must wait for retained source cleanup.');
+  removableRelease.resolve();
+  await removal;
+  await queues.control(actor(), 'clear');
+  await queues.control(actor(), 'stop');
+  await until(() => releases.get('current') === 1);
+  assert.deepEqual([...releases.entries()], [
+    ['failed', 1], ['remove', 1], ['clear-one', 1], ['current', 1],
+  ]);
+});
+
+test('owned source cleanup failures are reported without blocking the next item', async t => {
+  const errors = t.mock.method(console, 'error', () => {});
+  const connections = new Map();
+  const played = [];
+  const factory = {
+    bind: async (_requester, url) => ({
+      check: async () => {},
+      resolve: async value => ({ id: value, title: value, url: value, duration: 10 }),
+      open: async item => ({
+        frames: (async function* () { yield Uint8Array.of(item.id === 'broken' ? 1 : 2); })(),
+        close: async () => {},
+      }),
+      release: async () => {
+        if (url === 'broken') throw new Error('Retained context cleanup failed');
+      },
+    }),
+  };
+  const voice = {
+    getVoiceConnection: id => connections.get(id),
+    joinVoice: async (id, channelId) => {
+      const connection = {
+        channelId, humanParticipantCount: 1,
+        writeOpus: async frame => { played.push(frame[0]); },
+        close: async () => {},
+      };
+      connections.set(id, connection);
+      return connection;
+    },
+    leaveVoice: async id => { connections.delete(id); },
+  };
+  const queues = new MusicQueues(factory, voice, async () => {}, 10_000);
+  t.after(() => queues.dispose());
+  await Promise.all([
+    queues.enqueue(actor(), 'broken'),
+    queues.enqueue(actor(), 'next'),
+  ]);
+  await until(() => played.includes(2));
+  assert.deepEqual(played, [1, 2]);
+  assert.equal(errors.mock.callCount(), 1);
+  assert.match(errors.mock.calls[0].arguments[0], /Could not release the source context.*cleanup failed/);
 });
 
 test('recovery budget: only acknowledged voice writes advance the source recovery clock', async t => {
@@ -359,13 +907,13 @@ test('persistent input waits beyond old queue deadlines and remains immediately 
   t.mock.timers.tick(3 * 60 * 60 * 1000);
   await tick();
   assert.equal(f.queues.snapshot('a').current.id, 'outage');
-  assert.deepEqual(f.notices.map(notice => notice.type), ['started']);
+  assert.deepEqual(f.notices.map(notice => notice.type), ['loading', 'started']);
   assert.equal(signal.aborted, false);
   await f.queues.control(actor(), 'stop');
   assert.equal(signal.aborted, true);
   assert.equal(closed, true);
   assert.equal(f.queues.snapshot('a').current, null);
-  assert.deepEqual(f.notices.map(notice => notice.type), ['started']);
+  assert.deepEqual(f.notices.map(notice => notice.type), ['loading', 'started']);
 });
 
 test('manual pause keeps its exact position beyond the former total pause deadline', async t => {
@@ -398,6 +946,11 @@ test('on-demand preview refreshes public audio, limits encoding to ten seconds a
   let metadata = { id: 'abcdefghijk', title: 'Original fixture', duration: 60, availability: 'public' };
   const run = async (exe, args) => {
     if (args.includes('--version')) return exe === 'node-local' ? 'v22.0.0' : '2026.01.01';
+    if (args[0] === '-version') {
+      assert.equal(exe, 'ff-local');
+      assert.deepEqual(args, ['-version']);
+      return 'ffmpeg version 7.1-fixture';
+    }
     if (args.includes('-encoders')) return ' A....D libopus';
     assert.equal(args.at(-1), 'https://www.youtube.com/watch?v=abcdefghijk');
     return JSON.stringify({ ...metadata, url: `https://rr1.googlevideo.com/videoplayback?signature=${++resolved}` });
@@ -648,6 +1201,31 @@ test('pause retains decoder position; resume does not reopen or restart and uses
   assert.ok(f.writes[2].at - f.writes[0].at >= 25);
 });
 
+test('a delegated stream cancellation interrupts a paused queue without another frame pull', async t => {
+  const blocked = deferred();
+  const stream = new AbortController();
+  const paused = [];
+  const f = fixture(t, { source: {
+    open: async () => ({
+      signal: stream.signal,
+      frames: (async function* () {
+        yield Uint8Array.of(1);
+        await blocked.promise;
+      })(),
+      setPaused: async value => { paused.push(value); },
+      close: async () => { blocked.resolve(); },
+    }),
+  } });
+  await f.queues.enqueue(actor(), 'delegated');
+  await until(() => f.writes.length === 1);
+  await f.queues.control(actor(), 'pause');
+  stream.abort(new MusicError('requester_left_voice'));
+  await until(() => f.notices.some(notice => notice.type === 'requester-left'));
+  assert.deepEqual(paused, [false, true]);
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.queues.snapshot('a').current, null);
+});
+
 test('pause, skip, stop and EOF clear outbound speaking without restarting paused audio', async t => {
   const f = fixture(t);
   const join = f.voice.joinVoice;
@@ -761,6 +1339,52 @@ test('the playback clock starts with the first decoded frame, not before decoder
   await f.queues.enqueue(actor(), 'startup');
   await until(() => f.closed.includes('startup'));
   assert.deepEqual(sent, [75, 95, 115, 135]);
+});
+
+test('first track and skip report loading before source startup and only report playing after a frame advances', async t => {
+  const pending = new Map(['first', 'next'].map(id => [id, deferred()]));
+  t.after(() => { for (const wait of pending.values()) wait.resolve(); });
+  const f = fixture(t, { source: {
+    resolvesOnOpen: true,
+    open: async (item, signal) => {
+      f.opens.push(item.id);
+      await pending.get(item.id).promise;
+      return {
+        frames: (async function* () { while (!signal.aborted) yield Uint8Array.of(1); })(),
+        close: async () => { f.closed.push(item.id); },
+      };
+    },
+  } });
+  await f.queues.enqueue(actor(), 'first');
+  await until(() => f.opens.includes('first'));
+  assert.deepEqual(f.notices.map(notice => notice.type), ['loading']);
+  assert.equal(f.writes.length, 0);
+  assert.equal(f.queues.snapshot('a').started, false);
+  pending.get('first').resolve();
+  await until(() => f.queues.snapshot('a').started);
+  await f.queues.enqueue(actor(), 'next');
+  await f.queues.control(actor(), 'skip');
+  await until(() => f.opens.includes('next'));
+  assert.equal(f.notices.filter(notice => notice.type === 'loading' && notice.track.id === 'next').length, 1);
+  assert.equal(f.notices.some(notice => notice.type === 'started' && notice.track.id === 'next'), false);
+  pending.get('next').resolve();
+  await until(() => f.notices.some(notice => notice.type === 'started' && notice.track.id === 'next'));
+  assert.deepEqual(f.notices.map(notice => [notice.type, notice.track?.id]),
+    [['loading', 'first'], ['started', 'first'], ['loading', 'next'], ['started', 'next']]);
+});
+
+test('a slow loading notification cannot delay audio, and legacy sources still refresh their media URL', async t => {
+  const message = deferred();
+  const resolved = [];
+  const f = fixture(t, { frames: 2, source: {
+    resolve: async url => { resolved.push(url); return track(url); },
+  }, notify: async event => { if (event.type === 'loading') await message.promise; } });
+  t.after(() => message.resolve());
+  await f.queues.enqueue(actor(), 'first');
+  await until(() => f.writes.length === 2);
+  assert.deepEqual(resolved, ['first', 'first']);
+  assert.equal(f.notices.filter(notice => notice.type === 'loading').length, 1);
+  assert.equal(f.notices.filter(notice => notice.type === 'started').length, 1);
 });
 
 test('EOF advances and skipped decoder failures remain local when the next track plays', async t => {
@@ -882,12 +1506,14 @@ for (const [configured, grace] of [[undefined, 60000], ['1', 1000], ['600', 6000
     const previous = process.env.MONKY_MUSIC_GRACE_SECONDS;
     if (configured === undefined) delete process.env.MONKY_MUSIC_GRACE_SECONDS;
     else process.env.MONKY_MUSIC_GRACE_SECONDS = configured;
-    t.mock.method(YouTubeSource.prototype, 'check', async () => {});
-    t.mock.method(YouTubeSource.prototype, 'resolve', async () => ({
-      id: 'abcdefghijk', title: 'Generated fixture', url: 'https://www.youtube.com/watch?v=abcdefghijk', duration: 1, audioUrl: '',
-    }));
-    t.mock.method(YouTubeSource.prototype, 'open', async () => ({
-      frames: (async function* () { yield Uint8Array.from([0xf8, 0xff, 0xfe]); })(), close: async () => {},
+    t.mock.method(LocalMusicSourceFactory.prototype, 'bind', async () => ({
+      check: async () => {},
+      resolve: async () => ({
+        id: 'abcdefghijk', title: 'Generated fixture', url: 'https://www.youtube.com/watch?v=abcdefghijk', duration: 1,
+      }),
+      open: async () => ({
+        frames: (async function* () { yield Uint8Array.from([0xf8, 0xff, 0xfe]); })(), close: async () => {},
+      }),
     }));
     const commands = new Map(), replies = [];
     let connection;
@@ -919,7 +1545,8 @@ for (const [configured, grace] of [[undefined, 60000], ['1', 1000], ['600', 6000
       });
       await tick();
       assert.ok(connection);
-      assert.match(replies[0], /Added to queue/);
+      assert.match(replies[0], /Track received/);
+      assert.match(replies.at(-1), /Added to queue/);
       t.mock.timers.tick(grace - 1);
       await tick();
       assert.ok(connection);

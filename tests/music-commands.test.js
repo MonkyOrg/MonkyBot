@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const { createMusicCommands } = require('../dist/commands/music');
+const { createMusicCommands, musicNoticeText } = require('../dist/commands/music');
 const { MusicQueues } = require('../dist/music/queue');
 const { MusicError } = require('../dist/music/errors');
 const { getCommandPresentation, localizeCommand } = require('@monky/bot-sdk');
@@ -77,10 +77,11 @@ for (const locale of ['en', 'pt-BR']) {
     assert.equal(enqueued.length, 1);
     assert.equal(enqueued[0][1], video.url);
     assert.deepEqual(ctx.choices, []);
-    assert.match(ctx.replies[0], locale === 'en' ? /Added to queue/ : /Adicionado à fila/);
-    assert.doesNotMatch(ctx.replies[0], /first audio is sent|primeiro áudio/);
+    assert.match(ctx.replies[0], locale === 'en' ? /checking its details/ : /validando os dados/);
+    assert.match(ctx.replies.at(-1), locale === 'en' ? /Added to queue/ : /Adicionado à fila/);
+    assert.doesNotMatch(ctx.replies.join('\n'), /first audio is sent|primeiro áudio/);
   });
-  test(`missing tools never search, enqueue or claim playback (${locale})`, async () => {
+  test(`unprepared requester tools never search, enqueue or claim playback (${locale})`, async () => {
     const source = {
       check: async () => { throw new MusicError('tools'); },
       search: () => assert.fail('search without tools'), resolve: () => assert.fail('resolve without tools'),
@@ -88,13 +89,45 @@ for (const locale of ['en', 'pt-BR']) {
     const queues = new MusicQueues(source, { getVoiceConnection: () => undefined, leaveVoice: async () => {} }, async () => {});
     try {
       const command = createMusicCommands(queues, source).find(command => command.name === 'play');
-      await assert.rejects(command.autocomplete(request(locale)), /yt-dlp.*FFmpeg/);
+      await assert.rejects(command.autocomplete(request(locale)), locale === 'en' ? /requester.*client/ : /cliente.*pedido/);
       const ctx = context(locale, { busca: video.url });
       await command.handler(ctx);
-      assert.match(ctx.replies[0], /yt-dlp.*FFmpeg/);
-      assert.doesNotMatch(ctx.replies[0], /Added|Adicionado|Now playing|Tocando/);
+      assert.match(ctx.replies.at(-1), locale === 'en' ? /requester.*client/ : /cliente.*pedido/);
+      assert.doesNotMatch(ctx.replies.join('\n'), /Added|Adicionado|Now playing|Tocando/);
       assert.equal(queues.snapshot('server').current, null);
     } finally { await queues.dispose(); }
+  });
+
+  test(`enqueue and skip acknowledge immediately while work is still pending (${locale})`, async () => {
+    for (const name of ['play', 'skip']) {
+      let finish;
+      const pending = new Promise(resolve => { finish = resolve; });
+      const queues = { assertControl: () => {}, enqueue: () => pending, control: () => pending };
+      const ctx = context(locale, { busca: video.url });
+      let settled = false;
+      const command = createMusicCommands(queues, {}).find(command => command.name === name);
+      const running = command.handler(ctx).then(() => { settled = true; });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(settled, false);
+      assert.equal(ctx.replies.length, 1);
+      assert.match(ctx.replies[0], name === 'play'
+        ? locale === 'en' ? /Track received/ : /Recebi a música/
+        : locale === 'en' ? /Skip received/ : /pedido para pular/);
+      assert.doesNotMatch(ctx.replies[0], /Added to queue|Adicionado à fila|Now playing|Tocando:|Track skipped|Faixa pulada/);
+      finish(video);
+      await running;
+      assert.equal(ctx.replies.length, 2);
+      assert.match(ctx.replies[1], name === 'play'
+        ? locale === 'en' ? /Added to queue/ : /Adicionado à fila/
+        : locale === 'en' ? /Track skipped/ : /Faixa pulada/);
+    }
+  });
+
+  test(`playback preparation has a localized notice without claiming playback or a percentage (${locale})`, () => {
+    const text = musicNoticeText({ type: 'loading', actor: { locale }, track: video });
+    assert.match(text, locale === 'en' ? /Preparing to play/ : /Preparando para tocar/);
+    assert.ok(text.includes(video.title));
+    assert.doesNotMatch(text, /Now playing|Tocando:|%/);
   });
 }
 
@@ -192,6 +225,43 @@ test('a cancelled provider result cannot become a playable preview', async () =>
     ...request('en', '', controller.signal), resourceId: video.url,
   }), /cancelled/);
 });
+
+test('requester departure notice explicitly stops only the current track', () => {
+  const event = {
+    type: 'requester-left',
+    actor: {
+      serverId: 'server', voiceChannelId: 'voice', textChannelId: 'text',
+      locale: 'en', invocationId: 'invocation', invokerId: 'user',
+      invokerSessionId: 'session', invokerNickname: 'Alice',
+    },
+    track: video,
+  };
+  assert.match(musicNoticeText(event), /Alice left voice/);
+  assert.match(musicNoticeText(event), /stopped and skipped/);
+  assert.match(musicNoticeText(event), /upcoming tracks remain queued/);
+  event.actor.locale = 'pt-BR';
+  assert.match(musicNoticeText(event), /Alice saiu da voz/);
+  assert.match(musicNoticeText(event), /próximas faixas continuam na fila/);
+});
+
+test('requester client disconnection notice explicitly stops only the current track', () => {
+  const event = {
+    type: 'requester-disconnected',
+    actor: {
+      botId: 'bot', serverId: 'server', voiceChannelId: 'voice', textChannelId: 'text',
+      locale: 'en', invocationId: 'invocation', invokerId: 'user',
+      invokerSessionId: 'session', invokerNickname: 'Alice',
+    },
+    track: video,
+  };
+  assert.match(musicNoticeText(event), /Alice's client disconnected/);
+  assert.match(musicNoticeText(event), /stopped and skipped/);
+  assert.match(musicNoticeText(event), /upcoming tracks remain queued/);
+  event.actor.locale = 'pt-BR';
+  assert.match(musicNoticeText(event), /cliente de Alice foi desconectado/);
+  assert.match(musicNoticeText(event), /próximas faixas continuam na fila/);
+});
+
 test('all aborted music invocations are inert', async () => {
   for (const command of createMusicCommands({}, {})) {
     const ctx = context('en');
@@ -256,7 +326,7 @@ test('stop during initial direct-link prerequisite validation cannot start a sta
   await commands.find(command => command.name === 'stop').handler(context('en'));
   release();
   await play;
-  assert.match(ctx.replies[0], /cancelled/);
+  assert.match(ctx.replies.at(-1), /cancelled/);
   assert.equal(queues.snapshot('server').current, null);
   await queues.dispose();
 });
@@ -283,7 +353,7 @@ test('direct-link acceptance revalidates through the server after resolution, ig
   ctx.getVoiceChannel = async () => ++calls < 2 ? 'fresh-room' : null;
   await createMusicCommands(queues, source).find(command => command.name === 'play').handler(ctx);
   assert.equal(calls, 2);
-  assert.match(ctx.replies[0], /voice room/);
+  assert.match(ctx.replies.at(-1), /voice room/);
   assert.equal(queues.snapshot('server').current, null);
   await queues.dispose();
 });

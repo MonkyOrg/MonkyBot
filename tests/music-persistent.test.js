@@ -10,6 +10,7 @@ const { test } = require('node:test');
 const timers = require('node:timers/promises');
 const { registerMusicCommands } = require('../dist/commands/music');
 const { MusicQueues } = require('../dist/music/queue');
+const { LocalMusicSourceFactory } = require('../dist/music/localSource');
 const { YouTubeSource, audioUrl, IncompleteAudioError } = require('../dist/music/source');
 const { createPersistentInput } = require('../dist/music/persistent-http');
 const { SourceRecoveryError, SOURCE_RECOVERY_FAILURE_LIMIT } = require('../dist/music/errors');
@@ -106,18 +107,16 @@ function quickRetries(t, onDelay = () => {}, milliseconds = 20) {
 }
 
 function registeredSource(t, source) {
-  t.mock.method(YouTubeSource.prototype, 'check', source.check);
-  t.mock.method(YouTubeSource.prototype, 'resolve', source.resolve);
-  t.mock.method(YouTubeSource.prototype, 'persistentInput', source.persistentInput);
-  const open = YouTubeSource.prototype.open;
+  const open = source.open;
   const opens = [], sent = [], chats = [], commands = new Map();
   let current, connection, invocation = 0;
-  t.mock.method(YouTubeSource.prototype, 'open', async function (track, signal, options) {
+  t.mock.method(source, 'open', async function (track, signal, options) {
     assert.deepEqual(options, { mode: 'persistent', progress: 'playback' });
     current = track;
     opens.push(track.id);
     return open.call(this, track, signal, options);
   });
+  t.mock.method(LocalMusicSourceFactory.prototype, 'bind', async () => source);
   const bot = Object.assign(new EventEmitter(), {
     settings: () => {},
     getServerSettings: () => ({ schemaRevision: 1, revision: 1, values: { [MUSIC_IDLE_SETTING]: 60 } }),
@@ -140,7 +139,8 @@ function registeredSource(t, source) {
       signal: new AbortController().signal, args: { busca: url },
       getVoiceChannel: async () => 'voice', reply: value => replies.push(value),
     });
-    assert.match(replies[0], /Added to queue/);
+    assert.match(replies[0], /Track received/);
+    assert.match(replies.at(-1), /Added to queue/);
   };
   return { play, sent, chats, opens, dispose };
 }

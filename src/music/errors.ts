@@ -1,29 +1,26 @@
+import { MediaError, type MediaErrorCode } from '@monky/bot-sdk/dist/localRuntime';
 import { normalizeCliLocale } from '../cli/i18n';
 
-export type MusicErrorCode = 'input' | 'selection' | 'unsupported' | 'tools' | 'runtime' | 'unavailable' | 'recovery_failed' | 'timeout' | 'not_in_voice' | 'room' | 'voice' | 'voice_runtime' | 'settings' | 'bot_runtime' | 'full' | 'busy' | 'empty' | 'position' | 'cancelled';
+export type MusicErrorCode = MediaErrorCode |
+  'selection' | 'not_in_voice' | 'room' | 'voice' | 'voice_runtime' |
+  'settings' | 'bot_runtime' | 'full' | 'empty' | 'position' |
+  'requester_left_voice' | 'requester_disconnected' |
+  'local_permission' | 'local_client_unavailable' | 'local_transport';
 
-export class MusicError extends Error {
-  constructor(readonly code: MusicErrorCode, readonly detail?: string) {
-    super(code);
-    this.name = 'MusicError';
-  }
-}
-
-export const SOURCE_RECOVERY_FAILURE_LIMIT = 5;
-
-export class SourceRecoveryError extends MusicError {
-  constructor(readonly attempts = SOURCE_RECOVERY_FAILURE_LIMIT) {
-    super('recovery_failed', `Audio did not advance after ${attempts} consecutive recovery attempts.`);
-    this.name = 'SourceRecoveryError';
-  }
-}
+export type MusicError = MediaError<MusicErrorCode>;
+// Type the prototype too, so instanceof keeps the extended code vocabulary.
+export const MusicError: {
+  new(code: MusicErrorCode, detail?: string): MusicError;
+  readonly prototype: MusicError;
+} = MediaError;
+export { SourceRecoveryError, SOURCE_RECOVERY_FAILURE_LIMIT, aborted } from '@monky/bot-sdk/dist/localRuntime';
 
 const messages: Record<MusicErrorCode, [string, string]> = {
   input: ['Informe um nome ou link de vídeo individual do YouTube.', 'Enter a name or an individual YouTube video URL.'],
   selection: ['Selecione um vídeo nas sugestões para adicionar à fila.', 'Select a video from the suggestions to add it to the queue.'],
   unsupported: ['Apenas vídeos individuais públicos do YouTube, com duração de até 1 hora. Spotify, playlists, álbuns, lives e conteúdo restrito não são suportados.', 'Only public individual YouTube videos up to 1 hour are supported. Spotify, playlists, albums, live streams and restricted content are unsupported.'],
-  tools: ['Música indisponível: instale yt-dlp e FFmpeg com libopus no host do bot (veja README).', 'Music unavailable: install yt-dlp and FFmpeg with libopus on the bot host (see README).'],
-  runtime: ['Música exige Node.js 22 ou superior para o JavaScript do yt-dlp. Atualize o Node ou configure MONKY_MUSIC_NODE (veja README).', 'Music requires Node.js 22 or newer for yt-dlp JavaScript. Update Node or set MONKY_MUSIC_NODE (see README).'],
+  tools: ['As ferramentas locais de música não estão prontas no cliente de quem fez o pedido.', 'Local music tools are not ready on the requester’s client.'],
+  runtime: ['O runtime local de música não está disponível no cliente de quem fez o pedido.', 'The local music runtime is unavailable on the requester’s client.'],
   unavailable: ['Não foi possível carregar o áudio público. O provedor pode estar indisponível ou exigir autenticação; nenhuma restrição será contornada.', 'Could not load public audio. The provider may be unavailable or require authentication; restrictions will not be bypassed.'],
   recovery_failed: ['Não foi possível retomar a faixa após tentativas consecutivas sem avanço do áudio.', 'Could not resume the track after consecutive attempts without audio progress.'],
   timeout: ['O carregamento excedeu o tempo limite. Tente novamente.', 'Loading timed out. Please try again.'],
@@ -37,14 +34,15 @@ const messages: Record<MusicErrorCode, [string, string]> = {
   busy: ['O bot está ocupado com outros carregamentos. Tente novamente em instantes.', 'The bot is busy with other loads. Please try again shortly.'],
   empty: ['Nenhuma faixa está tocando.', 'Nothing is playing.'],
   position: ['Informe uma posição válida da fila de próximas faixas.', 'Enter a valid position in the upcoming queue.'],
+  requester_left_voice: ['A pessoa que pediu a faixa saiu da voz.', 'The person who requested the track left voice.'],
+  requester_disconnected: ['O cliente da pessoa que pediu a faixa foi desconectado.', 'The requester’s client disconnected.'],
+  local_permission: ['A execução local de música não foi autorizada ou a permissão foi revogada no cliente de quem fez o pedido.', 'Local music execution was not authorized or its permission was revoked on the requester’s client.'],
+  local_client_unavailable: ['O cliente original de quem fez o pedido não está disponível para processar esta faixa.', 'The original requester’s client is unavailable to process this track.'],
+  local_transport: ['Não foi possível estabelecer o canal privado de áudio entre o cliente de quem fez o pedido e o bot.', 'Could not establish the private audio channel between the requester’s client and the bot.'],
   cancelled: ['Operação cancelada; nenhuma faixa foi adicionada.', 'Operation cancelled; no track was added.'],
 };
 
 export function musicError(error: unknown, locale: string, fallback: MusicErrorCode = 'unavailable'): string {
-  const code = error instanceof MusicError ? error.code : fallback;
+  const code = error instanceof MusicError && Object.hasOwn(messages, error.code) ? error.code : fallback;
   return messages[code][normalizeCliLocale(locale) === 'en' ? 1 : 0];
-}
-
-export function aborted(signal: AbortSignal): void {
-  if (signal.aborted) throw new MusicError('cancelled');
 }

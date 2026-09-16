@@ -11,12 +11,14 @@ function checkSdk(root = path.resolve(__dirname, '..')) {
     .every((method) => typeof sdk.BotClient?.prototype[method] === 'function');
   const hasVoiceAndScreens = ['joinVoice', 'getVoiceConnection', 'leaveVoice', 'createScreen', 'updateScreen', 'closeScreen', 'listScreens']
     .every((method) => typeof sdk.BotClient?.prototype[method] === 'function');
+  const hasLocalExecution = typeof sdk.BotClient?.prototype.localExecution === 'function' &&
+    typeof sdk.LocalExecutionError === 'function' && typeof sdk.LocalExecutionRpcError === 'function';
   if (sdk.PROTOCOL_VERSION !== expected || typeof sdk.BotClient?.prototype.close !== 'function' ||
-      !hasPersistentRegistrations || !hasSelectors || !hasVoiceAndScreens ||
+      !hasPersistentRegistrations || !hasSelectors || !hasVoiceAndScreens || !hasLocalExecution ||
       typeof sdk.getCommandPresentation !== 'function') {
     throw new Error(
       `MonkyBot requires the bot-sdk for Monky protocol ${expected}; found ${sdk.PROTOCOL_VERSION ?? 'unknown'}. ` +
-      'The SDK must also support persistent marketplace registrations, durable selectors, voice, screens and localized command names. ' +
+      'The SDK must also support persistent marketplace registrations, durable selectors, voice, screens, concrete local execution and localized command names. ' +
       'Use the matching Monky release (or build the matching local shared and bot-sdk workspaces).'
     );
   }

@@ -40,9 +40,10 @@ for (const locale of ['pt-BR', 'en']) {
       signal: new AbortController().signal, args: { busca: url },
       getVoiceChannel: async () => 'voice', reply: value => replies.push(value),
     });
-    assert.equal(replies.length, 1);
-    assert.match(replies[0], locale === 'en' ? /Could not load public audio/ : /Não foi possível carregar o áudio público/);
-    assert.doesNotMatch(replies[0], /403|googlevideo|fixture-sensitive|timeout|tempo limite/);
+    assert.equal(replies.length, 2);
+    assert.match(replies[0], locale === 'en' ? /Track received/ : /Recebi a música/);
+    assert.match(replies.at(-1), locale === 'en' ? /Could not load public audio/ : /Não foi possível carregar o áudio público/);
+    assert.doesNotMatch(replies.join('\n'), /403|googlevideo|fixture-sensitive|timeout|tempo limite/);
     assert.equal(logs.length, 1);
     assert.match(logs[0], /command=play, stage=execute/);
     assert.match(logs[0], /unavailable.*HTTP 403/);
@@ -204,7 +205,8 @@ test('play execution, autocomplete and private preview use the same single-video
   assert.equal(choices[0].value, url);
   assert.equal(choices[0].audio.resourceId, url);
   assert.deepEqual(preview.bytes, bytes);
-  assert.match(replies[0], /Added to queue/);
+  assert.match(replies[0], /Track received/);
+  assert.match(replies.at(-1), /Added to queue/);
 });
 
 test('invalid or disallowed metadata fails with safe detail rather than a raw JSON exception', async () => {

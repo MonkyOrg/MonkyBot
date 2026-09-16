@@ -314,8 +314,8 @@ for (const replaceInPlace of [false, true]) {
     assert.equal(fresh.pm2Home, f.state.pm2Home);
     assert.deepEqual(result.calls.filter(call => call.event === 'pm2').map(call => call.args[0]),
       ['stop', 'startOrRestart', 'save']);
-    assert.ok(result.calls.findIndex(call => call.event === 'prepare') <
-      result.calls.findIndex(call => call.event === 'pm2'), 'Fresh music preparation must finish before stop.');
+    assert.equal(result.calls.some(call => call.event === 'prepare'), false,
+      'A fresh CLI restart must not prepare media tools on the bot host.');
     assert.match(result.stdout, /atualizado para 6\.0\.4-beta|Bot reiniciado/);
     const ecosystem = require(path.join(f.home, '.monkybot', 'ecosystem.config.cjs')).apps[0];
     assert.equal(ecosystem.cwd, f.config.botDir);
@@ -326,7 +326,7 @@ for (const replaceInPlace of [false, true]) {
 }
 
 for (const shellOverride of [false, true]) {
-  test(`fresh update restart preserves managed host/media and shell precedence (${shellOverride})`, async t => {
+  test(`fresh update restart preserves host precedence without preparing or injecting legacy media tools (${shellOverride})`, async t => {
     const f = updaterFixture(t, {
       port: await freePort(t),
       env: shellOverride ? { MONKY_SERVE_HOST: '127.0.0.1', MONKY_MUSIC_FFMPEG: 'operator ffmpeg' } : {},
@@ -340,16 +340,12 @@ for (const shellOverride of [false, true]) {
     assert.equal(result.status, 0, result.stderr);
     const probe = result.calls.find(call => call.event === 'probe');
     assert.equal(probe.host, '127.0.0.1');
-    const prepared = result.calls.find(call => call.event === 'prepare');
-    assert.deepEqual(prepared.overrides, {
-      MONKY_MUSIC_NODE: 'previous node 22',
-      MONKY_MUSIC_YTDLP: 'previous yt-dlp',
-      MONKY_MUSIC_FFMPEG: shellOverride ? 'operator ffmpeg' : 'previous ffmpeg',
-    });
+    assert.equal(result.calls.some(call => call.event === 'prepare'), false);
     const ecosystem = require(path.join(f.home, '.monkybot', 'ecosystem.config.cjs')).apps[0];
     assert.equal(ecosystem.env.MONKY_SERVE_HOST, '127.0.0.1');
-    assert.equal(ecosystem.env.MONKY_MUSIC_FFMPEG, shellOverride ? 'operator ffmpeg' : 'previous ffmpeg');
-    assert.equal(ecosystem.env.MONKY_MUSIC_NODE, 'previous node 22');
+    for (const key of ['MONKY_MUSIC_NODE', 'MONKY_MUSIC_YTDLP', 'MONKY_MUSIC_FFMPEG']) {
+      assert.equal(ecosystem.env[key], undefined, 'Local client execution does not select a VPS media tool.');
+    }
   });
 }
 
@@ -441,7 +437,7 @@ for (const [scenario, error] of [
 }
 
 for (const scenario of [
-  { childFailure: 9 }, { prepareFailure: true }, { failPm2Action: 'stop' },
+  { childFailure: 9 }, { failPm2Action: 'stop' },
   { failPm2Action: 'startOrRestart' }, { failPm2Action: 'save' },
 ]) {
   test(`installed package remains installed while fresh restart failure is surfaced (${JSON.stringify(scenario)})`, async t => {
@@ -451,11 +447,20 @@ for (const scenario of [
     assert.match(result.stdout, /atualizado para 6\.0\.4-beta/);
     assert.match(result.stderr, /Pacote atualizado, mas o reinício do bot falhou/);
     assert.doesNotMatch(result.stdout, /Bot reiniciado/);
-    if (scenario.prepareFailure) assert.equal(result.calls.some(call => call.event === 'pm2'), false);
     if (scenario.failPm2Action === 'stop') assert.equal(result.calls.some(call => call.event === 'probe'), false);
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.installed, 'package.json'), 'utf8')).version, '6.0.4-beta');
   });
 }
+
+  test('fresh update restart does not call even a failing legacy host media preparation', async t => {
+    const f = updaterFixture(t, { port: await freePort(t), scenario: { prepareFailure: true } });
+    const result = await f.run();
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.calls.some(call => call.event === 'prepare'), false);
+    assert.deepEqual(result.calls.filter(call => call.event === 'pm2').map(call => call.args[0]),
+      ['stop', 'startOrRestart', 'save']);
+    assert.match(result.stdout, /Bot reiniciado/);
+  });
 
 test('missing restart configuration reports installation success without launching a child', async t => {
   const f = updaterFixture(t, { missingConfig: true });

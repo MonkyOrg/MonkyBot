@@ -1,9 +1,14 @@
 import { performance } from 'node:perf_hooks';
 import { MusicError, SourceRecoveryError, aborted } from './errors';
 import { bounded, cancellable, errorDiagnostic, safeDiagnostic } from './process';
-import type { AudioStream, MusicSource, ResolvedTrack, Track } from './source';
+import type { AudioStream, ResolvedTrack, Track } from './source';
 import { cliText } from '../cli/i18n';
 
+export type QueueAudioStream = Omit<AudioStream, 'setPaused'> & {
+  readonly signal?: AbortSignal;
+  readonly closed?: Promise<void>;
+  setPaused?(paused: boolean): void | Promise<void>;
+};
 export interface MusicVoice {
   readonly channelId: string;
   readonly humanParticipantCount: number;
@@ -17,33 +22,57 @@ export interface VoiceAdapter {
   leaveVoice(serverId: string): Promise<void>;
 }
 export interface MusicActor {
+  botId: string;
   serverId: string;
   voiceChannelId: string | null;
   textChannelId: string;
   locale: 'pt-BR' | 'en';
   invocationId: string;
+  invokerId: string;
+  invokerSessionId: string;
+  invokerNickname: string;
 }
-interface Slot {
+export interface QueueMusicSource<T extends Track> {
+  /** open() itself obtains a fresh playable source instead of using a retained media URL. */
+  readonly resolvesOnOpen?: boolean;
+  check(signal: AbortSignal): Promise<void>;
+  checkAvailability?(signal: AbortSignal): Promise<void>;
+  resolve(url: string, signal: AbortSignal): Promise<T>;
+  open(
+    track: T,
+    signal: AbortSignal,
+    options?: { mode: 'persistent'; progress: 'playback' },
+  ): Promise<QueueAudioStream>;
+  release?(): Promise<void>;
+}
+export interface QueueMusicSourceFactory<T extends Track> {
+  bind(actor: MusicActor, url: string, signal: AbortSignal): Promise<QueueMusicSource<T>>;
+}
+interface Slot<T extends Track> {
   token: AbortController;
   actor: MusicActor;
   url: string;
-  track?: ResolvedTrack;
+  binding?: Promise<QueueMusicSource<T>>;
+  source?: QueueMusicSource<T>;
+  releaseRequested: boolean;
+  releasePromise?: Promise<void>;
+  track?: T;
 }
-interface Playback {
-  slot: Slot;
+interface Playback<T extends Track> {
+  slot: Slot<T>;
   token: AbortController;
   paused: boolean;
   elapsedMs: number;
   started: boolean;
   wake?: () => void;
-  stream?: AudioStream;
+  stream?: QueueAudioStream;
   done?: Promise<void>;
 }
-interface Session {
+interface Session<T extends Track> {
   serverId: string;
   channelId: string;
-  queue: Slot[];
-  active?: Playback;
+  queue: Slot<T>[];
+  active?: Playback<T>;
   tail: Promise<void>;
   idle?: ReturnType<typeof setTimeout>;
   empty?: ReturnType<typeof setTimeout>;
@@ -53,6 +82,9 @@ interface Session {
   endedNoticePending: boolean;
   pendingFailure?: Extract<MusicNotice, { type: 'failed' }>;
   lastRuntimeError?: { key: string; at: number };
+  deferredSlots: Set<Slot<T>>;
+  availabilityRequested: boolean;
+  availability?: Promise<void>;
   closing: boolean;
   closePromise?: Promise<void>;
   joining?: Promise<MusicVoice>;
@@ -63,20 +95,23 @@ export interface MusicSnapshot {
   paused: boolean;
   started: boolean;
   elapsedMs: number;
-  upcoming: { title: string; pending: boolean }[];
+  upcoming: { title: string; pending: boolean; waitingForRequester: boolean }[];
 }
-export type MusicNotice = { type: 'started'; actor: MusicActor; track: Track } |
+export type MusicNotice = { type: 'loading'; actor: MusicActor; track: Track } |
+  { type: 'started'; actor: MusicActor; track: Track } |
   { type: 'failed'; actor: MusicActor; error: unknown; track?: Track } |
   { type: 'recovery-failed'; actor: MusicActor; track: Track; attempts: number } |
+  { type: 'requester-left'; actor: MusicActor; track: Track } |
+  { type: 'requester-disconnected'; actor: MusicActor; track: Track } |
   { type: 'ended'; actor: MusicActor } |
   { type: 'runtime-error'; actor: MusicActor; error: unknown };
 
-export class MusicQueues {
-  private readonly sessions = new Map<string, Session>();
+export class MusicQueues<T extends Track = ResolvedTrack> {
+  private readonly sessions = new Map<string, Session<T>>();
   private disposed = false;
 
   constructor(
-    private readonly source: MusicSource,
+    private readonly source: QueueMusicSource<T> | QueueMusicSourceFactory<T>,
     private readonly voice: VoiceAdapter,
     private readonly notify: (notice: MusicNotice, signal?: AbortSignal) => Promise<void>,
     private readonly graceMs = 60_000,
@@ -91,13 +126,13 @@ export class MusicQueues {
     return value;
   }
 
-  private serial<T>(session: Session, action: () => T | Promise<T>): Promise<T> {
+  private serial<R>(session: Session<T>, action: () => R | Promise<R>): Promise<R> {
     const result = session.tail.then(action);
     session.tail = result.then(() => undefined, () => undefined);
     return result;
   }
 
-  private authorize(actor: MusicActor, session?: Session): void {
+  private authorize(actor: MusicActor, session?: Session<T>): void {
     if (!actor.voiceChannelId) throw new MusicError('not_in_voice');
     const connection = this.voice.getVoiceConnection(actor.serverId);
     if ((session && actor.voiceChannelId !== session.channelId) ||
@@ -108,7 +143,7 @@ export class MusicQueues {
     this.authorize(actor, this.sessions.get(actor.serverId));
   }
 
-  async enqueue(actor: MusicActor, url: string, invocationSignal?: AbortSignal, currentActor?: () => MusicActor | Promise<MusicActor>): Promise<Track> {
+  async enqueue(actor: MusicActor, url: string, invocationSignal?: AbortSignal, currentActor?: () => MusicActor | Promise<MusicActor>): Promise<T> {
     if (this.disposed) throw new MusicError('cancelled');
     this.assertControl(actor);
     this.graceFor(actor.serverId);
@@ -118,11 +153,16 @@ export class MusicQueues {
       session = {
         serverId: actor.serverId, channelId: actor.voiceChannelId!, queue: [], tail: Promise.resolve(),
         closing: false, lastActor: { ...actor }, endedNoticePending: false,
+        deferredSlots: new Set(),
+        availabilityRequested: false,
       };
       this.sessions.set(actor.serverId, session);
     }
     const state = session;
-    const slot: Slot = { token: new AbortController(), actor: { ...actor }, url };
+    const slot: Slot<T> = {
+      token: new AbortController(), actor: { ...actor }, url,
+      releaseRequested: false,
+    };
     try {
       await this.serial(state, () => {
         this.authorize(actor, state);
@@ -142,9 +182,11 @@ export class MusicQueues {
     invocationSignal?.addEventListener('abort', cancel, { once: true });
     if (invocationSignal?.aborted) cancel();
     try {
-      await this.source.check(slot.token.signal);
       aborted(slot.token.signal);
-      const track = await this.source.resolve(url, slot.token.signal);
+      const source = await this.bindSource(slot);
+      await source.check(slot.token.signal);
+      aborted(slot.token.signal);
+      const track = await source.resolve(url, slot.token.signal);
       aborted(slot.token.signal);
       let current = currentActor ? await currentActor() : actor;
       aborted(slot.token.signal);
@@ -158,21 +200,61 @@ export class MusicQueues {
         this.authorize(current, state);
         slot.track = track;
         this.pump(state);
+        if (state.deferredSlots.has(slot)) this.recheckDeferred(state);
       });
       return track;
     } catch (error: unknown) {
       await this.serial(state, () => {
         const index = state.queue.indexOf(slot);
         if (index !== -1) state.queue.splice(index, 1);
+        state.deferredSlots.delete(slot);
         this.pump(state);
       });
+      await this.releaseSlot(slot);
       throw error;
     } finally {
       invocationSignal?.removeEventListener('abort', cancel);
     }
   }
 
-  private async admit(session: Session, slot: Slot): Promise<boolean> {
+  private async bindSource(slot: Slot<T>): Promise<QueueMusicSource<T>> {
+    const owned = 'bind' in this.source;
+    slot.binding ??= owned
+      ? this.source.bind(slot.actor, slot.url, slot.token.signal)
+      : Promise.resolve(this.source);
+    const source = await slot.binding;
+    slot.source = source;
+    if (slot.releaseRequested || slot.token.signal.aborted) {
+      await this.releaseSlot(slot);
+      aborted(slot.token.signal);
+    }
+    return source;
+  }
+
+  private releaseSlot(slot: Slot<T>): Promise<void> {
+    slot.releaseRequested = true;
+    slot.token.abort();
+    if (!('bind' in this.source) || (!slot.source && !slot.binding)) return Promise.resolve();
+    return slot.releasePromise ??= Promise.resolve().then(async () => {
+      let source = slot.source;
+      if (!source && slot.binding) {
+        try {
+          source = await slot.binding;
+          slot.source = source;
+        } catch {
+          return;
+        }
+      }
+      if (!source?.release) return;
+      try {
+        await source.release();
+      } catch (error: unknown) {
+        console.error(`[music] ${cliText('Não foi possível liberar o contexto da fonte.', 'Could not release the source context.')} ${errorDiagnostic(error)}`);
+      }
+    });
+  }
+
+  private async admit(session: Session<T>, slot: Slot<T>): Promise<boolean> {
     let joined = session.joining !== undefined;
     if (!session.joining && !this.voice.getVoiceConnection(session.serverId)) {
       joined = true;
@@ -194,19 +276,25 @@ export class MusicQueues {
     }
   }
 
-  private pump(session: Session): void {
+  private pump(session: Session<T>): void {
     if (session.closing || this.disposed || session.active) return;
-    const slot = session.queue[0];
-    if (!slot) { this.armIdle(session); return; }
+    const index = session.queue.findIndex((entry) =>
+      !session.deferredSlots.has(entry));
+    if (index === -1) {
+      if (session.queue.length) session.endedNoticePending = false;
+      this.armIdle(session);
+      return;
+    }
+    const slot = session.queue[index];
     if (!slot.track) return;
-    session.queue.shift();
+    session.queue.splice(index, 1);
     clearTimeout(session.idle);
     session.idle = undefined;
     session.idleSince = undefined;
     session.lastActor = slot.actor;
     session.endedNoticePending = true;
     session.lastRuntimeError = undefined;
-    const active: Playback = { slot, token: new AbortController(), paused: false, elapsedMs: 0, started: false };
+    const active: Playback<T> = { slot, token: new AbortController(), paused: false, elapsedMs: 0, started: false };
     session.active = active;
     active.done = this.play(session, active).finally(() => this.serial(session, () => {
       if (session.active === active) session.active = undefined;
@@ -229,12 +317,13 @@ export class MusicQueues {
     const key = error instanceof MusicError ? error.code
       : error instanceof Error ? safeDiagnostic(`${error.name}: ${error.message}`) : 'unknown';
     const now = performance.now();
-    if (session.lastRuntimeError?.key === key && now - session.lastRuntimeError.at < 5000) return;
+    const lastRuntimeError = session.lastRuntimeError;
+    if (lastRuntimeError?.key === key && now - lastRuntimeError.at < 5000) return;
     session.lastRuntimeError = { key, at: now };
     console.error(`[music] ${cliText('Diagnóstico de execução', 'Runtime diagnostic')}: ${errorDiagnostic(error)}`);
   }
 
-  private hasPendingPlayback(session: Session): boolean {
+  private hasPendingPlayback(session: Session<T>): boolean {
     return !session.closing && (!!session.active && !session.active.token.signal.aborted ||
       session.queue.length > 0 || session.pendingFailure !== undefined);
   }
@@ -245,14 +334,19 @@ export class MusicQueues {
     return { ...(session.active?.slot.actor ?? session.pendingFailure?.actor ?? session.lastActor) };
   }
 
-  private async play(session: Session, active: Playback): Promise<void> {
+  private async play(session: Session<T>, active: Playback<T>): Promise<void> {
     const signal = active.token.signal;
     const track = active.slot.track!;
+    const source = active.slot.source!;
     let stage = 'resolve';
     let connection: MusicVoice | undefined;
+    let playbackSignal = signal;
+    let detachStreamSignal: (() => void) | undefined;
     try {
-      // Refresh expiring signed media URLs only when this item reaches the head.
-      const fresh = await this.source.resolve(track.url, signal);
+      void this.report({ type: 'loading', actor: active.slot.actor, track });
+      // Local streaming reauthorizes the retained source and resolves it in the
+      // executor. Legacy sources still need a fresh media URL before open().
+      const fresh = source.resolvesOnOpen ? track : await source.resolve(track.url, signal);
       aborted(signal);
       connection = this.voice.getVoiceConnection(session.serverId);
       aborted(signal);
@@ -260,44 +354,58 @@ export class MusicQueues {
       if (connection.channelId !== session.channelId) throw new MusicError('room');
       this.participantsChanged(session.serverId, session.channelId, connection.humanParticipantCount);
       stage = 'open';
-      active.stream = await this.source.open(fresh, signal, { mode: 'persistent', progress: 'playback' });
+      active.stream = await source.open(fresh, signal, { mode: 'persistent', progress: 'playback' });
       aborted(signal);
-      active.stream.setPaused?.(active.paused);
+      if (active.stream.signal) {
+        const controller = new AbortController();
+        const cancelPlayback = (): void => controller.abort(signal.reason);
+        const cancelStream = (): void => controller.abort(active.stream?.signal?.reason);
+        signal.addEventListener('abort', cancelPlayback, { once: true });
+        active.stream.signal.addEventListener('abort', cancelStream, { once: true });
+        if (signal.aborted) cancelPlayback();
+        else if (active.stream.signal.aborted) cancelStream();
+        playbackSignal = controller.signal;
+        detachStreamSignal = () => {
+          signal.removeEventListener('abort', cancelPlayback);
+          active.stream?.signal?.removeEventListener('abort', cancelStream);
+        };
+      }
+      await cancellable(Promise.resolve(active.stream.setPaused?.(active.paused)), playbackSignal);
       const iterator = active.stream.frames[Symbol.asyncIterator]();
       let nextAt = performance.now();
       let started = false;
       for (;;) {
         stage = 'read';
         const frame = active.stream.recoveryMode === 'persistent'
-          ? await cancellable(iterator.next(), signal)
-          : await bounded(iterator.next(), signal, 30_000);
+          ? await cancellable(iterator.next(), playbackSignal)
+          : await bounded(iterator.next(), playbackSignal, 30_000);
         if (frame.done) {
           if (!started) throw new MusicError('unavailable');
           break;
         }
         if (!started) nextAt = performance.now();
         while (active.paused) {
-          await cancellable(new Promise<void>((resolve) => { active.wake = resolve; }), signal);
+          await cancellable(new Promise<void>((resolve) => { active.wake = resolve; }), playbackSignal);
           active.wake = undefined;
           nextAt = performance.now();
         }
-        aborted(signal);
+        aborted(playbackSignal);
         const delay = nextAt - performance.now();
-        if (delay > 0) await this.sleep(delay, signal);
+        if (delay > 0) await this.sleep(delay, playbackSignal);
         // A pause/stop can arrive while waiting for the next 20 ms frame.
         while (active.paused) {
-          await cancellable(new Promise<void>((resolve) => { active.wake = resolve; }), signal);
+          await cancellable(new Promise<void>((resolve) => { active.wake = resolve; }), playbackSignal);
           active.wake = undefined;
           nextAt = performance.now();
         }
-        aborted(signal);
+        aborted(playbackSignal);
         const sentAt = performance.now();
         // Keep a fixed media clock: rebasing on every late Windows timer tick
         // makes 20 ms of audio take ~31 ms. Only a real stall starts a new clock.
         if (sentAt - nextAt > 100) nextAt = sentAt;
         stage = 'write';
-        await bounded(connection.writeOpus(frame.value), signal, 5000);
-        aborted(signal);
+        await bounded(connection.writeOpus(frame.value), playbackSignal, 5000);
+        aborted(playbackSignal);
         active.elapsedMs += 20;
         active.stream.markFrameAdvanced?.();
         nextAt += 20;
@@ -309,14 +417,34 @@ export class MusicQueues {
           void this.report({ type: 'started', actor: active.slot.actor, track });
         }
       }
+      stage = 'drain';
+      if (active.stream.closed) await cancellable(active.stream.closed, playbackSignal);
     } catch (error: unknown) {
       if (!signal.aborted) {
-        const detail = errorDiagnostic(error);
-        const failure = stage === 'write' && !(error instanceof MusicError)
-          ? new MusicError('voice_runtime', safeDiagnostic(detail)) : error;
+        const streamFailure = active.stream?.signal?.aborted &&
+          error instanceof MusicError && error.code === 'cancelled'
+          ? active.stream.signal.reason : error;
+        const detail = errorDiagnostic(streamFailure);
+        const failure = stage === 'write' && !(streamFailure instanceof MusicError)
+          ? new MusicError('voice_runtime', safeDiagnostic(detail)) : streamFailure;
         const code = failure instanceof MusicError ? failure.code : 'unavailable';
         console.error(`[music] ${cliText('Reprodução falhou', 'Playback failed')} (stage=${stage}, code=${code}, advancedMs=${active.elapsedMs}): ${detail}`);
-        if (failure instanceof SourceRecoveryError) {
+        if (failure instanceof MusicError &&
+            (failure.code === 'requester_left_voice' || failure.code === 'requester_disconnected')) {
+          for (const slot of session.queue) {
+            if (slot.actor.invokerSessionId === active.slot.actor.invokerSessionId) {
+              session.deferredSlots.add(slot);
+            }
+          }
+          session.pendingFailure = undefined;
+          session.endedNoticePending = false;
+          this.recheckDeferred(session);
+          await this.report({
+            type: failure.code === 'requester_left_voice' ? 'requester-left' : 'requester-disconnected',
+            actor: active.slot.actor,
+            track,
+          });
+        } else if (failure instanceof SourceRecoveryError) {
           session.pendingFailure = undefined;
           session.endedNoticePending = false;
           void this.report({ type: 'recovery-failed', actor: active.slot.actor, track, attempts: failure.attempts });
@@ -325,11 +453,13 @@ export class MusicQueues {
         }
       }
     } finally {
+      detachStreamSignal?.();
       active.token.abort();
       active.wake?.();
       this.stopSpeaking(connection);
       await active.stream?.close().catch((error: unknown) =>
         console.error(`[music] ${cliText('Não foi possível fechar o fluxo de áudio.', 'Could not close the audio stream.')} ${errorDiagnostic(error)}`));
+      await this.releaseSlot(active.slot);
     }
   }
 
@@ -357,7 +487,9 @@ export class MusicQueues {
       channelId: session?.channelId ?? null,
       current: active && !active.token.signal.aborted ? active.slot.track ?? null : null,
       paused: active?.paused ?? false, started: active?.started ?? false, elapsedMs: active?.elapsedMs ?? 0,
-      upcoming: session?.queue.map((slot) => ({ title: slot.track?.title ?? '…', pending: !slot.track })) ?? [],
+      upcoming: session?.queue.map((slot) => ({
+        title: slot.track?.title ?? '…', pending: !slot.track, waitingForRequester: session.deferredSlots.has(slot),
+      })) ?? [],
     };
   }
 
@@ -370,14 +502,14 @@ export class MusicQueues {
       throw new MusicError('empty');
     }
     if (command === 'leave') { await this.disconnect(actor.serverId); return; }
-    await this.serial(session, () => {
+    await this.serial(session, async () => {
       this.authorize(actor, session);
       const active = session.active;
       const connection = this.voice.getVoiceConnection(actor.serverId);
       if (command === 'pause' || command === 'resume') {
         if (!active || active.token.signal.aborted) throw new MusicError('empty');
         active.paused = command === 'pause';
-        active.stream?.setPaused?.(active.paused);
+        await active.stream?.setPaused?.(active.paused);
         if (active.paused) this.stopSpeaking(connection);
         if (!active.paused) active.wake?.();
       } else if (command === 'skip') {
@@ -387,19 +519,25 @@ export class MusicQueues {
           active.wake?.();
           this.stopSpeaking(connection);
         } else if (session.queue.length) {
-          session.queue.shift()!.token.abort();
+          const removed = session.queue.shift()!;
+          session.deferredSlots.delete(removed);
+          await this.releaseSlot(removed);
           this.pump(session);
         } else throw new MusicError('empty');
       } else if (command === 'remove') {
         if (!Number.isInteger(position) || position! < 1 || position! > session.queue.length) throw new MusicError('position');
-        session.queue.splice(position! - 1, 1)[0].token.abort();
+        const removed = session.queue.splice(position! - 1, 1)[0];
+        session.deferredSlots.delete(removed);
+        await this.releaseSlot(removed);
         this.pump(session);
       } else {
         if (command === 'stop') {
           session.endedNoticePending = false;
           session.pendingFailure = undefined;
         }
-        for (const slot of session.queue.splice(0)) slot.token.abort();
+        const removed = session.queue.splice(0);
+        for (const slot of removed) session.deferredSlots.delete(slot);
+        await Promise.all(removed.map((slot) => this.releaseSlot(slot)));
         if (command === 'stop' && active) {
           active.token.abort();
           active.wake?.();
@@ -422,7 +560,7 @@ export class MusicQueues {
     }
   }
 
-  private scheduleLeave(session: Session, kind: 'idle' | 'empty', grace = this.graceFor(session.serverId)): void {
+  private scheduleLeave(session: Session<T>, kind: 'idle' | 'empty', grace = this.graceFor(session.serverId)): void {
     const since = kind === 'idle' ? session.idleSince : session.emptySince;
     const now = performance.now();
     if (kind === 'idle') session.idleSince = since ?? now;
@@ -443,7 +581,7 @@ export class MusicQueues {
     timer.unref();
   }
 
-  private armIdle(session: Session): void {
+  private armIdle(session: Session<T>): void {
     if (session.idle || session.closing || session.joining) return;
     if (session.pendingFailure) {
       const failure = session.pendingFailure;
@@ -471,9 +609,49 @@ export class MusicQueues {
       clearTimeout(session.empty);
       session.empty = undefined;
       session.emptySince = undefined;
+      this.recheckDeferred(session);
     } else if (!session.empty) {
       this.scheduleLeave(session, 'empty');
     }
+  }
+
+  private recheckDeferred(session: Session<T>): void {
+    if (session.closing || this.disposed || !session.deferredSlots.size) return;
+    session.availabilityRequested = true;
+    if (session.availability) return;
+    const recheck = async (): Promise<void> => {
+      while (session.availabilityRequested && !session.closing && !this.disposed) {
+        session.availabilityRequested = false;
+        for (const slot of [...session.deferredSlots]) {
+          if (session.closing || this.disposed || session.availabilityRequested) break;
+          const source = slot.source;
+          if (!source?.checkAvailability || slot.token.signal.aborted || !session.queue.includes(slot)) continue;
+          try {
+            await bounded(source.checkAvailability(slot.token.signal), slot.token.signal, 10_000);
+          } catch (error: unknown) {
+            if (!slot.token.signal.aborted && !(error instanceof MusicError &&
+                ['requester_left_voice', 'requester_disconnected', 'cancelled'].includes(error.code))) {
+              await this.reportRuntimeError(session.serverId, error);
+            }
+            continue;
+          }
+          // Membership changes during the RPC require a fresh check. Counts and
+          // reused session IDs are never sufficient to authorize a retained source.
+          await this.serial(session, () => {
+            if (session.availabilityRequested || session.closing || this.disposed ||
+                slot.token.signal.aborted || !session.queue.includes(slot)) return;
+            session.deferredSlots.delete(slot);
+            this.pump(session);
+          });
+        }
+      }
+    };
+    const pending = recheck().finally(() => {
+      if (session.availability === pending) session.availability = undefined;
+      if (session.availabilityRequested && !session.closing && !this.disposed) this.recheckDeferred(session);
+    });
+    session.availability = pending;
+    void pending.catch((error: unknown) => this.reportRuntimeError(session.serverId, error));
   }
 
   async disconnect(serverId: string, error?: unknown): Promise<void> {
@@ -483,17 +661,22 @@ export class MusicQueues {
     const actor = error === undefined ? undefined : this.notificationActor(serverId);
     const track = session.active?.slot.track ?? session.pendingFailure?.track;
     session.closing = true;
+    session.availabilityRequested = false;
     session.pendingFailure = undefined;
     session.endedNoticePending = false;
     clearTimeout(session.idle);
     clearTimeout(session.empty);
-    for (const slot of session.queue.splice(0)) slot.token.abort();
+    const queued = session.queue.splice(0);
+    session.deferredSlots.clear();
+    for (const slot of queued) slot.token.abort();
     session.active?.token.abort();
     session.active?.wake?.();
     session.closePromise = Promise.resolve().then(async () => {
       try {
         try { await this.voice.leaveVoice(serverId); }
         finally {
+          await Promise.all(queued.map((slot) => this.releaseSlot(slot)));
+          await session.availability;
           await session.joining?.catch(() => undefined);
           await session.active?.done;
         }
