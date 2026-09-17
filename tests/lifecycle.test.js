@@ -10,6 +10,8 @@ const config = require('../dist/cli/config');
 const pm2 = require('../dist/cli/pm2');
 const processHelpers = require('../dist/cli/process');
 const manifestPort = require('../dist/cli/manifestPort');
+const manifestReadiness = require('../dist/cli/manifestReadiness');
+const { getManifestUrl } = require('../dist/utils/manifest');
 const musicTools = require('../dist/cli/musicTools');
 const { setBindHost, closeServer, listen, freePort, captureBinds } = require('./helpers/manifest-port');
 
@@ -33,6 +35,7 @@ function fixture(t, initial, proc = null) {
   setBindHost(t);
   const state = {
     current: structuredClone(initial),
+    proc: structuredClone(proc),
     effects: [], lines: [],
     runBehavior: () => ({ status: 0 }),
   };
@@ -41,7 +44,11 @@ function fixture(t, initial, proc = null) {
     state.current = structuredClone(next);
   });
   t.mock.method(config, 'getBotEntryPath', () => entry);
-  state.find = t.mock.method(pm2, 'findBotProcess', () => proc);
+  state.find = t.mock.method(pm2, 'findBotProcess', () => state.proc);
+  state.verify = t.mock.method(manifestReadiness, 'verifyManifest', async settings =>
+    getManifestUrl(settings.publicHost, settings.servePort ?? manifestPort.DEFAULT_MANIFEST_PORT));
+  state.wait = t.mock.method(manifestReadiness, 'waitForManifest', async settings =>
+    getManifestUrl(settings.publicHost, settings.servePort ?? manifestPort.DEFAULT_MANIFEST_PORT));
   t.mock.method(pm2, 'requirePm2', () => true);
   state.ensure = t.mock.method(pm2, 'ensurePm2', () => state.effects.push('ensure'));
   state.ecosystem = t.mock.method(pm2, 'writeEcosystem', () => {
@@ -50,7 +57,16 @@ function fixture(t, initial, proc = null) {
   });
   state.run = t.mock.method(processHelpers, 'runSync', (command, args) => {
     state.effects.push(args[0]);
-    return state.runBehavior(command, args);
+    const result = state.runBehavior(command, args);
+    if (!result.error && result.status === 0) {
+      if (args[0] === 'stop' && state.proc) {
+        state.proc.pm2_env.status = 'stopped';
+        state.proc.pid = 0;
+      }
+      if (args[0] === 'delete') state.proc = null;
+      if (args[0] === 'startOrRestart') state.proc = managedProcess();
+    }
+    return result;
   });
   t.mock.method(console, 'log', (...args) => state.lines.push(args.join(' ')));
   return state;
@@ -124,15 +140,19 @@ for (const proc of [null, managedProcess('stopped')]) {
   });
 }
 
-test('start remains idempotent for the managed online process without assuming it owns the configured port', async (t) => {
+test('start verifies the managed online manifest, prints its URL and stays idempotent without a bind probe', async (t) => {
   const service = await listen(t);
   const state = fixture(t, marketplace(service.address().port), managedProcess());
   const probe = t.mock.method(manifestPort, 'assertManifestPortAvailable', () => assert.fail('An idempotent start must not probe.'));
   await lifecycle.startCommand();
   assert.equal(probe.mock.callCount(), 0);
+  assert.equal(state.verify.mock.callCount(), 1);
+  assert.equal(state.wait.mock.callCount(), 0);
   assert.deepEqual(state.effects, []);
   assert.match(state.lines.join('\n'), /já está rodando/);
-  assert.doesNotMatch(state.lines.join('\n'), /iniciado!|Manifest:/);
+  assert.match(state.lines.join('\n'), /Manifest: http:\/\/bot\.example\.test:\d+\/manifest/);
+  assert.match(state.lines.join('\n'), /verificado localmente/);
+  assert.doesNotMatch(state.lines.join('\n'), /iniciado!/);
   assert.equal(service.listening, true);
 });
 
@@ -216,7 +236,7 @@ for (const [name, action, previousEnv, override, expected] of [
     };
     if (action === 'start') await lifecycle.startCommand();
     else await lifecycle.restartCommand(action === 'fresh' ? ['--fresh'] : []);
-    assert.deepEqual(binds, Array.from({ length: action === 'start' ? 2 : 1 },
+    assert.deepEqual(binds, Array.from({ length: 2 },
       () => ({ port, host: expected, exclusive: true })));
     assert.deepEqual(state.ecosystem.mock.calls[0].arguments, [state.current, expected]);
     assert.equal(ownListener.listening, false);
@@ -572,7 +592,7 @@ test('writeEcosystem persists the resolved host instead of replacing it with the
   assert.equal(context.module.exports.apps[0].env.MONKY_SERVE_HOST, '127.0.0.1');
 });
 
-for (const [command, method] of [['start', 'startCommand'], ['restart', 'restartCommand'], ['config', 'configCommand']]) {
+for (const [command, method] of [['setup', 'setupCommand'], ['start', 'startCommand'], ['restart', 'restartCommand'], ['config', 'configCommand']]) {
   test(`CLI awaits ${command} and reports an async failure with exit status 1`, async () => {
     const exits = [];
     const errors = [];
@@ -581,7 +601,7 @@ for (const [command, method] of [['start', 'startCommand'], ['restart', 'restart
         if (name === './cli/constants') return require('../dist/cli/constants');
         if (name === './cli/i18n') return require('../dist/cli/i18n');
         if (name === './music/process') return require('../dist/music/process');
-        if (name === './cli/commands/lifecycle') {
+        if (name === './cli/commands/lifecycle' || (command === 'setup' && name === './cli/commands/setup')) {
           return { [method]: async () => { await Promise.resolve(); throw new Error('synthetic EADDRINUSE'); } };
         }
         if (['./cli/commands/setup', './cli/commands/update'].includes(name)) return {};

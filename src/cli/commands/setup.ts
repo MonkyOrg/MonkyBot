@@ -10,6 +10,7 @@ import {
 import { assertManifestPortAvailable, DEFAULT_MANIFEST_PORT } from '../manifestPort';
 import { DEFAULT_BOT_NAME } from '../../profile';
 import { cliText } from '../i18n';
+import { managedBotProcess, managedManifestHost, restartCommand, stopManagedBotBeforeRestart } from './lifecycle';
 
 const DEFAULT_MANUAL_SERVER_URL = 'ws://localhost:3000';
 
@@ -53,10 +54,22 @@ async function validatedPrompt<T>(
   }
 }
 
-function promptServePort(ask: Ask, defaultPort: number): Promise<number> {
+function portInUse(error: unknown): boolean {
+  return error instanceof Error && typeof error.cause === 'object' && error.cause !== null &&
+    'code' in error.cause && error.cause.code === 'EADDRINUSE';
+}
+
+function promptServePort(
+  ask: Ask, defaultPort: number, host: string, mayReleaseExistingPort: (port: number) => boolean = () => false
+): Promise<number> {
   return validatedPrompt(ask, cliText(`Porta do manifest [${defaultPort}]: `, `Manifest port [${defaultPort}]: `), async (answer) => {
     const port = validateServePort(answer || String(defaultPort));
-    await assertManifestPortAvailable(port);
+    try {
+      await assertManifestPortAvailable(port, host);
+    } catch (error: unknown) {
+      // Defer only this candidate; stopping the identified process must still prove the port is free before saving.
+      if (!portInUse(error) || !mayReleaseExistingPort(port)) throw error;
+    }
     return port;
   });
 }
@@ -89,6 +102,12 @@ export async function setupCommand(): Promise<void> {
     throw new Error(cliText('A configuração existente tem um modo inválido; corrija-a antes de refazer o setup.',
       'The existing configuration has an invalid mode; correct it before repeating setup.'));
   }
+  const previousProcess = existing ? managedBotProcess(existing) : null;
+  const manifestHost = managedManifestHost(previousProcess);
+  const mayReleaseExistingPort = (port: number): boolean =>
+    existing?.mode === 'marketplace' && port === (existing.servePort ?? DEFAULT_MANIFEST_PORT) &&
+    previousProcess?.pm2_env?.status === 'online' && !!previousProcess.pid &&
+    !!previousProcess.pm2_env.pm_cwd && path.relative(existing.botDir, previousProcess.pm2_env.pm_cwd) === '';
 
   console.log(color('🤖 Monky Bot — Setup', ANSI.bold));
   console.log();
@@ -186,14 +205,15 @@ export async function setupCommand(): Promise<void> {
       console.log(cliText('Qualquer servidor Monky poderá instalar o bot via URL.', 'Any Monky server can install the bot by URL.'));
       console.log(cliText('O host e a porta do manifest precisam ser acessíveis pelos servidores que vão instalar o bot.',
         'The manifest host and port must be reachable by the servers installing the bot.'));
-      console.log(cliText('Cada bot precisa de uma porta livre exclusiva. Para reconfigurar este bot rodando, use monkybot stop antes.',
-        'Each bot needs its own available port. Before reconfiguring this running bot, use monkybot stop.'));
+      console.log(cliText(
+        'Cada bot precisa de uma porta exclusiva. Ao reutilizar a porta deste bot, somente seu processo será parado e a porta será revalidada antes de salvar.',
+        'Each bot needs its own port. When reusing this bot’s port, only its process will be stopped and the port rechecked before saving.'));
       console.log();
 
       const defaultPort = existing?.mode === 'marketplace'
         ? existing.servePort ?? DEFAULT_MANIFEST_PORT
         : DEFAULT_MANIFEST_PORT;
-      const servePort = await promptServePort(ask, defaultPort);
+      const servePort = await promptServePort(ask, defaultPort, manifestHost, mayReleaseExistingPort);
 
       const detectedIp = getLocalIp();
       console.log(cliText(`Informe o IP ou domínio público desta máquina.${detectedIp ? ` (IP local detectado: ${detectedIp})` : ''}`,
@@ -221,13 +241,23 @@ export async function setupCommand(): Promise<void> {
     ensureOpen();
     if (config.mode === 'marketplace') {
       const port = config.servePort ?? DEFAULT_MANIFEST_PORT;
+      if (existing && mayReleaseExistingPort(port)) {
+        const currentProcess = managedBotProcess(existing);
+        if (currentProcess) {
+          if (!currentProcess.pm2_env?.pm_cwd || path.relative(existing.botDir, currentProcess.pm2_env.pm_cwd) !== '') {
+            throw new Error(cliText('O diretório do processo mudou durante o setup. A configuração não foi alterada.',
+              'The process working directory changed during setup. The configuration was not changed.'));
+          }
+          stopManagedBotBeforeRestart(currentProcess);
+        }
+      }
       try {
-        await assertManifestPortAvailable(port);
+        await assertManifestPortAvailable(port, manifestHost);
       } catch (error: unknown) {
         if (!(error instanceof Error)) throw error;
         ensureOpen();
         console.error(color(error.message, ANSI.red));
-        config.servePort = await promptServePort(ask, port);
+        config.servePort = await promptServePort(ask, port, manifestHost);
       }
     }
     ensureOpen();
@@ -237,14 +267,25 @@ export async function setupCommand(): Promise<void> {
     console.log(color(cliText('✅ Configuração salva!', '✅ Configuration saved!'), ANSI.green));
     console.log(`   ${cliText('Arquivo', 'File')}: ${CONFIG_FILE}`);
     console.log();
-    console.log(color(cliText('Próximos passos:', 'Next steps:'), ANSI.bold));
-    console.log(cliText('  monkybot start    — Inicia o bot em background', '  monkybot start    — Start the bot in the background'));
-    console.log(cliText('  monkybot status   — Verifica o estado', '  monkybot status   — Check status'));
-    console.log(cliText('  monkybot logs     — Exibe os logs', '  monkybot logs     — Show logs'));
   } finally {
     rl.close();
     rl.off('close', onClose);
     rl.off('SIGINT', onSigint);
     output.end();
   }
+
+  console.log(cliText('Aplicando a configuração com um reinício/início limpo...', 'Applying the configuration with a fresh restart/start...'));
+  try {
+    await restartCommand(['--fresh']);
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : cliText('erro desconhecido', 'unknown error');
+    throw new Error(cliText(
+      `A configuração foi salva em ${CONFIG_FILE}, mas o reinício/início automático não foi confirmado: ${reason} ` +
+      'Consulte monkybot logs e tente monkybot restart --fresh; não apague .keys nem os vínculos.',
+      `Configuration was saved to ${CONFIG_FILE}, but the automatic restart/start was not confirmed: ${reason} ` +
+      'Check monkybot logs and retry monkybot restart --fresh; do not delete .keys or registrations.'), { cause: error });
+  }
+  console.log();
+  console.log(cliText('  monkybot status   — Verifica o estado', '  monkybot status   — Check status'));
+  console.log(cliText('  monkybot logs     — Exibe os logs', '  monkybot logs     — Show logs'));
 }

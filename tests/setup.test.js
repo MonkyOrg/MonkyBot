@@ -12,6 +12,9 @@ const config = require('../dist/cli/config');
 const constants = require('../dist/cli/constants');
 const { CONFIG_DIR } = constants;
 const manifestPort = require('../dist/cli/manifestPort');
+const lifecycle = require('../dist/cli/commands/lifecycle');
+const pm2 = require('../dist/cli/pm2');
+const processHelpers = require('../dist/cli/process');
 const musicTools = require('../dist/cli/musicTools');
 const { DEFAULT_BOT_NAME } = require('../dist/profile');
 const { setBindHost, listen, freePort } = require('./helpers/manifest-port');
@@ -19,6 +22,15 @@ const { setCliLocale } = require('../dist/cli/i18n');
 
 beforeEach((t) => {
   setCliLocale('pt-BR');
+  t.mock.method(pm2, 'findBotProcess', () => null);
+  t.mock.method(processHelpers, 'runSync', () => assert.fail('Setup tests must never invoke real pm2 or npm.'));
+  t.mock.method(lifecycle, 'restartCommand', async args => {
+    assert.deepEqual(args, ['--fresh']);
+    const call = readline.createInterface.mock.calls.at(-1);
+    assert.equal(call.result.listenerCount('close'), 0, 'Close listeners must be removed before restarting.');
+    assert.equal(call.result.listenerCount('SIGINT'), 0, 'SIGINT listeners must be removed before restarting.');
+    assert.equal(call.arguments[0].output.writableEnded, true, 'The prompt output must close before restarting.');
+  });
 });
 
 function captureLogs(t) {
@@ -122,6 +134,7 @@ test('setup saves configuration without preparing host media tools', async (t) =
   await setupCommand();
   assert.equal(preparation.mock.callCount(), 0);
   assert.equal(state.current.botToken, 'fixture-token');
+  assert.equal(lifecycle.restartCommand.mock.callCount(), 1);
 });
 
 test('setup defaults to the recommended URL installation for fresh configs', async (t) => {
@@ -144,6 +157,8 @@ test('setup defaults to the recommended URL installation for fresh configs', asy
   assert.equal(questions.some((question) => /Token do bot|URL do servidor/.test(question)), false);
   assert.match(lines.join('\n'), /1\. Instalação por URL — recomendado/);
   assert.match(lines.join('\n'), /2\. Conexão manual por token — avançado/);
+  assert.equal(lifecycle.restartCommand.mock.callCount(), 1);
+  assert.doesNotMatch(lines.join('\n'), /monkybot start\s+—/);
 });
 
 test('setup reprompts invalid mode choices and only reveals the advanced manual flow when selected', async (t) => {
@@ -188,6 +203,7 @@ test('setup preserves existing manual mode, working directory, name and hidden t
 
   assert.equal(questions[0], 'Modo [2]: ');
   assert.deepEqual(state.current, existing);
+  assert.equal(lifecycle.restartCommand.mock.callCount(), 1);
   assert.equal(lines.join('\n').includes(existing.botToken), false);
   assert.equal(terminal.join('').includes(existing.botToken), false);
 });
@@ -209,6 +225,7 @@ test('setup preserves existing URL installation settings by default', async (t) 
 
   assert.equal(questions[0], 'Modo [1]: ');
   assert.deepEqual(state.current, existing);
+  assert.equal(lifecycle.restartCommand.mock.callCount(), 1);
 });
 
 test('setup reuses SDK validation and reprompts invalid URL, token and identity without saving them', async (t) => {
@@ -250,6 +267,7 @@ test('setup refuses an unsupported saved mode instead of silently converting it 
   await assert.rejects(() => setupCommand(), /modo inválido/);
   assert.equal(createInterface.mock.calls.length, 0);
   assert.equal(config.writeConfig.mock.calls.length, 0);
+  assert.equal(lifecycle.restartCommand.mock.callCount(), 0);
   assert.deepEqual(state.current, existing);
 });
 
@@ -385,6 +403,7 @@ test('cancelling after a collision leaves the saved config and keys byte-for-byt
   t.mock.method(console, 'error', () => {});
   await assert.rejects(setupCommand(), /Setup cancelado/);
   unchanged();
+  assert.equal(lifecycle.restartCommand.mock.callCount(), 0);
   assert.equal(service.listening, true);
 });
 
@@ -405,6 +424,7 @@ test('setup aborts if readline closes during the async port check before the nex
   const lines = captureLogs(t);
   await assert.rejects(setupCommand(), /Setup cancelado/);
   unchanged();
+  assert.equal(lifecycle.restartCommand.mock.callCount(), 0);
   assert.equal(probe.mock.callCount(), 1);
   assert.equal(questions.length, 3);
   assert.equal(questions.some((question) => /Host público|Nome do bot/.test(question)), false);
@@ -430,6 +450,7 @@ test('cancelling during the final async check cannot persist config or touch key
   captureLogs(t);
   await assert.rejects(setupCommand(), /Setup cancelado/);
   unchanged();
+  assert.equal(lifecycle.restartCommand.mock.callCount(), 0);
   assert.equal(checks, 2);
   await listen(t, undefined, port);
 });
@@ -440,4 +461,147 @@ test('manual setup never probes a manifest port', async (t) => {
   t.mock.method(manifestPort, 'assertManifestPortAvailable', () => assert.fail('Manual mode must not probe.'));
   captureLogs(t);
   await setupCommand();
+});
+
+function managedProcess(existing) {
+  return {
+    name: 'monkybot', pm_id: 17, pid: 12345,
+    pm2_env: {
+      status: 'online', pm_exec_path: config.getBotEntryPath(existing.botDir), pm_cwd: existing.botDir,
+      MONKY_SERVE_HOST: '127.0.0.1',
+    },
+  };
+}
+
+test('setup cannot save a foreign occupied port just because this managed bot is online', async t => {
+  setBindHost(t);
+  let requests = 0;
+  const service = await listen(t, http.createServer((_request, response) => {
+    requests++;
+    response.end(JSON.stringify({ name: 'MonkyBot' }));
+  }), 0, '127.0.0.1');
+  const existing = {
+    mode: 'marketplace', botDir: CONFIG_DIR, publicHost: 'bot.example.test',
+    servePort: service.address().port, botName: 'MonkyBot',
+  };
+  const state = mockConfig(t, existing);
+  t.mock.method(pm2, 'findBotProcess', () => managedProcess(existing));
+  const run = t.mock.method(processHelpers, 'runSync', (command, args) => {
+    assert.equal(command, 'pm2');
+    assert.deepEqual(args, ['stop', '17']);
+    assert.equal(config.writeConfig.mock.callCount(), 0, 'A deferred occupied port is not safe to save.');
+    return { status: 0 };
+  });
+  const questions = interactiveAnswers(t, ['', '', '', '', '', null]);
+  const lines = captureLogs(t);
+  const errors = t.mock.method(console, 'error', () => {});
+  await assert.rejects(setupCommand(), /Setup cancelado/);
+  assert.equal(run.mock.callCount(), 1);
+  assert.equal(questions.filter(question => question.startsWith('Porta do manifest')).length, 2);
+  assert.match(errors.mock.calls[0].arguments[0], /EADDRINUSE/);
+  assert.deepEqual(state.current, existing);
+  assert.equal(config.writeConfig.mock.callCount(), 0);
+  assert.equal(lifecycle.restartCommand.mock.callCount(), 0);
+  assert.equal(requests, 0, 'A manifest response cannot authorize ownership.');
+  assert.equal(service.listening, true, 'No unrelated listener may be terminated.');
+  assert.doesNotMatch(lines.join('\n'), /Configuração salva/);
+});
+
+test('cancelling reconfiguration before the final check does not stop the owned process or save answers', async t => {
+  setBindHost(t);
+  const service = await listen(t, undefined, 0, '127.0.0.1');
+  const existing = {
+    mode: 'marketplace', botDir: CONFIG_DIR, publicHost: 'bot.example.test',
+    servePort: service.address().port, botName: 'MonkyBot',
+  };
+  const state = mockConfig(t, existing);
+  t.mock.method(pm2, 'findBotProcess', () => managedProcess(existing));
+  interactiveAnswers(t, ['', '', '', null]);
+  captureLogs(t);
+  await assert.rejects(setupCommand(), /Setup cancelado/);
+  assert.equal(processHelpers.runSync.mock.callCount(), 0);
+  assert.equal(config.writeConfig.mock.callCount(), 0);
+  assert.equal(lifecycle.restartCommand.mock.callCount(), 0);
+  assert.equal(service.listening, true);
+  assert.deepEqual(state.current, existing);
+});
+
+test('a failed owned stop aborts setup before saving instead of becoming another port prompt', async t => {
+  setBindHost(t);
+  const service = await listen(t, undefined, 0, '127.0.0.1');
+  const existing = {
+    mode: 'marketplace', botDir: CONFIG_DIR, publicHost: 'bot.example.test',
+    servePort: service.address().port, botName: 'MonkyBot',
+  };
+  const state = mockConfig(t, existing);
+  t.mock.method(pm2, 'findBotProcess', () => managedProcess(existing));
+  t.mock.method(processHelpers, 'runSync', (_command, args) => {
+    assert.deepEqual(args, ['stop', '17']);
+    return { status: 1 };
+  });
+  const questions = interactiveAnswers(t, ['', '', '', '', '']);
+  captureLogs(t);
+  await assert.rejects(setupCommand(), /Falha ao parar o bot antes do reinício/);
+  assert.equal(questions.filter(question => question.startsWith('Porta do manifest')).length, 1);
+  assert.equal(config.writeConfig.mock.callCount(), 0);
+  assert.equal(lifecycle.restartCommand.mock.callCount(), 0);
+  assert.equal(service.listening, true);
+  assert.deepEqual(state.current, existing);
+});
+
+test('an entry shared by a different working directory cannot authorize setup port reuse', async t => {
+  setBindHost(t);
+  const service = await listen(t, undefined, 0, '127.0.0.1');
+  const existing = {
+    mode: 'marketplace', botDir: CONFIG_DIR, publicHost: 'bot.example.test',
+    servePort: service.address().port, botName: 'MonkyBot',
+  };
+  const state = mockConfig(t, existing);
+  const proc = managedProcess(existing);
+  proc.pm2_env.pm_cwd = path.join(CONFIG_DIR, 'another-bot');
+  t.mock.method(pm2, 'findBotProcess', () => proc);
+  interactiveAnswers(t, ['', '', '', null]);
+  captureLogs(t);
+  t.mock.method(console, 'error', () => {});
+  await assert.rejects(setupCommand(), /Setup cancelado/);
+  assert.equal(processHelpers.runSync.mock.callCount(), 0);
+  assert.equal(config.writeConfig.mock.callCount(), 0);
+  assert.equal(lifecycle.restartCommand.mock.callCount(), 0);
+  assert.equal(service.listening, true);
+  assert.deepEqual(state.current, existing);
+});
+
+for (const locale of ['pt-BR', 'en']) {
+  test(`setup reports saved configuration separately from an automatic fresh-start failure (${locale})`, async t => {
+    setCliLocale(locale);
+    const state = mockConfig(t);
+    interactiveAnswers(t, ['2', '', 'localhost:3000', 'fixture-hidden-token', '']);
+    const lines = captureLogs(t);
+    t.mock.method(lifecycle, 'restartCommand', async args => {
+      assert.deepEqual(args, ['--fresh']);
+      assert.equal(config.writeConfig.mock.callCount(), 1);
+      throw new Error('Fixture startup failed.');
+    });
+    await assert.rejects(setupCommand(), error => {
+      assert.match(error.message, locale === 'en'
+        ? /Configuration was saved.*automatic restart\/start was not confirmed.*Fixture startup failed/
+        : /configuração foi salva.*reinício\/início automático não foi confirmado.*Fixture startup failed/);
+      assert.match(error.message, /monkybot restart --fresh/);
+      assert.doesNotMatch(error.message, /fixture-hidden-token/);
+      return true;
+    });
+    assert.equal(state.current.botToken, 'fixture-hidden-token');
+    assert.equal(lifecycle.restartCommand.mock.callCount(), 1);
+    assert.doesNotMatch(lines.join('\n'), /Monky Bot reiniciado!|Monky Bot restarted!|Manifest:/);
+  });
+}
+
+test('a configuration write failure never launches or restarts the bot', async t => {
+  mockConfig(t);
+  interactiveAnswers(t, ['2', '', 'localhost:3000', 'fixture-token', '']);
+  t.mock.method(config, 'writeConfig', () => { throw new Error('Fixture write failed.'); });
+  const lines = captureLogs(t);
+  await assert.rejects(setupCommand(), /Fixture write failed/);
+  assert.equal(lifecycle.restartCommand.mock.callCount(), 0);
+  assert.doesNotMatch(lines.join('\n'), /Configuração salva/);
 });

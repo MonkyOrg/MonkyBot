@@ -14,6 +14,7 @@ import {
 } from '../pm2';
 import { runSync } from '../process';
 import { assertManifestPortAvailable, DEFAULT_MANIFEST_PORT, getManifestBindHost } from '../manifestPort';
+import { ManifestReadinessError, verifyManifest, waitForManifest } from '../manifestReadiness';
 import { DEFAULT_BOT_NAME } from '../../profile';
 import { getManifestUrl } from '../../utils/manifest';
 import { cliText } from '../i18n';
@@ -71,11 +72,11 @@ async function checkManifestPort(config: BotConfig, host = getManifestBindHost()
   }
 }
 
-function managedManifestHost(proc: Pm2Process | null): string {
+export function managedManifestHost(proc: Pm2Process | null): string {
   return getManifestBindHost(proc?.pm2_env?.MONKY_SERVE_HOST ?? proc?.pm2_env?.env?.MONKY_SERVE_HOST);
 }
 
-function managedBotProcess(config: BotConfig): (Pm2Process & { pm_id: number }) | null {
+export function managedBotProcess(config: BotConfig): (Pm2Process & { pm_id: number }) | null {
   const proc = findBotProcess();
   if (!proc) return null;
   const normalize = (file: string): string => {
@@ -91,18 +92,63 @@ function managedBotProcess(config: BotConfig): (Pm2Process & { pm_id: number }) 
   return { ...proc, pm_id: proc.pm_id };
 }
 
+export function stopManagedBotBeforeRestart(proc: Pm2Process & { pm_id: number }): void {
+  if (proc.pm2_env?.status === 'stopped') return;
+  const stopped = runSync('pm2', ['stop', String(proc.pm_id)], { stdio: 'inherit' });
+  if (stopped.error || stopped.status !== 0) {
+    throw new Error(cliText('Falha ao parar o bot antes do reinício. A porta não foi considerada livre.',
+      'Failed to stop the bot before restarting. The port was not considered available.'), { cause: stopped.error });
+  }
+}
+
+async function runtimeReady(config: BotConfig, host: string, starting = true): Promise<string | undefined> {
+  const url = config.mode === 'marketplace'
+    ? await (starting ? waitForManifest(config, host) : verifyManifest(config, host))
+    : undefined;
+  const proc = managedBotProcess(config);
+  if (proc?.pm2_env?.status !== 'online' || !proc.pid) {
+    throw new ManifestReadinessError(cliText(
+      'O pm2 não confirmou este bot online. Consulte monkybot logs; a inicialização não foi confirmada.',
+      'pm2 did not confirm this bot online. Check monkybot logs; startup was not confirmed.'));
+  }
+  return url;
+}
+
+function printManifestReady(url: string | undefined): void {
+  if (!url) return;
+  console.log(`   Manifest: ${url}`);
+  console.log(cliText(
+    '   Manifest verificado localmente. Confirme o acesso a esta URL a partir do servidor Monky; firewall e acesso externo não foram testados.',
+    '   Manifest verified locally. Confirm access to this URL from the Monky server; firewall and external reachability were not tested.'));
+}
+
 export async function startCommand(): Promise<void> {
   const config = loadConfigOrDie();
-  const url = manifestUrl(config);
+  manifestUrl(config);
 
   const proc = managedBotProcess(config);
+  const host = managedManifestHost(proc);
   if (proc?.pm2_env?.status === 'online' && proc.pid) {
+    let url: string | undefined;
+    try {
+      url = await runtimeReady(config, host, false);
+    } catch (error: unknown) {
+      if (!(error instanceof ManifestReadinessError) || config.mode !== 'marketplace') throw error;
+      console.log(color(cliText(
+        `⚠️  O manifest atual não está pronto. Recriando somente o processo deste bot (pm2 ID ${proc.pm_id}). ${error.message}`,
+        `⚠️  The current manifest is not ready. Recreating only this bot's process (pm2 ID ${proc.pm_id}). ${error.message}`), ANSI.yellow));
+      url = await restartBot(config, true);
+      console.log(color(cliText('🔄 Monky Bot reiniciado com a configuração atual!',
+        '🔄 Monky Bot restarted with the current configuration!'), ANSI.green));
+      printManifestReady(url);
+      return;
+    }
     console.log(color(cliText(`⚠️  Bot já está rodando (PID ${proc.pid}).`, `⚠️  Bot is already running (PID ${proc.pid}).`), ANSI.yellow));
     console.log(color(cliText('Use monkybot restart para reiniciar.', 'Use monkybot restart to restart.'), ANSI.dim));
+    printManifestReady(url);
     return;
   }
 
-  const host = managedManifestHost(proc);
   await checkManifestPort(config, host);
   ensurePm2();
   ensureBotBuilt(config.botDir);
@@ -114,16 +160,20 @@ export async function startCommand(): Promise<void> {
     throw new Error(cliText('Falha ao iniciar o bot via pm2.', 'Failed to start the bot with pm2.'), { cause: result.error });
   }
 
-  runSync('pm2', ['save'], { stdio: 'ignore' });
+  const url = await runtimeReady(config, host);
+  const saved = runSync('pm2', ['save'], { stdio: 'ignore' });
+  if (saved.error || saved.status !== 0) {
+    throw new Error(cliText('Bot iniciado, mas não foi possível salvar o estado do pm2.',
+      'Bot started, but pm2 state could not be saved.'), { cause: saved.error });
+  }
 
   console.log();
   console.log(color(cliText('✅ Monky Bot iniciado!', '✅ Monky Bot started!'), ANSI.green));
   console.log(`   ${cliText('Modo', 'Mode')}: ${config.mode}`);
   if (config.mode === 'manual') {
     console.log(`   ${cliText('Servidor', 'Server')}: ${config.serverUrl}`);
-  } else {
-    console.log(`   Manifest: ${url}`);
   }
+  printManifestReady(url);
   console.log();
   console.log(color(cliText('Comandos úteis:', 'Useful commands:'), ANSI.bold));
   console.log(cliText('  monkybot status    — Ver estado do bot', '  monkybot status    — Show bot status'));
@@ -150,18 +200,12 @@ export function stopCommand(): void {
   console.log(color(cliText('🛑 Monky Bot parado.', '🛑 Monky Bot stopped.'), ANSI.green));
 }
 
-export async function restartBot(config: BotConfig, fresh = false): Promise<void> {
+export async function restartBot(config: BotConfig, fresh = false): Promise<string | undefined> {
   manifestUrl(config);
   const proc = managedBotProcess(config);
   const host = managedManifestHost(proc);
 
-  if (proc) {
-    const stopped = runSync('pm2', ['stop', String(proc.pm_id)], { stdio: 'inherit' });
-    if (stopped.error || stopped.status !== 0) {
-      throw new Error(cliText('Falha ao parar o bot antes do reinício. A porta não foi considerada livre.',
-        'Failed to stop the bot before restarting. The port was not considered available.'), { cause: stopped.error });
-    }
-  }
+  if (proc) stopManagedBotBeforeRestart(proc);
 
   await checkManifestPort(config, host);
   ensurePm2();
@@ -175,24 +219,28 @@ export async function restartBot(config: BotConfig, fresh = false): Promise<void
     }
   }
 
+  await checkManifestPort(config, host);
   const ecosystemPath = writeEcosystem(config, host);
   const result = runSync('pm2', ['startOrRestart', ecosystemPath], { stdio: 'inherit' });
   if (result.error || result.status !== 0) {
     throw new Error(cliText('Falha ao reiniciar o bot.', 'Failed to restart the bot.'), { cause: result.error });
   }
 
+  const url = await runtimeReady(config, host);
   const saved = runSync('pm2', ['save'], { stdio: 'ignore' });
   if (saved.error || saved.status !== 0) {
     throw new Error(cliText('Bot reiniciado, mas não foi possível salvar o estado do pm2.',
       'Bot restarted, but pm2 state could not be saved.'), { cause: saved.error });
   }
+  return url;
 }
 
 export async function restartCommand(args: string[]): Promise<void> {
-  await restartBot(loadConfigOrDie(), args.includes('--fresh'));
+  const url = await restartBot(loadConfigOrDie(), args.includes('--fresh'));
 
   console.log();
   console.log(color(cliText('🔄 Monky Bot reiniciado!', '🔄 Monky Bot restarted!'), ANSI.green));
+  printManifestReady(url);
 }
 
 export function statusCommand(): void {

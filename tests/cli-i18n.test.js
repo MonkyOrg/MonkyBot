@@ -203,7 +203,9 @@ for (const locale of ['pt-BR', 'en']) {
       const { EventEmitter } = require('node:events');
       const sdk = require('@monky/bot-sdk');
       const { MusicError } = require('./dist/music/errors');
-      require('./dist/utils/keys').loadOrGenerateKeys = () => ({ publicKeyHex: 'fixture-only', privateKeyPem: '' });
+      require('./dist/utils/keys').loadOrGenerateKeys = () => ({
+        publicKeyHex: '302a300506032b6570032100' + '11'.repeat(32), privateKeyPem: '',
+      });
       require('./dist/profile').loadBotAvatar = () => '';
       require('./dist/commands').registerAllCommands = () => async () => {};
       class FixtureBot extends EventEmitter {
@@ -216,7 +218,8 @@ for (const locale of ['pt-BR', 'en']) {
               'HTTP 403 https://rr1.googlevideo.com/videoplayback?sig=fixture-secret token=fixture-secret'),
           }), { serverId: 'fixture-server' }));
         }
-        async serve() { return { address: () => ({ port: 7780 }) }; }
+        async serve() { return Object.assign(new EventEmitter(), { address: () => ({ port: 7780 }) }); }
+        async close() {}
       }
       sdk.BotClient = FixtureBot;
       process.env.MONKY_SERVE = 'true';
@@ -296,6 +299,8 @@ for (const locale of ['pt-BR', 'en']) {
       if (args.includes('--help')) {
         assert.match(result.output, locale === 'en' ? /USAGE|COMMANDS/ : /USO|COMANDOS/);
         for (const name of ['setup', 'music-check', 'music-diagnose', 'language']) assert.ok(result.output.includes(name));
+        assert.match(result.output, locale === 'en' ? /automatically starts\/restarts/ : /inicia\/reinicia automaticamente/);
+        assert.doesNotMatch(result.output, /2\.\s+monkybot start/);
       }
       if (args[0] === 'config') assert.match(result.output, locale === 'en' ? /No configuration/ : /Nenhuma configuração/);
       if (args[0] === '--version') assert.match(result.output, /^monkybot \d+\.\d+\.\d+/);

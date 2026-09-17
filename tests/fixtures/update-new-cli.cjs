@@ -20,6 +20,13 @@ const pm2 = require('./cli/pm2');
 const processes = require('./cli/process');
 const music = require('./cli/musicTools');
 const port = require('./cli/manifestPort');
+const readiness = require('./cli/manifestReadiness');
+const { getManifestUrl } = require('./utils/manifest');
+readiness.waitForManifest = async (config, host) => {
+  const url = getManifestUrl(config.publicHost, config.servePort ?? port.DEFAULT_MANIFEST_PORT);
+  record('manifest-ready', { url, host });
+  return url;
+};
 pm2.findBotProcess = () => state.managed;
 pm2.ensurePm2 = () => record('ensure-pm2');
 const writeEcosystem = pm2.writeEcosystem;
