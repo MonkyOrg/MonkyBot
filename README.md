@@ -800,18 +800,24 @@ npm run smoke:pack -- release/monky-bot-2.0.0.tgz
 ```
 
 O teste do tarball instala **offline, com cache vazio e prefixo local isolado**,
-executa o CLI `--version` e inicia o bot empacotado para consultar `/manifest`,
-incluindo o logo oficial. Resolução de módulos fora da instalação é rejeitada
+executa o CLI `--version`, negocia voz P2P com ICE/DTLS e recebe um pacote Opus
+sintético pelo caminho de voz do SDK incluído. Também inicia o bot empacotado
+para consultar `/manifest`, incluindo o logo oficial, e verifica os vínculos
+após reiniciar o processo. Resolução de módulos fora da instalação é rejeitada
 para impedir que dependências do checkout escondam falhas. Nenhum bot ou pm2
 global é instalado, parado ou reiniciado.
 
 A CI executa esse teste **antes de publicar**. A variável de repositório
 `MONKY_SDK_RELEASE` pode fixar a tag da release do Monky que fornece o SDK; sem ela,
 usa-se o SDK publicado mais recente, betas inclusive. Em ambos os casos, o build
-falha se o SDK não corresponder ao protocolo 19 ou não oferecer seletores duráveis,
-voz, telas, execução local concreta e nomes de comandos localizados. O pacote preserva as dependências transitivas do SDK (incluindo
-WebRTC/werift), mesmo quando o SDK é um workspace `file:`. Publique a release compatível do
-Monky antes de publicar este bot.
+falha se o SDK não corresponder ao protocolo declarado em `package.json` ou não
+oferecer seletores duráveis, voz, telas, execução local concreta e nomes de
+comandos localizados. O pacote preserva a localização e a identidade das
+dependências transitivas do SDK (incluindo WebRTC/werift), sem clonar uma
+dependência compartilhada para cada consumidor. Instâncias ou versões
+distintas permanecem separadas; uma resolução que não possa ser preservada
+interrompe o empacotamento. Workspaces `file:` continuam suportados. Publique
+a release compatível do Monky antes de publicar este bot.
 
 ## Como funciona
 

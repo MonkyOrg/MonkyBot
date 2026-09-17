@@ -46,6 +46,41 @@ async function stopChild(child) {
   });
 }
 
+async function exercisePackagedVoice() {
+  const assert = require('node:assert/strict');
+  const { createRequire } = require('node:module');
+  const fromSdk = createRequire(require.resolve('@monky/bot-sdk'));
+  const { OpusPeer, opusCodec } = fromSdk('./voice/OpusPeer');
+  const { RTCPeerConnection } = fromSdk('werift');
+  const failures = [];
+  const sender = new OpusPeer([], error => failures.push(error));
+  const receiver = new RTCPeerConnection({
+    codecs: { audio: [opusCodec()] }, iceServers: [], bundlePolicy: 'max-bundle',
+  });
+  const packets = [];
+  receiver.onTrack.subscribe(track => track.onReceiveRtp.subscribe(packet => packets.push(packet.payload)));
+  try {
+    await sender.pc.setLocalDescription(await sender.pc.createOffer());
+    assert.match(sender.pc.localDescription.sdp, /a=fingerprint:sha-256/i);
+    await receiver.setRemoteDescription(sender.pc.localDescription);
+    await receiver.setLocalDescription(await receiver.createAnswer());
+    await sender.pc.setRemoteDescription(receiver.localDescription);
+    await sender.ready;
+    const silence = Uint8Array.from([0xf8, 0xff, 0xfe]);
+    await sender.write(silence);
+    const deadline = Date.now() + 5000;
+    while (!packets.length && !failures.length && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.deepEqual(failures, []);
+    assert.equal(sender.isReady, true);
+    assert.equal(receiver.connectionState, 'connected');
+    assert.deepEqual(packets, [Buffer.from(silence)]);
+  } finally {
+    await Promise.all([sender.close(), receiver.close()]);
+  }
+}
+
 async function smokePack(tarball) {
   const artifact = path.resolve(tarball);
   assert.ok(fs.statSync(artifact).isFile(), 'A packed tarball is required.');
@@ -98,6 +133,12 @@ async function smokePack(tarball) {
     ], { cwd: bot, env, encoding: 'utf8', timeout: 15000 });
     if (protocol.error) throw protocol.error;
     assert.equal(protocol.status, 0, `Packaged SDK protocol mismatch.\n${protocol.stderr}`);
+
+    const voice = spawnSync(process.execPath, [
+      ...guard, '-e', `(${exercisePackagedVoice.toString()})().catch(error => { console.error(error.stack); process.exitCode = 1; });`,
+    ], { cwd: bot, env, encoding: 'utf8', timeout: 40000 });
+    if (voice.error) throw voice.error;
+    assert.equal(voice.status, 0, `Packaged P2P voice failed.\n${voice.stderr}`);
 
     const start = async () => {
       child = spawn(process.execPath, [...guard, path.join(bot, 'dist', 'index.js')], {
@@ -192,7 +233,7 @@ async function smokePack(tarball) {
     await start();
     await waitForCommands(2);
     assert.equal(fs.readFileSync(file, 'utf8'), saved);
-    console.log(`[smoke] Offline install, isolated SDK protocol ${pkg.monky.protocolVersion}, CLI ${pkg.version}, official avatar, and persistent marketplace process restart passed.`);
+    console.log(`[smoke] Offline install, isolated SDK protocol ${pkg.monky.protocolVersion}, P2P ICE/DTLS and Opus, CLI ${pkg.version}, official avatar, and persistent marketplace process restart passed.`);
   } finally {
     await stopChild(child);
     if (server) {

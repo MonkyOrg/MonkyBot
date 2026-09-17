@@ -64,39 +64,55 @@ function resolvePackage(requester, name) {
   // from their own workspace, not from the bot's node_modules.
   for (const directory of lookupPaths(requester, name)) {
     const candidate = path.join(directory, name);
-    if (fs.existsSync(path.join(candidate, 'package.json'))) return fs.realpathSync(candidate);
+    if (fs.existsSync(path.join(candidate, 'package.json'))) {
+      return { source: fs.realpathSync(candidate), modules: fs.realpathSync(directory) };
+    }
   }
   return null;
 }
 
 function bundleDependencies(sourceRoot, destinationRoot) {
   const placed = new Map();
+  const locations = new Map([[fs.realpathSync(sourceRoot), destinationRoot]]);
+  const moduleDirectories = new Map();
+  const edges = [];
   let packageCount = 0;
 
-  function copyDependency(name, requesterSource, requesterDestination, optional, ancestors) {
-    const source = resolvePackage(requesterSource, name);
-    if (!source) {
+  function copyDependency(name, requesterSource, requesterDestination, optional) {
+    const resolved = resolvePackage(requesterSource, name);
+    if (!resolved) {
       if (optional) return null;
       throw new Error(`Missing required dependency "${name}", requested by ${requesterSource}`);
     }
+    const { source, modules } = resolved;
     const pkg = readJson(path.join(source, 'package.json'));
     if (typeof pkg.name !== 'string' || typeof pkg.version !== 'string' || !pkg.version) {
       throw new Error(`Invalid package metadata: ${path.join(source, 'package.json')}`);
     }
     const spec = name === pkg.name ? pkg.version : `npm:${pkg.name}@${pkg.version}`;
 
-    for (const directory of lookupPaths(requesterDestination, name)) {
-      const existing = placed.get(path.join(directory, name));
-      if (existing !== undefined) {
-        if (existing === source) return spec;
-        break;
-      }
+    // Preserve the original node_modules owner: cloning one shared dependency
+    // beneath each consumer splits module identity and ASN.1 schema registries.
+    let destinationModules = moduleDirectories.get(modules);
+    if (!destinationModules) {
+      const owner = locations.get(fs.realpathSync(path.dirname(modules)));
+      destinationModules = path.join(owner ?? requesterDestination, 'node_modules');
+      moduleDirectories.set(modules, destinationModules);
     }
-    if (ancestors.includes(source)) {
-      throw new Error(`Cannot preserve a shadowed dependency cycle involving "${name}" at ${source}`);
+    const destination = path.join(destinationModules, name);
+    const existing = placed.get(destination);
+    if (existing !== undefined && existing !== source) {
+      throw new Error(`Conflicting dependency locations for "${name}" at ${destination}`);
     }
+    const location = locations.get(source);
+    if (location !== undefined && location !== destination) {
+      throw new Error(`Cannot preserve the shared identity of "${name}" at ${source}`);
+    }
+    edges.push({ name, requesterDestination, destination });
+    if (existing === source) return spec;
 
-    const destination = path.join(requesterDestination, 'node_modules', name);
+    locations.set(source, destination);
+    placed.set(destination, source);
     fs.mkdirSync(destination, { recursive: true });
     if (pkg.name.startsWith('@monky/')) {
       requiredFile(path.join(source, 'dist', 'index.js'));
@@ -128,11 +144,10 @@ function bundleDependencies(sourceRoot, destinationRoot) {
       }
     }
 
-    placed.set(destination, source);
     packageCount++;
     const dependencies = {};
     for (const [dependency, isOptional] of productionDependencies(pkg)) {
-      const childSpec = copyDependency(dependency, source, destination, isOptional, [...ancestors, source]);
+      const childSpec = copyDependency(dependency, source, destination, isOptional);
       if (childSpec !== null) dependencies[dependency] = childSpec;
     }
     // The release has already resolved all peers/optional modules. Do not let
@@ -150,8 +165,13 @@ function bundleDependencies(sourceRoot, destinationRoot) {
   const dependencies = {};
   const rootPackage = readJson(path.join(sourceRoot, 'package.json'));
   for (const [name, optional] of productionDependencies(rootPackage)) {
-    const spec = copyDependency(name, fs.realpathSync(sourceRoot), destinationRoot, optional, []);
+    const spec = copyDependency(name, fs.realpathSync(sourceRoot), destinationRoot, optional);
     if (spec !== null) dependencies[name] = spec;
+  }
+  for (const { name, requesterDestination, destination } of edges) {
+    if (resolvePackage(requesterDestination, name)?.source !== fs.realpathSync(destination)) {
+      throw new Error(`Bundled dependency "${name}" resolves to the wrong instance from ${requesterDestination}`);
+    }
   }
   return { dependencies, packageCount };
 }
