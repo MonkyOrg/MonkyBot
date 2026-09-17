@@ -793,18 +793,23 @@ npm run smoke:pack -- release/monky-bot-2.0.0.tgz
 ```
 
 The tarball smoke test installs **offline, with an empty cache and an isolated
-local prefix**, runs CLI `--version`, and starts the packaged bot to request
-`/manifest`, including the official logo. Module resolution outside the installation
+local prefix**, runs CLI `--version`, negotiates P2P voice with ICE/DTLS, and
+receives a synthetic Opus packet through the bundled SDK voice path. It also
+starts the packaged bot to request `/manifest`, including the official logo,
+and verifies registrations after a process restart. Module resolution outside the installation
 is rejected so checkout dependencies cannot mask packaging failures. The test
 does not change global installations or stop/restart existing bot or pm2 processes.
 
 CI runs the smoke test **before publishing**. The repository variable
 `MONKY_SDK_RELEASE` can pin the Monky release tag providing the SDK; otherwise,
 the latest published SDK is used, including betas. Either way, the build fails
-unless the SDK matches protocol 19 and supports durable selectors, voice,
-screens, concrete local execution, and localized command names. Packaging preserves transitive SDK dependencies (including WebRTC/werift),
-even with a `file:` workspace SDK. Publish the compatible Monky release before
-publishing this bot.
+unless the SDK matches the protocol declared in `package.json` and supports
+durable selectors, voice, screens, concrete local execution, and localized
+command names. Packaging preserves the location and identity of transitive SDK
+dependencies (including WebRTC/werift), without cloning a shared dependency for
+each consumer. Distinct instances or versions remain separate; a resolution
+that cannot be preserved stops packaging. `file:` workspaces remain supported.
+Publish the compatible Monky release before publishing this bot.
 
 ## How it works
 

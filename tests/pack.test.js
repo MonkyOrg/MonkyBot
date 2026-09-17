@@ -47,6 +47,39 @@ test('bundling preserves per-requester nested versions instead of using a global
   assert.equal(fs.existsSync(path.join(output, 'node_modules', 'leaf')), false);
 });
 
+test('shared dependencies retain one module instance and their constructor registry', (t) => {
+  const { source, output } = fixture(t);
+  json(path.join(source, 'package.json'), { dependencies: { certificate: '*' } });
+  moduleAt(path.join(source, 'node_modules', 'registry'), 'registry', '1.0.0', {},
+    'module.exports = new WeakMap();');
+  moduleAt(path.join(source, 'node_modules', 'algorithm'), 'algorithm', '1.0.0',
+    { dependencies: { registry: '*' } },
+    "class AlgorithmIdentifier {} require('registry').set(AlgorithmIdentifier, 'schema'); module.exports = AlgorithmIdentifier;");
+  moduleAt(path.join(source, 'node_modules', 'certificate'), 'certificate', '1.0.0',
+    { dependencies: { algorithm: '*', registry: '*' } },
+    "module.exports = require('registry').get(require('algorithm'));");
+
+  const result = bundleDependencies(source, output);
+  assert.equal(result.packageCount, 3, 'A shared package must not become multiple physical modules.');
+  assert.equal(fromPackage(output, 'certificate')('./index.js'), 'schema');
+  assert.equal(fromPackage(output, 'certificate').resolve('registry'),
+    fromPackage(output, 'algorithm').resolve('registry'));
+});
+
+test('distinct source instances remain distinct even when their name and version match', (t) => {
+  const { source, output } = fixture(t);
+  json(path.join(source, 'package.json'), { dependencies: { first: '*', second: '*' } });
+  for (const name of ['first', 'second']) {
+    const directory = path.join(source, 'node_modules', name);
+    moduleAt(directory, name, '1.0.0', { dependencies: { registry: '*' } },
+      "module.exports = require('registry');");
+    moduleAt(path.join(directory, 'node_modules', 'registry'), 'registry', '1.0.0', {},
+      'module.exports = new WeakMap();');
+  }
+  assert.equal(bundleDependencies(source, output).packageCount, 4);
+  assert.notEqual(fromPackage(output, 'first')('./index.js'), fromPackage(output, 'second')('./index.js'));
+});
+
 test('npm tarballs retain nested versions and source-local modules offline, including paths with spaces', (t) => {
   const { root, source } = fixture(t);
   const output = path.join(root, 'package with spaces');
@@ -54,9 +87,12 @@ test('npm tarballs retain nested versions and source-local modules offline, incl
   json(path.join(source, 'package.json'), { dependencies: { first: '*', second: '*', voice: '*' } });
   for (const [name, version] of [['first', '1.0.0'], ['second', '2.0.0']]) {
     const directory = path.join(source, 'node_modules', name);
-    moduleAt(directory, name, '1.0.0', { dependencies: { leaf: '*' } }, "module.exports = require('leaf');");
+    moduleAt(directory, name, '1.0.0', { dependencies: { leaf: '*', registry: '*' } },
+      "module.exports = { version: require('leaf'), registry: require('registry') };");
     moduleAt(path.join(directory, 'node_modules', 'leaf'), 'leaf', version);
   }
+  moduleAt(path.join(source, 'node_modules', 'registry'), 'registry', '1.0.0', {},
+    'module.exports = new WeakMap();');
   const voice = path.join(source, 'node_modules', 'voice');
   moduleAt(voice, 'voice', '1.0.0', { main: 'src/index.js' });
   fs.mkdirSync(path.join(voice, 'src', 'node_modules', 'lib'), { recursive: true });
@@ -65,7 +101,9 @@ test('npm tarballs retain nested versions and source-local modules offline, incl
   const { dependencies } = bundleDependencies(source, output);
   moduleAt(output, '@monky/bundle-fixture', '1.0.0',
     { dependencies, bundleDependencies: Object.keys(dependencies) },
-    "module.exports = [require('first'), require('second'), require('voice')];");
+    "const first = require('first'), second = require('second');" +
+    "if (first.registry !== second.registry) throw new Error('Shared module identity changed during packaging');" +
+    "module.exports = [first.version, second.version, require('voice')];");
 
   const npmHelper = path.resolve(__dirname, '..', 'scripts', 'npm.js');
   const install = path.join(root, 'install with spaces');
@@ -132,8 +170,9 @@ test('declared npm polyfills that share Node builtin names remain bundled', (t) 
   moduleAt(path.join(source, 'node_modules', 'buffer'), 'buffer', '6.0.3');
   const result = bundleDependencies(source, output);
   assert.equal(result.packageCount, 2);
-  const copied = path.join(output, 'node_modules', 'voice', 'node_modules', 'buffer');
+  const copied = path.join(output, 'node_modules', 'buffer');
   assert.equal(JSON.parse(fs.readFileSync(path.join(copied, 'package.json'))).version, '6.0.3');
+  assert.equal(fromPackage(output, 'voice').resolve('buffer/'), path.join(copied, 'index.js'));
 });
 
 test('declared runtime dependencies may include validated declaration-only @types packages', (t) => {
