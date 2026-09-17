@@ -2,7 +2,7 @@ import { BotClient, PROTOCOL_VERSION, ProtocolErrorCode } from '@monky/bot-sdk';
 import { registerAllCommands, requestedCapabilities } from './commands';
 import { DEFAULT_BOT_NAME, loadBotAvatar } from './profile';
 import { loadOrGenerateKeys, REGISTRATIONS_PATH } from './utils/keys';
-import { getManifestUrl } from './utils/manifest';
+import { getManifestUrl, identifyManifest } from './utils/manifest';
 import { errorDiagnostic, safeDiagnostic } from './music/process';
 import { cliText } from './cli/i18n';
 import { validateCliPublicHost } from './cli/config';
@@ -113,6 +113,7 @@ async function main(): Promise<void> {
         host: config.serveHost,
         publicHost: host,
       });
+      identifyManifest(server, keys.publicKeyHex);
 
       const addr = server.address();
       const port = typeof addr === 'object' && addr ? addr.port : config.servePort;

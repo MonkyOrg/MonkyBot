@@ -314,6 +314,8 @@ for (const replaceInPlace of [false, true]) {
     assert.equal(fresh.pm2Home, f.state.pm2Home);
     assert.deepEqual(result.calls.filter(call => call.event === 'pm2').map(call => call.args[0]),
       ['stop', 'startOrRestart', 'save']);
+    assert.deepEqual(result.calls.filter(call => call.event === 'manifest-ready').map(call => call.url),
+      [`http://${f.config.publicHost}:${f.config.servePort}/manifest`]);
     assert.equal(result.calls.some(call => call.event === 'prepare'), false,
       'A fresh CLI restart must not prepare media tools on the bot host.');
     assert.match(result.stdout, /atualizado para 6\.0\.4-beta|Bot reiniciado/);

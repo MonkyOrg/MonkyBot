@@ -32,8 +32,8 @@ ${color('USO', ANSI.bold)}
   monkybot <comando> [opções]
 
 ${color('COMANDOS', ANSI.bold)}
-  setup                  Configura o bot interativamente (URL recomendado ou token manual avançado)
-  start                  Inicia o bot em background via pm2
+  setup                  Configura e inicia/reinicia automaticamente (URL recomendado ou token manual avançado)
+  start                  Inicia o bot via pm2 ou verifica o manifest se já estiver online
   stop                   Para o bot
   restart                Reinicia o bot aplicando a configuração atual
   status                 Exibe o estado do bot (PID, uptime, memória)
@@ -65,7 +65,7 @@ ${color('OPÇÕES POR COMANDO', ANSI.bold)}
   music-diagnose --url <url> Consulta só metadados; não baixa nem reproduz áudio
 
 ${color('EXEMPLOS', ANSI.bold)}
-  monkybot setup                     Configura a instalação por URL (recomendado) ou o token manual
+  monkybot setup                     Configura e aplica um início/reinício limpo automaticamente
   monkybot start                     Inicia o bot em background
   monkybot update                    Atualiza para a última versão
   monkybot update --check            Verifica se há atualizações
@@ -74,8 +74,8 @@ ${color('EXEMPLOS', ANSI.bold)}
   monkybot logs --lines 100          Exibe as últimas 100 linhas de log
 
 ${color('PRIMEIROS PASSOS', ANSI.bold)}
-  1. monkybot setup     — Escolha URL (recomendado) ou token manual (avançado)
-  2. monkybot start     — Inicie em background
+  1. monkybot setup     — Escolha URL ou token; o bot inicia/reinicia automaticamente
+  2. Instalação por URL — Copie o manifest exibido para Configurações do Servidor → Bots
   3. monkybot status    — Verifique que está rodando
   4. monkybot logs      — Acompanhe os logs
 
@@ -87,8 +87,8 @@ ${color('USAGE', ANSI.bold)}
   monkybot <command> [options]
 
 ${color('COMMANDS', ANSI.bold)}
-  setup                  Interactive setup (recommended URL or advanced manual token)
-  start                  Start the bot in the background with pm2
+  setup                  Configure and automatically start/restart (recommended URL or advanced manual token)
+  start                  Start with pm2 or verify the manifest if already online
   stop                   Stop the bot
   restart                Restart the bot with the current configuration
   status                 Show bot status (PID, uptime, memory)
@@ -120,7 +120,7 @@ ${color('COMMAND OPTIONS', ANSI.bold)}
   music-diagnose --url <url> Metadata only; never download or play audio
 
 ${color('EXAMPLES', ANSI.bold)}
-  monkybot setup                    Configure URL installation or a manual token
+  monkybot setup                    Configure and automatically apply a fresh start/restart
   monkybot start                    Start the bot in the background
   monkybot update                   Update to the latest version
   monkybot update --check           Check for updates
@@ -129,8 +129,8 @@ ${color('EXAMPLES', ANSI.bold)}
   monkybot logs --lines 100         Show the last 100 log lines
 
 ${color('GETTING STARTED', ANSI.bold)}
-  1. monkybot setup     — Choose URL (recommended) or manual token (advanced)
-  2. monkybot start     — Start in the background
+  1. monkybot setup     — Choose URL or token; the bot automatically starts/restarts
+  2. URL installation  — Copy the displayed manifest into Server Settings → Bots
   3. monkybot status    — Confirm it is running
   4. monkybot logs      — Follow the logs
 

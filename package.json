@@ -31,7 +31,7 @@
     "protocolVersion": 20
   },
   "dependencies": {
-    "@monky/bot-sdk": "file:vendor/monky-bot-sdk-22.0.9-beta.tgz"
+    "@monky/bot-sdk": "file:vendor/monky-bot-sdk-22.0.10-beta.tgz"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
