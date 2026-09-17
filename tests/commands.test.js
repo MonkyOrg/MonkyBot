@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { BotClient } = require('@monky/bot-sdk');
-const { commands, registerAllCommands } = require('../dist/commands');
+const { commands, registerAllCommands, requestedCapabilities } = require('../dist/commands');
 const { diceCommand } = require('../dist/commands/dice');
 const { eightBallCommand } = require('../dist/commands/eightball');
 const { pollCommand } = require('../dist/commands/poll');
@@ -20,6 +20,12 @@ const presentations = [
   ['stop', 'parar', 'stop'], ['leave', 'sair', 'leave'], ['remove', 'remover', 'remove'],
   ['clear', 'limpar', 'clear'], ['jogo-da-velha', 'jogo-da-velha', 'tic-tac-toe'],
 ];
+
+test('production declares only the capabilities its commands use', () => {
+  assert.deepEqual(requestedCapabilities, [
+    'commands', 'send_messages', 'publish_voice', 'local_execution', 'selectors', 'miniapps',
+  ]);
+});
 
 test('all 17 official definitions declare the expected presentation names and retain translated option text', () => {
   assert.equal(commands.length, 17);
@@ -46,7 +52,7 @@ test('localized schemas survive SDK registration and canonical language normaliz
   assert.equal(typeof sdk.localizeCommand, 'function');
   assert.equal(typeof sdk.getCommandPresentation, 'function');
   const definitionsBefore = JSON.stringify(commands);
-  const bot = new BotClient({ publicKey: 'test-public-key' });
+  const bot = new BotClient({ publicKey: 'test-public-key', requestedCapabilities });
   const dispose = registerAllCommands(bot);
   try {
     for (const command of commands) {
@@ -102,7 +108,7 @@ function context({ args = {}, locale = 'pt-BR', controller = new AbortController
 }
 
 test('all public command names register with the current SDK and dispose listeners', async () => {
-  const bot = new BotClient({ publicKey: 'test-public-key' });
+  const bot = new BotClient({ publicKey: 'test-public-key', requestedCapabilities });
   const dispose = registerAllCommands(bot);
   try {
     assert.deepEqual(commands.map((command) => command.name), ['ping', 'dado', 'moeda', '8ball', 'enquete', 'ajuda',
@@ -214,7 +220,7 @@ test('per-user command language is independent of the operator CLI language', ()
 });
 
 test('private help matches every registered display name without changing another user locale', async () => {
-  const bot = new BotClient({ publicKey: 'test-public-key' });
+  const bot = new BotClient({ publicKey: 'test-public-key', requestedCapabilities });
   const dispose = registerAllCommands(bot);
   const original = JSON.stringify(commands);
   try {

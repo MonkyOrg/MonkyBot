@@ -270,6 +270,10 @@ export function registerMusicCommands(bot: BotClient): () => Promise<void> {
   const voiceDisconnected = ({ serverId, reason, channelId }: { serverId: string; reason: string; channelId?: string }): void => {
     // The SDK clears the disconnected voice first; an existing one belongs to a newer generation.
     if (bot.getVoiceConnection(serverId) || (channelId && queues.snapshot(serverId).channelId !== channelId)) return;
+    // The pending join rejects with its own cause and each enqueue releases its source.
+    // Cancelling the queue here would replace that admission failure with "cancelled".
+    if (queues.hasPendingVoiceAdmission(serverId) &&
+        (reason === 'join_failed' || reason === 'transport_failed')) return;
     if (['disconnected', 'socket_lost', 'server_shutdown'].includes(reason)) {
       rememberInterruption(serverId);
       disconnectQueue(serverId);

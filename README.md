@@ -6,16 +6,24 @@ O **bot oficial de referência** do Monky — comandos utilitários, diversão e
 
 ## Compatibilidade
 
-Esta versão exige **protocolo Monky 19**. Atualize o aplicativo e o servidor Monky
+Esta versão exige **protocolo Monky 20**. Atualize o aplicativo e o servidor Monky
 juntos antes de atualizar o bot; servidores com protocolos anteriores não são compatíveis.
 O SDK incluído no pacote é verificado no build e não precisa ser instalado à parte.
 
 Esta versão usa o SDK oficial da
-[release Monky v21.0.2-beta](https://github.com/MonkyOrg/Monky/releases/tag/v21.0.2-beta),
+[release Monky v22.0.9-beta](https://github.com/MonkyOrg/Monky/releases/tag/v22.0.9-beta),
 com origem e SHA-256 documentados em [vendor/README.md](vendor/README.md).
 O pacote em `vendor/`, a dependência e o lockfile fixam os mesmos bytes.
-Use cliente e servidor compatíveis com o protocolo 19; nenhum SDK temporário
+Use cliente e servidor compatíveis com o protocolo 20; nenhum SDK temporário
 de desenvolvimento é distribuído.
+
+Na instalação, um administrador com permissão de gerenciar bots revisa os
+acessos solicitados: comandos, mensagens públicas, publicação de voz, execução
+local, enquetes e miniapps. O MonkyBot não solicita leitura geral do chat nem
+recepção da voz dos participantes. Vínculos manuais e bots migrados ficam sem
+acessos até essa revisão; negar um acesso impede a funcionalidade correspondente.
+A autorização do servidor para solicitar execução local não substitui o
+consentimento de cada pessoa para preparar e usar ferramentas no seu computador.
 
 Todo push na `main` gera uma versão `-beta`, marcada como pré-release, sem
 substituir a stable, independentemente do canal do SDK. Uma stable só é
@@ -557,6 +565,13 @@ Sem o diagnóstico do host, a causa do provedor permanece **não confirmada**.
    A entrada inicial usa a invocação ativa como autorização restrita àquela sala,
    inclusive em sala privada; o servidor recusa se a pessoa mudou de sala.
    O comando aguarda somente essa admissão inicial, nunca a duração da reprodução.
+
+Se a busca e a resolução funcionarem, mas o bot entrar e sair da voz sem tocar,
+confira `monkybot logs --no-follow --lines 100` no host do bot. Uma falha nessa
+admissão mantém seu diagnóstico original nos logs e uma resposta privada de voz;
+não é substituída por “operação cancelada” nem exige reinstalar ferramentas por
+suposição. Uma tentativa posterior cria uma nova admissão. Cancelar ou parar de
+fato durante a entrada continua cancelando a adição, sem áudio tardio.
 
 O bot aparece como um participante normal, sem mute/deafen automático, com
 indicador de atividade ao transmitir áudio e controles de volume/mute local.

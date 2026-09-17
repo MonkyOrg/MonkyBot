@@ -1,4 +1,4 @@
-import type { BotClient, CommandDefinition } from '@monky/bot-sdk';
+import type { BotCapability, BotClient, CommandDefinition } from '@monky/bot-sdk';
 import { pingCommand } from './ping';
 import { diceCommand } from './dice';
 import { coinCommand } from './coin';
@@ -11,6 +11,9 @@ import { cliText } from '../cli/i18n';
 
 const basicCommands: readonly CommandDefinition[] = [
   pingCommand, diceCommand, coinCommand, eightBallCommand, pollCommand, helpCommand,
+];
+export const requestedCapabilities: BotCapability[] = [
+  'commands', 'send_messages', 'publish_voice', 'local_execution', 'selectors', 'miniapps',
 ];
 export const commands: readonly Omit<CommandDefinition, 'handler'>[] = [
   ...basicCommands, ...musicDefinitions, ticTacToeDefinition,

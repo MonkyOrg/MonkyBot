@@ -1,5 +1,5 @@
 import { BotClient, PROTOCOL_VERSION, ProtocolErrorCode } from '@monky/bot-sdk';
-import { registerAllCommands } from './commands';
+import { registerAllCommands, requestedCapabilities } from './commands';
 import { DEFAULT_BOT_NAME, loadBotAvatar } from './profile';
 import { loadOrGenerateKeys, REGISTRATIONS_PATH } from './utils/keys';
 import { getManifestUrl } from './utils/manifest';
@@ -36,6 +36,7 @@ async function main(): Promise<void> {
   const avatarBase64 = loadBotAvatar();
   const bot = new BotClient({
     publicKey: keys.publicKeyHex,
+    requestedCapabilities,
     name: config.botName,
     avatarBase64,
     registrationFile: config.serve ? REGISTRATIONS_PATH : undefined,

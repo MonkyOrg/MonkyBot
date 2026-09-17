@@ -143,6 +143,11 @@ export class MusicQueues<T extends Track = ResolvedTrack> {
     this.authorize(actor, this.sessions.get(actor.serverId));
   }
 
+  hasPendingVoiceAdmission(serverId: string): boolean {
+    const session = this.sessions.get(serverId);
+    return !!session?.joining && !session.closing;
+  }
+
   async enqueue(actor: MusicActor, url: string, invocationSignal?: AbortSignal, currentActor?: () => MusicActor | Promise<MusicActor>): Promise<T> {
     if (this.disposed) throw new MusicError('cancelled');
     this.assertControl(actor);
