@@ -90,8 +90,61 @@ function registered(t, { frames = 1, open } = {}) {
   return { bot, play, control, loseVoice, configure, connections, chats, writes, declaration, settings };
 }
 
+for (const locale of ['pt-BR', 'en']) for (const reason of ['join_failed', 'transport_failed']) {
+  test(`initial voice admission failure keeps its cause and permits a fresh retry (${locale}, ${reason})`, async t => {
+    const f = registered(t);
+    const errors = [];
+    t.mock.method(console, 'error', message => errors.push(message));
+    const joining = t.mock.method(f.bot, 'joinVoice', async (serverId, channelId) => {
+      f.connections.set(serverId, { channelId, humanParticipantCount: 1 });
+      await tick();
+      // BotVoiceConnection emits this after teardown, before rejecting joinVoice.
+      f.loseVoice(reason);
+      throw new Error('SFU admission fixture failed');
+    });
+    const first = await f.play('a', locale);
+    assert.equal(first.controller.signal.aborted, false);
+    assert.equal(first.replies.length, 2);
+    assert.match(first.replies.at(-1), locale === 'pt-BR'
+      ? /Não foi possível entrar na sala de voz autorizada/
+      : /Could not join the authorized voice room/);
+    assert.doesNotMatch(first.replies.at(-1), /cancelad|cancelled|SFU admission fixture/i);
+    assert.ok(errors.some(message => message.includes('SFU admission fixture failed')),
+      'The sanitized original admission error must remain available to diagnostics');
+    assert.equal(f.connections.size, 0);
+    assert.equal(f.writes.length, 0);
+    assert.equal(f.chats.length, 0, 'A failed pending addition must not claim playback or publish duplicate failures');
+
+    joining.mock.restore();
+    const retry = await f.play('a', locale);
+    assert.match(retry.replies.at(-1), locale === 'pt-BR' ? /Adicionado à fila/ : /Added to queue/);
+    await until(() => f.writes.length > 0);
+  });
+}
+
+for (const reason of ['join_failed', 'transport_failed']) test(`an explicit stop still cancels an admission that later ${reason}`, async t => {
+  const f = registered(t);
+  const admission = gate();
+  let joining = false;
+  t.mock.method(f.bot, 'joinVoice', async (serverId, channelId) => {
+    f.connections.set(serverId, { channelId, humanParticipantCount: 1 });
+    joining = true;
+    await admission.promise;
+    f.loseVoice(reason);
+    throw new Error('Stopped admission fixture');
+  });
+  const pending = f.play();
+  await until(() => joining);
+  await f.control('stop');
+  admission.release();
+  const result = await pending;
+  assert.match(result.replies.at(-1), /Operation cancelled/);
+  assert.equal(f.writes.length, 0);
+  assert.equal(f.connections.size, 0);
+});
+
 test('music idle is a valid shared bot setting with localized labels and bounded defaults', async () => {
-  const bot = new BotClient({ publicKey: 'fixture' });
+  const bot = new BotClient({ publicKey: 'fixture', requestedCapabilities: [] });
   try {
     const definition = musicSettingsDefinition(60);
     assert.doesNotThrow(() => bot.settings(definition));

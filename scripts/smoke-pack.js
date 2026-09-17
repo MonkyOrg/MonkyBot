@@ -118,6 +118,9 @@ async function smokePack(tarball) {
     assert.equal(manifest.registrationUrl, url.replace('/manifest', '/register'));
     assert.deepEqual(manifest.commands.map((command) => command.name).sort(),
       COMMANDS);
+    assert.deepEqual(manifest.requestedCapabilities, [
+      'commands', 'send_messages', 'publish_voice', 'local_execution', 'selectors', 'miniapps',
+    ]);
     assert.equal(child.exitCode, null, 'Packaged runtime must still be running.');
 
     const fromBot = createRequire(path.join(bot, 'package.json'));
@@ -153,6 +156,11 @@ async function smokePack(tarball) {
         } else if (message.type === MessageType.BOT_UPDATE_PROFILE) {
           ws.send(JSON.stringify({ type: MessageType.BOT_PROFILE_UPDATED, requestId: message.requestId, payload: {} }));
         } else if (message.type === MessageType.COMMAND_REGISTER) {
+          if (JSON.stringify(message.payload?.requestedCapabilities) !== JSON.stringify(manifest.requestedCapabilities)) {
+            protocolError = new Error('Packaged command registration must match the published capability declaration.');
+            ws.close();
+            return;
+          }
           commandLists.push(message.payload?.commands);
         }
       });

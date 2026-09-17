@@ -6,16 +6,24 @@ The **official reference bot** for Monky — utility commands, fun and more.
 
 ## Compatibility
 
-This version requires **Monky protocol 19**. Update the Monky app and server
+This version requires **Monky protocol 20**. Update the Monky app and server
 together before updating the bot; earlier protocol versions are not compatible.
 The bundled SDK is checked during the build and needs no separate installation.
 
 This version uses the official SDK from
-[Monky v21.0.2-beta](https://github.com/MonkyOrg/Monky/releases/tag/v21.0.2-beta),
+[Monky v22.0.9-beta](https://github.com/MonkyOrg/Monky/releases/tag/v22.0.9-beta),
 with its origin and SHA-256 documented in [vendor/README.md](vendor/README.md).
 The archive in `vendor/`, dependency and lockfile pin the same bytes.
-Use client and server versions compatible with protocol 19; no temporary
+Use client and server versions compatible with protocol 20; no temporary
 development SDK is distributed.
+
+During installation, an administrator with permission to manage bots reviews
+the requested access: commands, public messages, voice publication, local
+execution, polls and miniapps. MonkyBot does not request general chat reading
+or participant voice reception. Manual links and migrated bots have no access
+until that review; denying access prevents the corresponding feature.
+Server permission to request local execution never replaces each person's
+consent to prepare and run tools on their computer.
 
 Every push to `main` produces a `-beta` prerelease without replacing stable,
 regardless of the SDK channel. A stable release is published only through
@@ -552,6 +560,14 @@ Without the host diagnostic, the provider cause remains **unconfirmed**.
    Initial admission uses the active invocation as authorization scoped to that
    room, including private rooms; the server rejects callers who have moved.
    The command waits for initial admission, never for the playback duration.
+
+If search and resolution work but the bot joins and leaves voice without
+playing, check `monkybot logs --no-follow --lines 100` on the bot host. An
+admission failure retains its original diagnostic in logs and a private voice
+error; it is not replaced by “operation cancelled” or treated as a reason to
+reinstall tools without evidence. A later attempt starts a fresh admission.
+Actually cancelling or stopping during admission still cancels the enqueue,
+without late audio.
 
 The bot appears as a normal participant, without automatic mute/deafen, with
 audio activity indicators and local volume/mute controls. Muting it only for
