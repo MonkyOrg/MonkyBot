@@ -15,7 +15,6 @@ const manifestPort = require('../dist/cli/manifestPort');
 const lifecycle = require('../dist/cli/commands/lifecycle');
 const pm2 = require('../dist/cli/pm2');
 const processHelpers = require('../dist/cli/process');
-const musicTools = require('../dist/cli/musicTools');
 const { DEFAULT_BOT_NAME } = require('../dist/profile');
 const { setBindHost, listen, freePort } = require('./helpers/manifest-port');
 const { setCliLocale } = require('../dist/cli/i18n');
@@ -129,10 +128,10 @@ test('setup saves configuration without preparing host media tools', async (t) =
   const state = mockConfig(t);
   interactiveAnswers(t, ['2', '', 'localhost:3000', 'fixture-token', '']);
   captureLogs(t);
-  const preparation = t.mock.method(musicTools, 'prepareMusicToolsForCli', () =>
-    assert.fail('Normal setup must not prepare host media tools.'));
+  const capture = t.mock.method(require('../dist/music/process'), 'capture', () =>
+    assert.fail('Normal setup must not run media tools.'));
   await setupCommand();
-  assert.equal(preparation.mock.callCount(), 0);
+  assert.equal(capture.mock.callCount(), 0);
   assert.equal(state.current.botToken, 'fixture-token');
   assert.equal(lifecycle.restartCommand.mock.callCount(), 1);
 });

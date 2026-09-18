@@ -1,17 +1,17 @@
 # SDK compativel
 
-`monky-bot-sdk-22.0.10-beta.tgz` e o pacote oficial da
-[release Monky v22.0.10-beta](https://github.com/MonkyOrg/Monky/releases/tag/v22.0.10-beta),
+`monky-bot-sdk-22.1.0.tgz` e o pacote oficial da
+[release stable Monky v22.1.0](https://github.com/MonkyOrg/Monky/releases/tag/v22.1.0),
 com o shared incluido, para o protocolo Monky **20**. A licenca MIT
 acompanha o pacote. O codigo-fonte permanece em `MonkyOrg/Monky`; este
 repositorio nao mantem um fork do SDK.
 
-Origem do codigo: commit `ea0cf0b3d21099b6cb9288bb7fc0c8aba866eca0`,
-apos o merge do PR MonkyOrg/Monky#668 e a publicacao automatica pela main.
-O arquivo foi baixado sem modificacoes e conferido contra o digest do GitHub
-e a lista de checksums da release. O manifesto oficial de compatibilidade
-confirma protocolo 20 e SDK 22.0.10-beta. SHA-256:
-`d0faf1d1728c8f51312b89f61ae7bcef2de1904c428df821a13f742c6f56de5e`.
+Origem do codigo: commit `c13d3230dd3c6db316ffc2341c38e45dd11ff4d7`,
+apos o merge do PR MonkyOrg/Monky#674. O pacote foi produzido pelo workflow
+[Release 35292727665](https://github.com/MonkyOrg/Monky/actions/runs/35292727665),
+sem modificacoes locais. Os bytes foram conferidos contra o asset publicado.
+Protocolo 20 e SDK 22.1.0. SHA-256:
+`ab1209189eacf51e5ae2a310bff6399fb0353aa7e588ed26ecb7d0735e4f4de2`.
 
 O pacote oficial permite `npm ci` sem depender de um checkout irmao do Monky.
 Cliente e servidor precisam usar o mesmo protocolo. O SDK publica a
@@ -20,6 +20,9 @@ Esta versao preserva voz, preferencias de idioma, miniapps, nomes de comandos
 localizados e paginacao, o runtime de midia reutilizavel e os contratos publicos
 de execucao local. Mantem a declaracao obrigatoria de capacidades, o
 consentimento administrativo e as revisoes de permissoes por instalacao.
+O CLI generico do SDK agora permite trocar a origem das atualizacoes apos
+instalar. O MonkyBot mantem seu CLI proprio; seus comandos musicais no cliente
+continuam disponiveis, sem ferramentas legadas no host do bot.
 
 Inclui a implementacao concreta de `BotClient.localExecution()`, o receptor RTC
 privado, `LocalExecutionError` e `LocalExecutionRpcError`, a conclusao
@@ -37,11 +40,11 @@ seu digest e atualize dependencia, lockfile e este registro de origem juntos.
 Substitua tag e nome do arquivo do exemplo pela nova versao:
 
 ```powershell
-gh release download v22.0.10-beta --repo MonkyOrg/Monky --pattern monky-bot-sdk-22.0.10-beta.tgz --dir vendor
-npm install --save-exact .\vendor\monky-bot-sdk-22.0.10-beta.tgz
+gh release download v22.1.0 --repo MonkyOrg/Monky --pattern monky-bot-sdk-22.1.0.tgz --dir vendor
+npm install --save-exact .\vendor\monky-bot-sdk-22.1.0.tgz
 npm run check:sdk
 npm test
-gh variable set MONKY_SDK_RELEASE --repo MonkyOrg/MonkyBot --body v22.0.10-beta
+gh variable set MONKY_SDK_RELEASE --repo MonkyOrg/MonkyBot --body v22.1.0
 ```
 
 Remova apenas o arquivo substituido. Nao reutilize um caminho antigo com
@@ -53,7 +56,13 @@ SDK compativel antes do bot; a CI recusa protocolos diferentes. A variavel
 
 ## Proveniencia anterior
 
-O SDK anterior era `22.0.9-beta`, protocolo 20, da
+O SDK anterior era `22.0.10-beta`, protocolo 20, da
+[release oficial](https://github.com/MonkyOrg/Monky/releases/tag/v22.0.10-beta),
+originada no commit `ea0cf0b3d21099b6cb9288bb7fc0c8aba866eca0`.
+Seu SHA-256 era
+`d0faf1d1728c8f51312b89f61ae7bcef2de1904c428df821a13f742c6f56de5e`.
+
+Antes dele, o SDK era `22.0.9-beta`, protocolo 20, da
 [release oficial](https://github.com/MonkyOrg/Monky/releases/tag/v22.0.9-beta),
 originada no commit `b55e2d3e27e6012cf78623fee54d7b1b9b6770da`.
 Seu SHA-256 era

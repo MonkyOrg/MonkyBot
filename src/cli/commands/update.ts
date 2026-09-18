@@ -190,7 +190,7 @@ function check() {
   try {
     const version = parseVersion(JSON.parse(fs.readFileSync(PACKAGE_FILE, 'utf8')).version);
     if (!version) throw new Error(cliT('auto.invalidVersion'));
-    const beta = INCLUDE_BETA || version.beta !== null;
+    const beta = INCLUDE_BETA;
     console.log('[monkybot-updater] ' + cliT('auto.channel', { channel: beta ? 'beta' : 'stable' }));
     const args = [CLI, 'update', '--yes'];
     if (beta) args.push('--beta');

@@ -13,7 +13,7 @@ const record = (event, detail = {}) => fs.appendFileSync(state.trace, `${JSON.st
 require('node:https').get = () => { throw new Error('Unexpected network request in old CLI fixture'); };
 const releases = require('./cli/updateReleases');
 const lifecycle = require('./cli/commands/lifecycle');
-const music = require('./cli/musicTools');
+const music = require('./music/process');
 const pm2 = require('./cli/pm2');
 const updates = require('./cli/commands/update');
 if (state.operatorLocale) require('./cli/i18n').setCliLocale(state.operatorLocale);
@@ -22,9 +22,9 @@ lifecycle.restartBot = async () => {
   record('old-restart');
   throw new Error('OLD 30 second tar listing timeout sentinel');
 };
-music.prepareMusicToolsForCli = async () => {
+music.capture = async () => {
   record('old-prepare');
-  throw new Error('OLD music preparation sentinel');
+  throw new Error('OLD host media process sentinel');
 };
 pm2.isPm2Available = () => state.pm2Available;
 pm2.isBotRunning = () => state.running;

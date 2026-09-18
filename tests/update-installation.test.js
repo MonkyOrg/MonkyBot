@@ -256,7 +256,7 @@ test('every updater/music progress message has both shared CLI translations', t 
   const i18n = require('../dist/cli/i18n');
   t.after(() => i18n.setCliLocale('pt-BR'));
   const files = [
-    path.join('commands', 'update.ts'), 'updateInstallation.ts', 'updateDownload.ts', 'musicTools.ts', 'musicToolDownload.ts',
+    path.join('commands', 'update.ts'), 'updateInstallation.ts', 'updateDownload.ts',
   ];
   const keys = new Set(files.flatMap(file => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'cli', file), 'utf8');
