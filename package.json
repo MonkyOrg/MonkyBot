@@ -14,8 +14,7 @@
     "pack": "node scripts/pack.js",
     "check:sdk": "node scripts/check-sdk.js",
     "test": "npm run build && node --test",
-    "smoke:pack": "node scripts/smoke-pack.js",
-    "check:music": "node dist/cli.js music-check"
+    "smoke:pack": "node scripts/smoke-pack.js"
   },
   "keywords": [
     "monky",
@@ -31,7 +30,7 @@
     "protocolVersion": 20
   },
   "dependencies": {
-    "@monky/bot-sdk": "file:vendor/monky-bot-sdk-22.0.10-beta.tgz"
+    "@monky/bot-sdk": "file:vendor/monky-bot-sdk-22.1.0.tgz"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

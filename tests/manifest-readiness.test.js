@@ -16,7 +16,6 @@ const { setCliLocale } = require('../dist/cli/i18n');
 const pm2 = require('../dist/cli/pm2');
 const processHelpers = require('../dist/cli/process');
 const readiness = require('../dist/cli/manifestReadiness');
-const musicTools = require('../dist/cli/musicTools');
 const { getManifestUrl, identifyManifest, MANIFEST_PUBLIC_KEY_HEADER } = require('../dist/utils/manifest');
 const { closeServer, listen, freePort, setBindHost } = require('./helpers/manifest-port');
 
@@ -303,7 +302,7 @@ async function managedRuntime(t, { online = false, serving = online, legacy = fa
     state.ecosystem = pm2.generateEcosystem(settings, host);
     return 'fixture-ecosystem.cjs';
   });
-  t.mock.method(musicTools, 'prepareMusicToolsForCli', () => assert.fail('Lifecycle must not prepare host media tools.'));
+  t.mock.method(require('../dist/music/process'), 'capture', () => assert.fail('Lifecycle must not run media tools.'));
   t.mock.method(processHelpers, 'runSync', (command, args) => {
     assert.equal(command, 'pm2', 'Never invoke a real package manager or media executable.');
     const [action, id] = args;

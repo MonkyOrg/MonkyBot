@@ -12,7 +12,6 @@ const processHelpers = require('../dist/cli/process');
 const manifestPort = require('../dist/cli/manifestPort');
 const manifestReadiness = require('../dist/cli/manifestReadiness');
 const { getManifestUrl } = require('../dist/utils/manifest');
-const musicTools = require('../dist/cli/musicTools');
 const { setBindHost, closeServer, listen, freePort, captureBinds } = require('./helpers/manifest-port');
 
 const botDir = path.resolve(__dirname, '..');
@@ -107,11 +106,11 @@ for (const action of ['start', 'restart']) {
   test(`${action} never prepares or injects host media tools`, async t => {
     const proc = action === 'start' ? null : managedProcess();
     const state = fixture(t, marketplace(await freePort(t)), proc);
-    const preparation = t.mock.method(musicTools, 'prepareMusicToolsForCli', () =>
-      assert.fail('Normal lifecycle must not prepare host media tools.'));
+    const capture = t.mock.method(require('../dist/music/process'), 'capture', () =>
+      assert.fail('Normal lifecycle must not run media tools.'));
     if (action === 'start') await lifecycle.startCommand();
     else await lifecycle.restartBot(state.current);
-    assert.equal(preparation.mock.callCount(), 0);
+    assert.equal(capture.mock.callCount(), 0);
     assert.deepEqual(state.ecosystem.mock.calls[0].arguments, [state.current, '0.0.0.0']);
   });
 }

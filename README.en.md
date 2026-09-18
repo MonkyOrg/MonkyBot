@@ -128,17 +128,14 @@ monkybot logs --lines 100    # Last 100 lines
 monkybot logs --no-follow    # Print recent logs and exit
 monkybot config              # Show current config
 monkybot config set <k> <v>  # Change a setting
-monkybot music-check         # Legacy manual diagnostics for host tools
-monkybot music-setup         # Prepare host tools only when explicitly requested
-monkybot music-diagnose --url <url> # Legacy manual diagnostic, metadata only
 monkybot language en         # Save the CLI language (pt-BR or en)
 monkybot --version           # Installed version
 monkybot update              # Update to the latest stable
 monkybot update --beta       # Include betas and stable; install the newest version
 monkybot update --beta --check # Check the beta channel without installing
 monkybot update --beta --yes # Update without confirmation
-monkybot autoupdate on 04:00 # Follow the installed version's channel
-monkybot autoupdate on 04:00 --beta # Include betas even on a stable installation
+monkybot autoupdate on 04:00 # Check stable, even on a beta installation
+monkybot autoupdate on 04:00 --beta # Explicitly opt into beta releases
 monkybot autoupdate off     # Disable automatic updates
 ```
 
@@ -259,10 +256,10 @@ An already loaded old updater cannot receive this fix retroactively. On the
 first upgrade, if installation succeeds but its old restart fails, run
 `monkybot restart` separately; do not repeat setup or delete `.keys`.
 
-Auto-update reads the installed version on every run: a beta installation
-checks betas; a stable installation checks stable. With
-`autoupdate on [HH:MM] --beta`, the beta channel stays enabled even after
-promotion to stable. After updating an older CLI, run `autoupdate on` again
+Auto-update uses stable by default, even on a beta installation. With
+`autoupdate on [HH:MM] --beta`, it includes both beta and stable releases and
+selects the newest version; this opt-in survives promotion to stable.
+After updating an older CLI, run `autoupdate on` again
 with your preferred time and channel to replace the old daemon.
 
 **First entry into the beta channel with an older CLI:** versions through
@@ -436,126 +433,24 @@ and clear cache with the app's own confirmation and feedback.
 Pause, resume, skip, stop, clear, remove, and leave remain available without
 installing local tools. Their existing control permissions do not change.
 
-#### Manual host diagnostics (legacy)
+#### Client-side tools and diagnostics
 
-`monkybot music-check` and `monkybot music-diagnose` inspect only media runtime
-tools installed on the **bot host**. `monkybot music-setup` can prepare tools on
-that host manually for legacy use. Normal startup does not run these commands,
-and they are never a fallback for approved local execution.
+The terminal commands `music-check`, `music-setup`, and `music-diagnose` were
+removed: they inspected or prepared tools on the bot host, not on the client
+executing music. Installation, consent, and diagnostics belong in Monky's bot
+tool management. All music commands in the app, including `/play`, queue,
+pause, resume, and skip, remain available.
 
-Executables are not bundled in the tarball. Working tools are reused; missing
-or incompatible ones are downloaded from the official
-[yt-dlp](https://github.com/yt-dlp/yt-dlp/releases) and
-[yt-dlp/FFmpeg-Builds](https://github.com/yt-dlp/FFmpeg-Builds/releases) releases.
-Size and SHA-256 are checked before execution. Direct downloads are installed in
-`~/.monkybot/tools`, without changing system packages. Downloads require HTTPS
-access to GitHub. Each preparation has a ten-minute deadline.
-FFmpeg is extracted in one pass, without first decompressing the `.tar.xz`
-just to list its contents. Extraction uses the overall deadline rather than
-a separate 30-second limit; the CLI distinguishes downloading, extraction and verification.
-Download progress uses actual received bytes and the published size. Download
-completion does not mean preparation has finished: SHA-256 verification,
-extraction and executable validation are separate stages.
+Host tools installed by older versions are neither used as a fallback nor
+removed automatically. There is no need to repeat setup, delete `.keys`, or
+replace the bot identity.
 
-A working tool is checked only once per preparation; downloaded candidates are
-validated before atomic installation. Per-process limits are **5 seconds for
-Node.js, 30 for yt-dlp, and 15 for FFmpeg**, allowing slower cold starts without
-removing validation. The overall limit remains ten minutes. A timeout does not
-silently install a replacement executable.
-
-- **Ubuntu/Debian and other glibc Linux distributions:** automatic installation
-  on x64 and arm64. Requires `tar` with xz support; GNU tar also uses `xz-utils`.
-- **Windows:** automatic installation on x64, arm64 and x86, using the system
-  `tar` to extract FFmpeg.
-- **macOS:** yt-dlp is installed locally; FFmpeg uses an existing Homebrew,
-  **only after explicit confirmation**. Non-interactive execution never
-  approves a system installation. An existing FFmpeg executable can be supplied.
-- **musl/Alpine or other platforms:** install compatible executables and provide
-  their paths; a glibc binary is not downloaded as though it were compatible.
-
-Resolution order is: explicit `MONKY_MUSIC_YTDLP` / `MONKY_MUSIC_FFMPEG`,
-managed tools, then `PATH`. Overrides must contain full executable paths,
-**without extra arguments**; an invalid override fails instead of being
-silently replaced. Resolved paths are forwarded to PM2. On start/restart,
-previous overrides from this bot's managed process are preserved unless the
-shell provides new values. Set variables in the process/PM2 environment;
-`.env.example` is a reference, not automatically loaded.
-
-Legacy manual resolution on the host needs **Node.js 22+** for current YouTube
-JavaScript challenges. Legacy setup requires this runtime; it does not upgrade
-global Node or change the requirements of the client executor.
-The bot explicitly enables `--js-runtimes node:<executable>`, using its own Node
-executable or `MONKY_MUSIC_NODE`, rather than relying on yt-dlp autodetection.
-Use an official yt-dlp executable with bundled **EJS**, or install/update
-`yt-dlp[default]` in your managed environment. EJS must match the yt-dlp version;
-see the [official EJS guide](https://github.com/yt-dlp/yt-dlp/wiki/EJS).
-Plugins, other runtimes and remote EJS component downloads are explicitly
-disabled: no `ejs:github`/`ejs:npm` shortcuts or unpinned remote EJS helpers.
-The diagnostic checks Node and executables locally; extractor/EJS availability
-for a video is confirmed during resolution, before accepting it into the queue.
-
-```bash
-monkybot music-setup
-monkybot music-check
-# Local checkout, after npm run build:
-npm run check:music
-```
-
-`music-check` shows each host tool's status and failure reason. It installs
-nothing, downloads no media, and does not promise YouTube availability. Its
-result does not represent readiness of the client that will execute a track.
-
-Host tools prepared by older releases may remain installed, but local execution
-does not require updating or removing them. Starting or restarting MonkyBot does
-not prepare music tools automatically.
-
-#### When search works but public audio cannot be resolved
-
-This procedure investigates only the legacy host, not the requesting client's
-tools or network. For current local execution, check status and errors in the
-Monky bot tools tab.
-
-Search uses flat metadata; finding a suggestion **does not prove** that the
-extractor can obtain an eligible public audio address. “Could not load public
-audio” means `unavailable`: by itself it **does not confirm a timeout, an IP
-block, or a need for authentication**.
-
-The bot keeps the reply private and localized. Logs now preserve the failure
-code and sanitized native stderr, including resolution failures before queue
-acceptance and exceptions propagated from search/preview. URLs, identifiable
-credentials and keys are redacted, and diagnostics have a size limit.
-
-On the affected host, without reinstalling or restarting just to investigate:
-
-```bash
-monkybot --version
-monkybot music-check
-# Public example; replace it with the individual public video that failed:
-monkybot music-diagnose --url "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
-monkybot logs --no-follow --lines 100
-```
-
-`music-diagnose` requires an explicit valid URL. It has a **45-second** overall
-deadline, queries metadata with the same validation as `/play`, and never
-downloads/plays audio or installs tools. It prints versions, the video ID, and
-failure stage, **not** provider JSON or a signed audio address. Without a
-specific error signature, `providerCause=UNRESOLVED` states that the cause still
-needs confirmation; keep the sanitized line with the version, OS and test time.
-An accepted result validates metadata/address, not audio transfer. Success on
-another machine does not prove operation on the affected host.
-
-`providerCause=YOUTUBE_BOT_CHALLENGE` identifies YouTube's explicit response
-requesting confirmation that access is not automated, at the `resolve` stage.
-It is an application-level refusal, not evidence of a general VPS egress block.
-The IP/reputation criterion is unproven, and access to the audio host has not
-been exercised. This is distinct from an executable-check timeout.
-Native authentication instructions are omitted from the diagnostic.
-
-Do not share `.keys`, `config.json`, `.env`, cookies, tokens or signed URLs.
-Do not enable authentication, proxies or remote EJS components to get around a
-restriction. Official yt-dlp executables already bundle EJS and must remain
-compatible with Node.js 22+; local configuration and plugins remain ignored.
-Without the host diagnostic, the provider cause remains **unconfirmed**.
+Finding a suggestion does not prove that the client can resolve or download
+its audio. On failure, check the private response and tool status on the
+requesting client. For bot connection issues, use
+`monkybot logs --no-follow --lines 100`. Do not share configuration files,
+keys, cookies, tokens, or signed URLs; a generic failure does not establish
+an IP block or an authentication requirement.
 
 #### Playback and recovery
 

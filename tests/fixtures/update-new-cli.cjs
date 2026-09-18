@@ -1,6 +1,5 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const path = require('node:path');
 const state = JSON.parse(fs.readFileSync(process.env.FIXTURE_UPDATER_SCENARIO, 'utf8'));
 assert.equal(process.env.HOME, state.home);
 assert.equal(process.env.USERPROFILE, state.home);
@@ -18,7 +17,7 @@ global.fetch = async () => { throw new Error('Unexpected network request in new 
 require('node:https').get = () => { throw new Error('Unexpected HTTPS request in new CLI fixture'); };
 const pm2 = require('./cli/pm2');
 const processes = require('./cli/process');
-const music = require('./cli/musicTools');
+const music = require('./music/process');
 const port = require('./cli/manifestPort');
 const readiness = require('./cli/manifestReadiness');
 const { getManifestUrl } = require('./utils/manifest');
@@ -40,16 +39,9 @@ processes.runSync = (command, args) => {
   if (args[0] === 'stop') assert.equal(args[1], '31', 'Only the owned numeric PM2 ID may be stopped.');
   return { status: state.failPm2Action === args[0] ? 1 : 0 };
 };
-music.prepareMusicToolsForCli = async ({ env }) => {
-  const overrides = Object.fromEntries(['MONKY_MUSIC_NODE', 'MONKY_MUSIC_YTDLP', 'MONKY_MUSIC_FFMPEG']
-    .filter(key => env[key] !== undefined).map(key => [key, env[key]]));
-  record('prepare', { overrides });
-  if (state.prepareFailure) throw new Error('fixture new preparation failed');
-  return {
-    node: env.MONKY_MUSIC_NODE ?? process.execPath,
-    ytDlp: env.MONKY_MUSIC_YTDLP ?? path.join(state.home, 'tools', 'fixture-ytdlp'),
-    ffmpeg: env.MONKY_MUSIC_FFMPEG ?? path.join(state.home, 'tools', 'fixture-ffmpeg'),
-  };
+music.capture = async () => {
+  record('prepare');
+  throw new Error('Unexpected host media process during the installed CLI restart');
 };
 const probe = port.assertManifestPortAvailable;
 port.assertManifestPortAvailable = async (number, host) => {

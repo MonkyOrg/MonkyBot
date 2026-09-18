@@ -122,6 +122,24 @@ async function smokePack(tarball) {
     assert.equal(cli.status, 0, cli.stderr);
     assert.equal(cli.stdout.trim(), `monkybot ${pkg.version}`);
 
+    for (const module of ['cli/musicTools', 'cli/musicToolDownload', 'cli/commands/musicDiagnose']) {
+      for (const extension of ['.js', '.js.map', '.d.ts']) {
+        assert.equal(fs.existsSync(path.join(bot, 'dist', `${module}${extension}`)), false,
+          'Retired host music tooling must not remain in the installed package.');
+      }
+    }
+    for (const command of ['music-check', 'music-setup', 'music-diagnose']) {
+      const retired = spawnSync(process.execPath, [...guard, path.join(bot, 'dist', 'cli.js'), command], {
+        cwd: runtime,
+        env: { ...env, HOME: runtime, USERPROFILE: runtime, MONKY_BOT_LOCALE: 'en' },
+        encoding: 'utf8', timeout: 15000,
+      });
+      if (retired.error) throw retired.error;
+      assert.equal(retired.status, 1, retired.stdout + retired.stderr);
+      assert.match(retired.stderr, /CLI music-tool commands were removed/);
+      assert.deepEqual(fs.readdirSync(runtime), [], 'Retired commands must not create runtime files.');
+    }
+
     const forbidden = spawnSync(process.execPath, [
       ...guard, '-e', `require(${JSON.stringify(path.join(ROOT, 'package.json'))})`,
     ], { cwd: runtime, env, encoding: 'utf8', timeout: 15000 });

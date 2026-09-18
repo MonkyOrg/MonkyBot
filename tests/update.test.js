@@ -504,7 +504,7 @@ test('a one-shot operator locale override reaches the new CLI even when the inhe
   assert.equal(f.env.MONKYBOT_LOCALE, 'pt-BR');
 });
 
-test('auto-update resolves installed channel on every tick and preserves explicit beta opt-in', () => {
+test('auto-update uses stable on every tick unless beta is explicitly requested', () => {
   for (const includeBeta of [false, true]) {
     let version = '3.0.0-beta';
     const calls = [];
@@ -528,7 +528,7 @@ test('auto-update resolves installed channel on every tick and preserves explici
     };
     vm.runInNewContext(updates.generateUpdaterScript(path.resolve('dist', 'cli.js'), '04:00', includeBeta), context);
     timers.shift()();
-    assert.ok(calls[0].includes('--beta'));
+    assert.equal(calls[0].includes('--beta'), includeBeta);
     version = '3.0.0';
     timers.shift()();
     assert.equal(calls[1].includes('--beta'), includeBeta);
@@ -566,7 +566,7 @@ test('auto-update surfaces an update or restart failure and schedules another at
   };
   vm.runInNewContext(updates.generateUpdaterScript(path.resolve('dist', 'cli.js'), '04:00'), context);
   timers.shift()();
-  assert.deepEqual(Array.from(calls[0]).slice(1), ['update', '--yes', '--beta']);
+  assert.deepEqual(Array.from(calls[0]).slice(1), ['update', '--yes']);
   assert.match(errors[0], /Atualização falhou \(status 1\)/);
   assert.equal(timers.length, 1);
 });

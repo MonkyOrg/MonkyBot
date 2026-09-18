@@ -298,7 +298,8 @@ for (const locale of ['pt-BR', 'en']) {
       assert.deepEqual(fs.readdirSync(result.home), []);
       if (args.includes('--help')) {
         assert.match(result.output, locale === 'en' ? /USAGE|COMMANDS/ : /USO|COMANDOS/);
-        for (const name of ['setup', 'music-check', 'music-diagnose', 'language']) assert.ok(result.output.includes(name));
+        for (const name of ['setup', 'update', 'autoupdate', 'language']) assert.ok(result.output.includes(name));
+        assert.doesNotMatch(result.output, /music-check|music-setup|music-diagnose/);
         assert.match(result.output, locale === 'en' ? /automatically starts\/restarts/ : /inicia\/reinicia automaticamente/);
         assert.doesNotMatch(result.output, /2\.\s+monkybot start/);
       }

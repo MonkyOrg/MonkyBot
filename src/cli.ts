@@ -42,9 +42,6 @@ ${color('COMANDOS', ANSI.bold)}
   autoupdate             Gerencia atualização automática
   config                 Exibe a configuração atual
   config set <k> <v>     Altera uma configuração
-  music-check            Verifica Node, yt-dlp e FFmpeg/libopus sem baixar mídia
-  music-setup            Prepara as ferramentas de música sem refazer o vínculo
-  music-diagnose         Diagnostica um vídeo público explícito, somente metadados
   language <pt-BR|en>    Salva o idioma do CLI
 
 ${color('OPÇÕES', ANSI.bold)}
@@ -58,11 +55,10 @@ ${color('OPÇÕES POR COMANDO', ANSI.bold)}
   update      --check       Apenas verifica, sem instalar
   update      --beta        Inclui betas e stable, escolhendo a versão mais nova
   update      --yes         Atualiza sem pedir confirmação
-  autoupdate  on [HH:MM]   Ativa verificação diária (padrão: 04:00)
-  autoupdate  on --beta    Inclui betas mesmo quando a instalação é stable
+  autoupdate  on [HH:MM]   Ativa verificação diária de stable (padrão: 04:00)
+  autoupdate  on --beta    Inclui betas somente com esta opção explícita
   autoupdate  off           Desativa
   autoupdate  status        Mostra se está ativo
-  music-diagnose --url <url> Consulta só metadados; não baixa nem reproduz áudio
 
 ${color('EXEMPLOS', ANSI.bold)}
   monkybot setup                     Configura e aplica um início/reinício limpo automaticamente
@@ -97,9 +93,6 @@ ${color('COMMANDS', ANSI.bold)}
   autoupdate             Manage automatic updates
   config                 Show current configuration
   config set <k> <v>      Change a setting
-  music-check            Check Node, yt-dlp and FFmpeg/libopus without downloading media
-  music-setup            Prepare music tools without recreating registrations
-  music-diagnose         Diagnose an explicit public video, metadata only
   language <pt-BR|en>     Save the CLI language
 
 ${color('OPTIONS', ANSI.bold)}
@@ -113,11 +106,10 @@ ${color('COMMAND OPTIONS', ANSI.bold)}
   update      --check       Check only, without installing
   update      --beta        Include betas and stable; select the newest version
   update      --yes         Update without confirmation
-  autoupdate  on [HH:MM]    Enable daily checks (default: 04:00)
-  autoupdate  on --beta     Include betas even on stable installations
+  autoupdate  on [HH:MM]    Enable daily stable checks (default: 04:00)
+  autoupdate  on --beta     Include betas only with this explicit option
   autoupdate  off           Disable
   autoupdate  status        Show whether enabled
-  music-diagnose --url <url> Metadata only; never download or play audio
 
 ${color('EXAMPLES', ANSI.bold)}
   monkybot setup                    Configure and automatically apply a fresh start/restart
@@ -163,12 +155,13 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (['music-check', 'music-setup'].includes(command) && rest.length) {
-    throw new Error(cliText(`Uso: monkybot ${command}`, `Usage: monkybot ${command}`));
+  if (['music-check', 'music-setup', 'music-diagnose'].includes(command)) {
+    throw new Error(cliText(
+      'Os comandos de ferramentas de música do CLI foram removidos. Use o gerenciamento de ferramentas de bots no cliente Monky. Os comandos de música do bot continuam disponíveis.',
+      'The CLI music-tool commands were removed. Use bot tool management in the Monky client. The bot music commands are still available.'));
   }
 
-  if (['setup', 'start', 'stop', 'restart', 'status', 'logs', 'config', 'update', 'autoupdate',
-    'music-check', 'music-setup'].includes(command)) {
+  if (['setup', 'start', 'stop', 'restart', 'status', 'logs', 'config', 'update', 'autoupdate'].includes(command)) {
     await initializeCliLanguage({
       interactive: !rest.some((arg) => ['--yes', '-y', '--check', '--non-interactive'].includes(arg)) &&
         !!process.stdin.isTTY && !!process.stdout.isTTY && !process.env.CI,
@@ -176,25 +169,6 @@ async function main(): Promise<void> {
   }
 
   switch (command) {
-    case 'music-check': {
-      const { checkMusicToolsCommand } = await import('./cli/musicTools');
-      await checkMusicToolsCommand();
-      break;
-    }
-    case 'music-setup': {
-      const { prepareMusicToolsForCli } = await import('./cli/musicTools');
-      await prepareMusicToolsForCli();
-      console.log(cliText(
-        '✅ Ferramentas de música preparadas. Se o bot já estiver rodando, execute monkybot restart.',
-        '✅ Music tools ready. If the bot is already running, run monkybot restart.'));
-      break;
-    }
-    case 'music-diagnose': {
-      const { musicDiagnoseCommand } = await import('./cli/commands/musicDiagnose');
-      await musicDiagnoseCommand(rest);
-      break;
-    }
-
     case 'setup':
       await setupCommand();
       break;
