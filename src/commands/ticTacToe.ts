@@ -1,6 +1,6 @@
 import type { BotClient, BotScreenRef, BotScreenRemoved } from '@monky/bot-sdk';
 import { gameAction, newGame, ticTacToeHtml, type GameState } from '../screens/ticTacToe';
-import { translate, type LocalizedCommandDefinition } from './i18n';
+import { message, translate, type LocalizedCommandDefinition } from './i18n';
 import { cliText } from '../cli/i18n';
 import { errorDiagnostic } from '../music/process';
 
@@ -86,7 +86,7 @@ export function registerTicTacToe(bot: BotClient, lifetimeMs = 30 * 60_000): () 
       if (ctx.signal.aborted || disposed) return;
       const count = [...games.values()].filter((game) => game.serverId === ctx.serverId).length + (pending.get(ctx.serverId) ?? 0);
       if (count >= 16 || games.size + creating.size >= 128) {
-        ctx.reply(translate(ctx.locale, 'Limite de jogos ativos atingido. Aguarde o encerramento de um jogo.', 'Active game limit reached. Wait for a game to close.'));
+        ctx.reply(message(ctx.locale, 'Limite de jogos ativos atingido. Aguarde o encerramento de um jogo.', 'Active game limit reached. Wait for a game to close.'));
         return;
       }
       pending.set(ctx.serverId, (pending.get(ctx.serverId) ?? 0) + 1);
@@ -125,13 +125,13 @@ export function registerTicTacToe(bot: BotClient, lifetimeMs = 30 * 60_000): () 
           };
           game.timer.unref();
           games.set(key, game);
-          if (!ctx.signal.aborted) ctx.reply(translate(ctx.locale,
+          if (!ctx.signal.aborted) ctx.reply(message(ctx.locale,
             '🎮 Jogo criado na sua sala de voz! Use o convite para abrir no palco. Você é X; outra pessoa pode entrar como O. Expira em 30 minutos.',
             '🎮 Game created in your voice room! Use the invitation to open it on the stage. You are X; another person can join as O. Expires in 30 minutes.'));
         } catch (error: unknown) {
           if (ctx.signal.aborted || disposed || pendingScreen.disconnected) return;
           console.error(`[screens] ${cliText('Não foi possível criar um jogo ativo.', 'Could not create an active game.')} ${errorDiagnostic(error)}`);
-          ctx.reply(translate(ctx.locale, 'Não foi possível abrir o jogo. Verifique o acesso ao canal e os limites de telas.', 'Could not open the game. Check channel access and screen limits.'));
+          ctx.reply(message(ctx.locale, 'Não foi possível abrir o jogo. Verifique o acesso ao canal e os limites de telas.', 'Could not open the game. Check channel access and screen limits.'));
         } finally {
           pendingScreens.delete(pendingScreen);
           pendingScreen.removals.clear();

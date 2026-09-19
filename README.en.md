@@ -6,13 +6,12 @@ The **official reference bot** for Monky — utility commands, fun and more.
 
 ## Compatibility
 
-This version requires **Monky protocol 20**. Update the Monky app and server
+This version requires **Monky protocol 21**. Update the Monky app and server
 together before updating the bot; earlier protocol versions are not compatible.
 The bundled SDK is checked during the build and needs no separate installation.
 
-The official SDK from
-[Monky v22.0.10-beta](https://github.com/MonkyOrg/Monky/releases/tag/v22.0.10-beta)
-is included in `vendor/` and pinned in `package-lock.json`. This version removes
+The compatible SDK is included in `vendor/` and pinned in `package-lock.json`.
+This version removes
 only revoked registrations or registrations whose credentials were explicitly
 rejected, allowing manifest reinstallation without deleting the identity or
 other servers. Its provenance and SHA-256 are documented in
@@ -375,8 +374,12 @@ argument names/values do not change. Canonical names remain accepted in every
 language, including those used in the examples below. Presentation follows the
 client's selected language by default. In personal bot preferences, **Bot language**
 offers **Follow Monky** or a language override for that bot. This is not a shared
-server setting. Generated public content, such as poll results and queue notices,
-retains the language of the person whose interaction created it.
+server setting. Bot messages include PT-BR/EN variants and appear in **each
+reader's app language**, including poll results, queue notices, history, reply
+references and copying. The bot preference still controls commands, forms and
+previews. Human-authored titles, questions and options are not automatically
+translated; dice and coins keep the same result in both languages. Older
+messages without variants retain their original text.
 
 ### Private conversations and guided polls
 
@@ -403,7 +406,7 @@ the question and voting buttons for channel participants.
    voting is open**. The limit counts distinct people, not clicks.
 6. Voting closes at the first limit reached: duration or voter count.
    The public result shows counts, percentages, the winning option, a tie, or no
-   votes, using the poll creator's language.
+   votes, using each reader's app language.
 
 The Monky server persists the question, votes, and closure; it continues enforcing
 expiry and rejecting late votes even when the bot is offline. The bot recovers
@@ -465,6 +468,10 @@ an IP block or an authentication requirement.
    exactly once. There is no separate `/query` or second selection window.
 3. The queue joins the first caller's voice room and plays in order.
    Enqueue and skip requests receive an immediate processing acknowledgement.
+   After validation and actual acceptance, **Added to queue** appears to everyone
+   in the text channel where the track was requested, identifying its requester.
+   Pause, resume, skip, stop, leave, remove and clear also publish a confirmation
+   in the command's channel. Queries and errors remain private.
    Before the first track and every next track, chat shows **Preparing to play**.
    The invocation keeps its animated indicator while it is running; source lookup
    and audio startup never show an invented percentage.

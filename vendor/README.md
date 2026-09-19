@@ -1,6 +1,28 @@
 # SDK compativel
 
-`monky-bot-sdk-22.1.0.tgz` e o pacote oficial da
+## SDK oficial ativo
+
+A dependencia ativa e `monky-bot-sdk-23.0.2-beta.tgz`, da
+[release oficial Monky v23.0.2-beta](https://github.com/MonkyOrg/Monky/releases/tag/v23.0.2-beta).
+Inclui `@monky/shared` no protocolo **21**, mensagens com variantes PT-BR/EN
+por leitor e as ferramentas create, doctor e CLI interativo reutilizavel.
+O MonkyBot continua usando seu CLI proprio.
+
+Origem: commit `ba124d1179a5df45938de0287c7c659f720b7976`,
+apos o merge do PR MonkyOrg/Monky#685. Os bytes foram produzidos pelo workflow
+[Release 35414330845](https://github.com/MonkyOrg/Monky/actions/runs/35414330845)
+e conferidos contra o digest do asset publicado, sem modificacoes locais.
+SHA-256:
+`a5471a013612652c462940807a4969e41deeb02b023fa00f0134d41b70a8ee0e`.
+
+Dependencia e lockfile apontam para esses bytes, sem vinculos a outro checkout.
+O pacote temporario de QA nao acompanha o repositorio. Cliente, servidor e bot
+precisam usar protocolo 21; o protocolo 20 nao e compativel. Esta atualizacao
+nao promove o bot nem o Monky para stable.
+
+## SDK oficial anterior
+
+`monky-bot-sdk-22.1.0.tgz` era o pacote oficial da
 [release stable Monky v22.1.0](https://github.com/MonkyOrg/Monky/releases/tag/v22.1.0),
 com o shared incluido, para o protocolo Monky **20**. A licenca MIT
 acompanha o pacote. O codigo-fonte permanece em `MonkyOrg/Monky`; este
@@ -40,11 +62,11 @@ seu digest e atualize dependencia, lockfile e este registro de origem juntos.
 Substitua tag e nome do arquivo do exemplo pela nova versao:
 
 ```powershell
-gh release download v22.1.0 --repo MonkyOrg/Monky --pattern monky-bot-sdk-22.1.0.tgz --dir vendor
-npm install --save-exact .\vendor\monky-bot-sdk-22.1.0.tgz
+gh release download v23.0.2-beta --repo MonkyOrg/Monky --pattern monky-bot-sdk-23.0.2-beta.tgz --dir vendor
+npm install --save-exact .\vendor\monky-bot-sdk-23.0.2-beta.tgz
 npm run check:sdk
 npm test
-gh variable set MONKY_SDK_RELEASE --repo MonkyOrg/MonkyBot --body v22.1.0
+gh variable set MONKY_SDK_RELEASE --repo MonkyOrg/MonkyBot --body v23.0.2-beta
 ```
 
 Remova apenas o arquivo substituido. Nao reutilize um caminho antigo com

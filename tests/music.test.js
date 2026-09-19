@@ -14,6 +14,7 @@ const { capture, captureBytes, safeDiagnostic } = require('../dist/music/process
 const { LIMITS } = require('@monky/bot-sdk');
 const { createMusicCommands, registerMusicCommands } = require('../dist/commands/music');
 const { setCliLocale } = require('../dist/cli/i18n');
+const { botMessageText } = require('./helpers/bot-message');
 
 beforeEach(() => setCliLocale('en'));
 
@@ -121,6 +122,28 @@ test('accepts only canonical individual YouTube URLs and bounded search text', (
   assert.equal(audioUrl('https://rr1---sn-abc.googlevideo.com/videoplayback?x=1'), 'https://rr1---sn-abc.googlevideo.com/videoplayback?x=1');
   for (const value of ['http://rr1.googlevideo.com/videoplayback', 'https://googlevideo.com.evil.test/videoplayback',
     'https://localhost/videoplayback', 'https://rr1.googlevideo.com/other', 'https://a:b@rr1.googlevideo.com/videoplayback']) assert.throws(() => audioUrl(value));
+});
+
+test('only an accepted addition is announced, once and in its originating channel', async t => {
+  const metadata = deferred();
+  const f = fixture(t, { source: { resolve: async () => metadata.promise } });
+  const caller = { ...actor(), textChannelId: 'origin-only' };
+  const controller = new AbortController();
+  const cancelled = f.queues.enqueue(caller, 'cancelled', controller.signal);
+  const rejection = assert.rejects(cancelled, { code: 'cancelled' });
+  await tick();
+  assert.equal(f.notices.length, 0, 'A reservation is not an accepted addition');
+  controller.abort();
+  metadata.resolve(track('cancelled'));
+  await rejection;
+  assert.equal(f.notices.length, 0);
+  f.source.resolve = async url => track(url);
+  await f.queues.enqueue(caller, 'accepted');
+  const queued = f.notices.filter(notice => notice.type === 'queued');
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].track.id, 'accepted');
+  assert.equal(queued[0].actor.textChannelId, 'origin-only');
+  assert.equal(f.notices[0].type, 'queued', 'Acceptance precedes loading and first-frame notices');
 });
 
 test('metadata rejects live, excessive duration, restricted and invalid items', () => {
@@ -307,7 +330,7 @@ test('queue explicitly enables silent persistent recovery without retaining comm
   invocation.abort();
   await until(() => f.notices.some(notice => notice.type === 'ended'));
   assert.deepEqual(f.writes.map(write => write.frame), [11, 22]);
-  assert.deepEqual(f.notices.map(notice => notice.type), ['loading', 'started', 'ended']);
+  assert.deepEqual(f.notices.map(notice => notice.type), ['queued', 'loading', 'started', 'ended']);
 });
 
 test('per-item sources retain requester identity and outlive the command signal', async t => {
@@ -443,7 +466,7 @@ test('requester departure defers existing source slots without blocking new vali
     invocationId: 'read-invocation', invokerId: firstRequester.invokerId,
     invokerSessionId: firstRequester.invokerSessionId, invokerNickname: firstRequester.invokerNickname,
     invokerVoiceChannelId: 'voice', getVoiceChannel: async () => 'voice',
-    signal: new AbortController().signal, reply: value => readReplies.push(value),
+    signal: new AbortController().signal, reply: value => readReplies.push(botMessageText(value)),
   });
   await tick();
   assert.equal(queues.snapshot('a').current, null, 'Read-only authorization must not reactivate held playback.');
@@ -907,13 +930,13 @@ test('persistent input waits beyond old queue deadlines and remains immediately 
   t.mock.timers.tick(3 * 60 * 60 * 1000);
   await tick();
   assert.equal(f.queues.snapshot('a').current.id, 'outage');
-  assert.deepEqual(f.notices.map(notice => notice.type), ['loading', 'started']);
+  assert.deepEqual(f.notices.map(notice => notice.type), ['queued', 'loading', 'started']);
   assert.equal(signal.aborted, false);
   await f.queues.control(actor(), 'stop');
   assert.equal(signal.aborted, true);
   assert.equal(closed, true);
   assert.equal(f.queues.snapshot('a').current, null);
-  assert.deepEqual(f.notices.map(notice => notice.type), ['loading', 'started']);
+  assert.deepEqual(f.notices.map(notice => notice.type), ['queued', 'loading', 'started']);
 });
 
 test('manual pause keeps its exact position beyond the former total pause deadline', async t => {
@@ -1357,7 +1380,7 @@ test('first track and skip report loading before source startup and only report 
   } });
   await f.queues.enqueue(actor(), 'first');
   await until(() => f.opens.includes('first'));
-  assert.deepEqual(f.notices.map(notice => notice.type), ['loading']);
+  assert.deepEqual(f.notices.map(notice => notice.type), ['queued', 'loading']);
   assert.equal(f.writes.length, 0);
   assert.equal(f.queues.snapshot('a').started, false);
   pending.get('first').resolve();
@@ -1370,7 +1393,7 @@ test('first track and skip report loading before source startup and only report 
   pending.get('next').resolve();
   await until(() => f.notices.some(notice => notice.type === 'started' && notice.track.id === 'next'));
   assert.deepEqual(f.notices.map(notice => [notice.type, notice.track?.id]),
-    [['loading', 'first'], ['started', 'first'], ['loading', 'next'], ['started', 'next']]);
+    [['queued', 'first'], ['loading', 'first'], ['started', 'first'], ['queued', 'next'], ['loading', 'next'], ['started', 'next']]);
 });
 
 test('a slow loading notification cannot delay audio, and legacy sources still refresh their media URL', async t => {
@@ -1515,7 +1538,7 @@ for (const [configured, grace] of [[undefined, 60000], ['1', 1000], ['600', 6000
         frames: (async function* () { yield Uint8Array.from([0xf8, 0xff, 0xfe]); })(), close: async () => {},
       }),
     }));
-    const commands = new Map(), replies = [];
+    const commands = new Map(), replies = [], chats = [];
     let connection;
     let settings;
     const bot = Object.assign(new EventEmitter(), {
@@ -1530,7 +1553,7 @@ for (const [configured, grace] of [[undefined, 60000], ['1', 1000], ['600', 6000
         bot.on('settingsChanged', listener);
         return () => bot.off('settingsChanged', listener);
       },
-      sendMessage: async () => {},
+      sendMessage: async (serverId, channelId, content) => { chats.push({ serverId, channelId, content: botMessageText(content) }); },
       getVoiceConnection: () => connection,
       joinVoice: async (_serverId, channelId) => (connection = { channelId, humanParticipantCount: 1, writeOpus: async () => {} }),
       leaveVoice: async () => { connection = undefined; },
@@ -1541,12 +1564,14 @@ for (const [configured, grace] of [[undefined, 60000], ['1', 1000], ['600', 6000
       await commands.get('play').handler({
         serverId: 'a', channelId: 'text', locale: 'en', invocationId: 'configured',
         args: { busca: 'https://youtu.be/abcdefghijk' }, signal: new AbortController().signal,
-        getVoiceChannel: async () => 'voice', reply: message => { replies.push(message); },
+        getVoiceChannel: async () => 'voice', reply: message => { replies.push(botMessageText(message)); },
       });
       await tick();
       assert.ok(connection);
       assert.match(replies[0], /Track received/);
-      assert.match(replies.at(-1), /Added to queue/);
+      assert.equal(replies.length, 1);
+      assert.equal(chats.filter(message => /Added to queue/.test(message.content)).length, 1);
+      assert.ok(chats.every(message => message.serverId === 'a' && message.channelId === 'text'));
       t.mock.timers.tick(grace - 1);
       await tick();
       assert.ok(connection);

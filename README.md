@@ -6,13 +6,12 @@ O **bot oficial de referência** do Monky — comandos utilitários, diversão e
 
 ## Compatibilidade
 
-Esta versão exige **protocolo Monky 20**. Atualize o aplicativo e o servidor Monky
+Esta versão exige **protocolo Monky 21**. Atualize o aplicativo e o servidor Monky
 juntos antes de atualizar o bot; servidores com protocolos anteriores não são compatíveis.
 O SDK incluído no pacote é verificado no build e não precisa ser instalado à parte.
 
-O SDK oficial da
-[release Monky v22.0.10-beta](https://github.com/MonkyOrg/Monky/releases/tag/v22.0.10-beta)
-está incluído em `vendor/` e fixado no `package-lock.json`. Esta versão remove
+O SDK compatível está incluído em `vendor/` e fixado no `package-lock.json`.
+Esta versão remove
 somente cadastros revogados ou cujas credenciais foram explicitamente rejeitadas,
 permitindo reinstalar pelo manifest sem apagar a identidade nem os demais
 servidores. Origem e SHA-256 estão documentados em
@@ -378,8 +377,12 @@ qualquer idioma, inclusive os usados nos exemplos abaixo.
 Por padrão, acompanham o idioma selecionado no cliente. Nas preferências pessoais
 do bot, **Idioma do bot** permite manter **Seguir o Monky** ou escolher um idioma
 somente para aquele bot. Não é uma configuração compartilhada do servidor.
-Conteúdo público gerado, como o resultado de uma enquete ou um aviso da fila,
-mantém o idioma da pessoa cuja interação o originou.
+Mensagens do bot incluem variantes PT-BR/EN e aparecem no **idioma do aplicativo
+de cada leitor**, inclusive resultados de enquetes, avisos da fila, histórico,
+referências de resposta e cópia. A preferência do bot continua controlando
+comandos, formulários e prévias. Títulos, perguntas e opções escritos por pessoas
+não são traduzidos automaticamente; dados e moedas mantêm o mesmo resultado nos
+dois idiomas. Mensagens antigas sem variantes preservam seu texto original.
 
 ### Conversas privadas e enquete guiada
 
@@ -406,7 +409,7 @@ pergunta e os botões de votação para os participantes do canal.
    enquete estiver aberta**. O limite conta pessoas diferentes, não cliques.
 6. A votação encerra no primeiro limite atingido: prazo ou quantidade de
    votantes. O resultado público mostra contagens, percentuais, opção vencedora,
-   empate ou ausência de votos, no idioma de quem criou a enquete.
+   empate ou ausência de votos, no idioma do aplicativo de cada leitor.
 
 O servidor Monky persiste a pergunta, os votos e o encerramento; continua
 controlando o prazo e recusando votos tardios mesmo com o bot desligado. O bot
@@ -468,6 +471,10 @@ bloqueio de IP ou necessidade de autenticação.
    Não há `/query` separado nem uma segunda janela de seleção.
 3. A fila conecta à sala de quem adicionou o primeiro item e toca em ordem.
    Os pedidos de adicionar e pular recebem uma resposta imediata de processamento.
+   Depois da validação e aceitação real, **Adicionado à fila** aparece para todos
+   no canal de texto onde a faixa foi pedida, identificando quem a adicionou.
+   Pausar, retomar, pular, parar, sair, remover e limpar também publicam uma
+   confirmação no canal do comando. Consultas e erros continuam privados.
    Antes da primeira faixa e de cada próxima, o chat mostra **Preparando para tocar**.
    A invocação mantém seu indicador animado enquanto estiver em execução; não há
    percentual inventado para consulta da fonte ou início do áudio.

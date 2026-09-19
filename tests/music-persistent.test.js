@@ -18,6 +18,7 @@ const { bounded, cancellable, captureBytes, safeDiagnostic, terminate } = requir
 const { OggOpusParser } = require('../dist/music/ogg');
 const { MUSIC_IDLE_SETTING } = require('../dist/music/settings');
 const { wave, server, range, send } = require('./fixtures/music-media.cjs');
+const { botMessageText } = require('./helpers/bot-message');
 
 const ffmpeg = process.env.MONKY_MUSIC_FFMPEG || 'ffmpeg';
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -122,7 +123,7 @@ function registeredSource(t, source) {
     getServerSettings: () => ({ schemaRevision: 1, revision: 1, values: { [MUSIC_IDLE_SETTING]: 60 } }),
     onSettingsChanged: () => () => {},
     command: command => commands.set(command.name, command),
-    sendMessage: async (_serverId, _channelId, content) => { chats.push(content); },
+    sendMessage: async (_serverId, _channelId, content) => { chats.push(botMessageText(content)); },
     getVoiceConnection: () => connection,
     joinVoice: async () => connection = {
       channelId: 'voice', humanParticipantCount: 1,
@@ -137,10 +138,11 @@ function registeredSource(t, source) {
     await commands.get('play').handler({
       serverId: 'server', channelId: 'text', locale: 'en', invocationId: `budget-${++invocation}`,
       signal: new AbortController().signal, args: { busca: url },
-      getVoiceChannel: async () => 'voice', reply: value => replies.push(value),
+      getVoiceChannel: async () => 'voice', reply: value => replies.push(botMessageText(value)),
     });
     assert.match(replies[0], /Track received/);
-    assert.match(replies.at(-1), /Added to queue/);
+    assert.equal(replies.length, 1);
+    assert.match(chats.findLast(text => /Added to queue/.test(text)), /Added to queue/);
   };
   return { play, sent, chats, opens, dispose };
 }

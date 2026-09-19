@@ -1,7 +1,7 @@
 import type {
   BotClient, BotForm, BotFormValues, BotSelector, CommandContext,
 } from '@monky/bot-sdk';
-import { translate, type LocalizedCommandDefinition } from './i18n';
+import { message, translate, type LocalizedCommandDefinition } from './i18n';
 import { cliText, normalizeCliLocale } from '../cli/i18n';
 import { errorDiagnostic, safeDiagnostic } from '../music/process';
 
@@ -113,7 +113,7 @@ export const pollCommand: LocalizedCommandDefinition = {
       draft = readDraft(values);
       if (draft) break;
       previous = values;
-      ctx.reply(translate(ctx.locale,
+      ctx.reply(message(ctx.locale,
         '⚠️ Revise a pergunta, informe de 2 a 10 opções diferentes e uma duração inteira de 1 minuto a 30 dias e/ou limite de 1 a 10.000 votantes.',
         '⚠️ Check the question, enter 2–10 different options and a whole-number duration of 1 minute to 30 days and/or a limit of 1–10,000 voters.'));
     }
@@ -130,15 +130,14 @@ export const pollCommand: LocalizedCommandDefinition = {
       metadata: { kind: 'poll', locale: ctx.locale },
     });
     if (!ctx.signal.aborted) {
-      ctx.reply(translate(ctx.locale,
+      ctx.reply(message(ctx.locale,
         '📊 Enquete publicada! Cada pessoa tem um voto e pode alterá-lo até o encerramento.',
         '📊 Poll published! Each person has one vote and can change it until voting closes.'));
     }
   },
 };
 
-export function pollResult(selector: BotSelector): string {
-  const locale = normalizeCliLocale(selector.metadata?.locale);
+export function pollResult(selector: BotSelector, locale = normalizeCliLocale(selector.metadata?.locale)): string {
   const counts = new Map(selector.choices.map((choice) => [choice.value, 0]));
   for (const value of Object.values(selector.responses)) {
     if (counts.has(value)) counts.set(value, (counts.get(value) ?? 0) + 1);
@@ -173,7 +172,8 @@ export function registerPollCommand(bot: BotClient): () => void {
     finalizing.add(key);
     try {
       // The server makes this idempotent, including across restarts and lost acknowledgments.
-      await bot.finalizeSelector(serverId, selector.id, pollResult(selector));
+      await bot.finalizeSelector(serverId, selector.id, message(normalizeCliLocale(selector.metadata?.locale),
+        pollResult(selector, 'pt-BR'), pollResult(selector, 'en')));
     } catch (error: unknown) {
       console.error(`[poll] ${cliText('Falha ao finalizar; nova tentativa na recuperação.', 'Failed to finalize; retrying on recovery.')}`,
         safeDiagnostic(`${serverId}:${selector.id}`), errorDiagnostic(error));

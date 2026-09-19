@@ -7,6 +7,7 @@ const { setCliLocale } = require('../dist/cli/i18n');
 beforeEach(() => setCliLocale('en'));
 const { pollCommand, pollResult, registerPollCommand } = require('../dist/commands/poll');
 const { botFormSchema, validateBotFormValues } = createRequire(require.resolve('@monky/bot-sdk'))('@monky/shared');
+const { botMessageText } = require('./helpers/bot-message');
 
 const valid = { pergunta: ' Lunch? ', opcoes: [' Rice, beans ', 'Pasta'], duracao: 1, unidade: 'minutes' };
 const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -19,7 +20,7 @@ function invocation(values = valid, locale = 'en') {
   const ctx = {
     invocationId: 'invocation-id', channelId: 'channel', invokerId: 'caller', serverId: 'server',
     locale, signal: controller.signal, args: {},
-    reply: (content) => replies.push(content),
+    reply: (content) => replies.push(botMessageText(content, locale)),
     publish: () => assert.fail('Polls must use the durable selector API'),
     prompt: async (form) => { forms.push(form); return forms.length === 1 ? values : null; },
     createSelector: async (input) => { created.push(input); return selector(input); },
@@ -54,7 +55,7 @@ function lifecycle(t, polls = []) {
   bot.command = (command) => assert.equal(command, pollCommand);
   bot.listSelectors = async (serverId) => { listed.push(serverId); return polls; };
   bot.finalizeSelector = async (serverId, id, content) => {
-    calls.push({ serverId, id, content });
+    calls.push({ serverId, id, content: botMessageText(content), localizations: content.localizations });
     const poll = polls.find((item) => item.id === id);
     if (poll) poll.resultMessageId = 'result-id';
     return poll;
@@ -222,7 +223,9 @@ test('selector updates finalize only closed polls and only once while in flight'
   state.bot.emit('selectorUpdate', { serverId: 'server', selector: closed });
   state.bot.emit('selectorUpdate', { serverId: 'server', selector: closed });
   assert.equal(state.calls.length, 1);
-  assert.match(state.calls[0][2], /Winning option: 2/);
+  assert.match(botMessageText(state.calls[0][2], 'en'), /Winning option: 2/);
+  assert.match(botMessageText(state.calls[0][2], 'pt-BR'), /Opção vencedora: 2/);
+  for (const text of Object.values(state.calls[0][2].localizations)) assert.ok(text.includes('Rice, beans'));
   resolve(closed);
   await flush();
 });

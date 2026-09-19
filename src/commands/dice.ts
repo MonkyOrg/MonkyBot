@@ -1,4 +1,4 @@
-import { translate, type LocalizedCommandDefinition } from './i18n';
+import { message, type LocalizedCommandDefinition } from './i18n';
 
 export const diceCommand: LocalizedCommandDefinition = {
   name: 'dado',
@@ -22,13 +22,13 @@ export const diceCommand: LocalizedCommandDefinition = {
     if (ctx.signal.aborted) return;
     const sides = ctx.args.lados ?? 6;
     if (typeof sides !== 'number' || !Number.isInteger(sides) || sides < 2 || sides > 100) {
-      ctx.reply(translate(ctx.locale,
+      ctx.reply(message(ctx.locale,
         '⚠️ Escolha um número inteiro de lados entre 2 e 100.',
         '⚠️ Choose a whole number of sides between 2 and 100.'));
       return;
     }
     const result = Math.floor(Math.random() * sides) + 1;
-    ctx.reply(translate(ctx.locale,
+    ctx.reply(message(ctx.locale,
       `🎲 Rolando d${sides}... **${result}**!`,
       `🎲 Rolling d${sides}... **${result}**!`));
   },

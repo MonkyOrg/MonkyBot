@@ -1,4 +1,4 @@
-import { translate, type LocalizedCommandDefinition } from './i18n';
+import { message, type LocalizedCommandDefinition } from './i18n';
 
 export const pingCommand: LocalizedCommandDefinition = {
   name: 'ping',
@@ -9,7 +9,7 @@ export const pingCommand: LocalizedCommandDefinition = {
   },
   handler: (ctx) => {
     if (ctx.signal.aborted) return;
-    ctx.reply(translate(ctx.locale,
+    ctx.reply(message(ctx.locale,
       '🏓 **Pong!** MonkyBot está online.',
       '🏓 **Pong!** MonkyBot is online.'));
   },

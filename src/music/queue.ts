@@ -97,7 +97,8 @@ export interface MusicSnapshot {
   elapsedMs: number;
   upcoming: { title: string; pending: boolean; waitingForRequester: boolean }[];
 }
-export type MusicNotice = { type: 'loading'; actor: MusicActor; track: Track } |
+export type MusicNotice = { type: 'queued'; actor: MusicActor; track: Track } |
+  { type: 'loading'; actor: MusicActor; track: Track } |
   { type: 'started'; actor: MusicActor; track: Track } |
   { type: 'failed'; actor: MusicActor; error: unknown; track?: Track } |
   { type: 'recovery-failed'; actor: MusicActor; track: Track; attempts: number } |
@@ -204,6 +205,7 @@ export class MusicQueues<T extends Track = ResolvedTrack> {
         if (!state.queue.includes(slot) || state.closing) throw new MusicError('cancelled');
         this.authorize(current, state);
         slot.track = track;
+        void this.report({ type: 'queued', actor: slot.actor, track });
         this.pump(state);
         if (state.deferredSlots.has(slot)) this.recheckDeferred(state);
       });

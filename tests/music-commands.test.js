@@ -4,6 +4,7 @@ const { createMusicCommands, musicNoticeText } = require('../dist/commands/music
 const { MusicQueues } = require('../dist/music/queue');
 const { MusicError } = require('../dist/music/errors');
 const { getCommandPresentation, localizeCommand } = require('@monky/bot-sdk');
+const { botMessageText } = require('./helpers/bot-message');
 
 const video = { id: 'abcdefghijk', title: 'Authorized original', url: 'https://www.youtube.com/watch?v=abcdefghijk', duration: 20 };
 const request = (locale, query = 'original', signal = new AbortController().signal) => ({
@@ -36,12 +37,13 @@ test('localized music presentation preserves handler IDs, wire options and voice
 });
 
 function context(locale, args = {}) {
-  const replies = [], choices = [];
+  const replies = [], choices = [], published = [];
   const ctx = {
-    replies, choices, serverId: 'server', channelId: 'text', invokerId: 'user', invokerSessionId: 'session', invocationId: 'invocation',
+    replies, choices, published, serverId: 'server', channelId: 'text', invokerId: 'user', invokerNickname: 'Requester', invokerSessionId: 'session', invocationId: 'invocation',
     invokerVoiceChannelId: 'voice', locale, args, signal: new AbortController().signal,
     getVoiceChannel: async () => ctx.invokerVoiceChannelId,
-    reply: content => replies.push(content),
+    reply: content => replies.push(botMessageText(content, locale)),
+    publish: content => published.push(botMessageText(content, locale)),
     choose: async choice => { choices.push(choice); return null; },
   };
   return ctx;
@@ -78,7 +80,7 @@ for (const locale of ['en', 'pt-BR']) {
     assert.equal(enqueued[0][1], video.url);
     assert.deepEqual(ctx.choices, []);
     assert.match(ctx.replies[0], locale === 'en' ? /checking its details/ : /validando os dados/);
-    assert.match(ctx.replies.at(-1), locale === 'en' ? /Added to queue/ : /Adicionado à fila/);
+    assert.equal(ctx.replies.length, 1, 'Acceptance is published by the queue, not duplicated in private replies');
     assert.doesNotMatch(ctx.replies.join('\n'), /first audio is sent|primeiro áudio/);
   });
   test(`unprepared requester tools never search, enqueue or claim playback (${locale})`, async () => {
@@ -116,10 +118,9 @@ for (const locale of ['en', 'pt-BR']) {
       assert.doesNotMatch(ctx.replies[0], /Added to queue|Adicionado à fila|Now playing|Tocando:|Track skipped|Faixa pulada/);
       finish(video);
       await running;
-      assert.equal(ctx.replies.length, 2);
-      assert.match(ctx.replies[1], name === 'play'
-        ? locale === 'en' ? /Added to queue/ : /Adicionado à fila/
-        : locale === 'en' ? /Track skipped/ : /Faixa pulada/);
+      assert.equal(ctx.replies.length, 1);
+      assert.equal(ctx.published.length, name === 'skip' ? 1 : 0);
+      if (name === 'skip') assert.match(ctx.published[0], locale === 'en' ? /Track skipped/ : /Faixa pulada/);
     }
   });
 
@@ -143,6 +144,36 @@ test('pasted YouTube links resolve one suggestion without text search or eager a
   assert.equal(choices.length, 1);
   assert.equal(choices[0].value, video.url);
   assert.equal(choices[0].audio.resourceId, video.url);
+});
+
+test('successful shared controls publish once, while failures and read-only queries stay private', async () => {
+  for (const locale of ['en', 'pt-BR']) {
+    const calls = [];
+    const queues = {
+      assertControl: () => {},
+      control: async (...args) => { calls.push(args); },
+      snapshot: () => ({ current: null, upcoming: [], paused: false }),
+    };
+    const commands = createMusicCommands(queues, {});
+    for (const name of ['pause', 'resume', 'skip', 'stop', 'leave', 'remove', 'clear']) {
+      const ctx = context(locale, { position: 1 });
+      await commands.find(command => command.name === name).handler(ctx);
+      assert.equal(ctx.published.length, 1, name);
+      assert.equal(ctx.replies.length, name === 'skip' ? 1 : 0, name);
+      assert.equal(calls.at(-1)[0].textChannelId, ctx.channelId);
+    }
+    for (const name of ['queue', 'nowplaying']) {
+      const ctx = context(locale);
+      await commands.find(command => command.name === name).handler(ctx);
+      assert.equal(ctx.published.length, 0);
+      assert.equal(ctx.replies.length, 1);
+    }
+    queues.control = async () => { throw new MusicError('empty'); };
+    const failed = context(locale);
+    await commands.find(command => command.name === 'pause').handler(failed);
+    assert.equal(failed.published.length, 0);
+    assert.equal(failed.replies.length, 1);
+  }
 });
 
 test('unselected search text cannot execute or auto-pick a song', async () => {
