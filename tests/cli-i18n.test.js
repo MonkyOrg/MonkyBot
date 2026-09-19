@@ -71,6 +71,21 @@ test('language command saves a canonical preference even without a terminal', t 
   assert.deepEqual(fs.readdirSync(result.configDir), ['preferences.json']);
 });
 
+test('configuration language preserves the bot profile and accepts both supported language tags', t => {
+  const config = '{"existing":"do-not-change","botToken":"fixture-token"}\n';
+  for (const [tag, expected] of [['en-US', 'en'], ['pt-br', 'pt-BR']]) {
+    const result = isolated(t, `
+      require('node:readline').createInterface = () => { throw new Error('Unexpected prompt'); };
+      process.argv = [process.execPath, ${JSON.stringify(cliPath)}, 'config', 'language', ${JSON.stringify(tag)}];
+      require(${JSON.stringify(cliPath)});
+    `, { config });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(result.configDir, 'preferences.json'))), { locale: expected });
+    assert.equal(fs.readFileSync(path.join(result.configDir, 'config.json'), 'utf8'), config);
+    assert.doesNotMatch(result.output + result.errors, /fixture-token/);
+    assert.deepEqual(fs.readdirSync(result.configDir).sort(), ['config.json', 'preferences.json']);
+  }
+});
+
 test('recognized automation and TTY help/version do not trigger first-use language selection', t => {
   for (const args of [['--help'], ['--version'], ['music-check', '--unexpected']]) {
     const result = isolated(t, `
@@ -186,6 +201,12 @@ test('first interactive use asks once, persists language, and never rewrites the
 
 test('the actual CLI asks on first interactive use and applies the selected language immediately', t => {
   const result = isolated(t, `${fakePrompt(['2'])}
+    const actions = ['show', 'back'];
+    require('@monky/bot-sdk/dist/cli/prompts').askCliChoice = async (_locale, _title, choices) => {
+      const selected = actions.shift();
+      if (!choices.some(choice => choice.value === selected)) throw new Error('Unexpected menu');
+      return selected;
+    };
     Object.defineProperty(process.stdin, 'isTTY', { value: true });
     Object.defineProperty(process.stdout, 'isTTY', { value: true });
     global.fetch = () => { throw new Error('Unexpected network request'); };
@@ -193,6 +214,25 @@ test('the actual CLI asks on first interactive use and applies the selected lang
     require(${JSON.stringify(cliPath)});
   `);
   assert.match(result.output, /No configuration found/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(result.configDir, 'preferences.json'))), { locale: 'en' });
+  assert.deepEqual(fs.readdirSync(result.configDir), ['preferences.json']);
+});
+
+test('the configuration language picker updates the next menu and survives reopening', t => {
+  const result = isolated(t, `
+    Object.defineProperty(process.stdin, 'isTTY', { value: true });
+    Object.defineProperty(process.stdout, 'isTTY', { value: true });
+    const actions = ['language', 'en', 'back'];
+    require('@monky/bot-sdk/dist/cli/prompts').askCliChoice = async (_locale, title, choices) => {
+      console.log(title);
+      const selected = actions.shift();
+      if (!choices.some(choice => choice.value === selected)) throw new Error('Unexpected menu');
+      return selected;
+    };
+    process.argv = [process.execPath, ${JSON.stringify(cliPath)}, 'config'];
+    require(${JSON.stringify(cliPath)});
+  `, { saved: 'pt-BR' });
+  assert.match(result.output, /Configurações[\s\S]*Idioma \/ Language[\s\S]*Language saved: en-US[\s\S]*Settings/);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(result.configDir, 'preferences.json'))), { locale: 'en' });
   assert.deepEqual(fs.readdirSync(result.configDir), ['preferences.json']);
 });

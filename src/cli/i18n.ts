@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { randomUUID } from 'node:crypto';
-import { normalizeBotLocale, resolveBotLocale, type BotLocale } from '@monky/bot-sdk';
+import { askCliChoice, normalizeBotLocale, resolveBotLocale, type BotLocale } from '@monky/bot-sdk';
 import { CONFIG_DIR } from './constants';
 
 export type CliLocale = BotLocale;
@@ -76,7 +76,7 @@ export function cliText(ptBR: string, en: string): string {
 const messages: Readonly<Record<string, readonly [string, string]>> = {
   'language.saved': ['Idioma salvo: {locale}.', 'Language saved: {locale}.'],
   'language.current': ['Idioma atual: {locale}.', 'Current language: {locale}.'],
-  'language.usage': ['Uso: monkybot language <pt-BR|en>', 'Usage: monkybot language <pt-BR|en>'],
+  'language.usage': ['Uso: monkybot config language [pt-BR|en-US]', 'Usage: monkybot config language [pt-BR|en-US]'],
   'language.invalidPreference': [
     'Não foi possível ler uma preferência de idioma válida em preferences.json; o arquivo foi preservado. Use monkybot language pt-BR ou monkybot language en para salvar uma escolha.',
     'Could not read a valid language preference from preferences.json; the file was preserved. Use monkybot language pt-BR or monkybot language en to save a choice.',
@@ -165,6 +165,22 @@ export function saveCliLocale(locale: CliLocale): void {
   }
 }
 
+export async function languageCommand(args: string[]): Promise<void> {
+  if (args.length > 1 || (args.length === 1 && !parseCliLocale(args[0]))) {
+    throw new Error(cliT('language.usage'));
+  }
+  let selected = parseCliLocale(args[0]);
+  if (!args.length && process.stdin.isTTY && process.stdout.isTTY && !process.env.CI) {
+    selected = await askCliChoice<CliLocale>(getCliLocale(), 'Idioma / Language', [
+      { value: 'pt-BR', label: 'Português (Brasil)' }, { value: 'en', label: 'English (US)' },
+    ], getCliLocale());
+  }
+  if (selected) saveCliLocale(selected);
+  console.log(cliT(selected ? 'language.saved' : 'language.current', {
+    locale: getCliLocale() === 'en' ? 'en-US' : 'pt-BR',
+  }));
+}
+
 export async function initializeCliLanguage(options: { interactive?: boolean; force?: boolean } = {}): Promise<void> {
   const interactive = options.interactive ?? (!!process.stdin.isTTY && !!process.stdout.isTTY && !process.env.CI);
   if (!interactive) return;
@@ -176,7 +192,7 @@ export async function initializeCliLanguage(options: { interactive?: boolean; fo
       const answer = await new Promise<string>((resolve, reject) => {
         const close = (): void => reject(new Error('Language selection cancelled / Seleção de idioma cancelada.'));
         rl.once('close', close);
-        rl.question(`Idioma / Language: 1. Português (Brasil)  2. English [${defaultLocale === 'en' ? '2' : '1'}]: `, (value) => {
+        rl.question(`Idioma / Language: 1. Português (Brasil)  2. English (US) [${defaultLocale === 'en' ? '2' : '1'}]: `, (value) => {
           rl.off('close', close);
           resolve(value.trim().toLowerCase());
         });

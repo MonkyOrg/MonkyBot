@@ -140,6 +140,39 @@ async function smokePack(tarball) {
       assert.deepEqual(fs.readdirSync(runtime), [], 'Retired commands must not create runtime files.');
     }
 
+    const cliHome = path.join(workspace, 'cli-home');
+    const cliEnvironment = {
+      ...env, HOME: cliHome, USERPROFILE: cliHome,
+      MONKY_BOT_LOCALE: undefined, MONKY_LANG: undefined, CI: '1',
+    };
+    const languageCli = (args) => {
+      const result = spawnSync(process.execPath, [...guard, path.join(bot, 'dist', 'cli.js'), ...args], {
+        cwd: runtime, env: cliEnvironment, encoding: 'utf8', timeout: 15000,
+      });
+      if (result.error) throw result.error;
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      return result.stdout;
+    };
+    const cliProfile = path.join(cliHome, '.monkybot');
+    for (const [tag, locale, message] of [
+      ['en-US', 'en', 'Current language: en-US.'],
+      ['pt-BR', 'pt-BR', 'Idioma atual: pt-BR.'],
+    ]) {
+      languageCli(['config', 'language', tag]);
+      assert.equal(languageCli(['config', 'language']).trim(), message);
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(cliProfile, 'preferences.json'), 'utf8')), { locale });
+      assert.deepEqual(fs.readdirSync(cliProfile), ['preferences.json'],
+        'Changing language before setup must not create a connection, identity or credentials.');
+    }
+    const cliConfiguration = path.join(cliProfile, 'config.json');
+    const preservedConfiguration = '{"existing":"preserve","botToken":"smoke-private-token"}\n';
+    fs.writeFileSync(cliConfiguration, preservedConfiguration);
+    for (const tag of ['en-US', 'pt-BR']) {
+      assert.doesNotMatch(languageCli(['config', 'language', tag]), /smoke-private-token/);
+      assert.equal(fs.readFileSync(cliConfiguration, 'utf8'), preservedConfiguration,
+        'Changing language must preserve the configured connection and token byte for byte.');
+    }
+
     const forbidden = spawnSync(process.execPath, [
       ...guard, '-e', `require(${JSON.stringify(path.join(ROOT, 'package.json'))})`,
     ], { cwd: runtime, env, encoding: 'utf8', timeout: 15000 });
