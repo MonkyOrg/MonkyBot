@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { test, beforeEach } = require('node:test');
+const { botMessageText } = require('./helpers/bot-message');
 const { setCliLocale } = require('../dist/cli/i18n');
 
 beforeEach(() => setCliLocale('en'));
@@ -49,7 +50,9 @@ function registered(t, { frames = 1, open } = {}) {
       return () => bot.off('settingsChanged', listener);
     },
     command: command => commands.set(command.name, command),
-    sendMessage: async (serverId, channelId, content) => { chats.push({ serverId, channelId, content }); },
+    sendMessage: async (serverId, channelId, content) => {
+      chats.push({ serverId, channelId, content: botMessageText(content), localizations: content.localizations });
+    },
     getVoiceConnection: serverId => connections.get(serverId),
     joinVoice: async (serverId, channelId) => {
       const connection = { channelId, humanParticipantCount: 1, writeOpus: async packet => { writes.push(packet); } };
@@ -71,7 +74,7 @@ function registered(t, { frames = 1, open } = {}) {
     await commands.get('play').handler({
       serverId, channelId: `text-${serverId}`, locale, invocationId: `play-${serverId}`,
       args: { busca: 'https://youtu.be/abcdefghijk' }, signal: controller.signal,
-      getVoiceChannel: async () => 'voice', reply: value => replies.push(value),
+      getVoiceChannel: async () => 'voice', reply: value => replies.push(botMessageText(value, locale)),
     });
     return { controller, replies };
   };
@@ -79,7 +82,8 @@ function registered(t, { frames = 1, open } = {}) {
     const replies = [];
     await commands.get(name).handler({
       serverId: 'a', channelId: 'text-a', locale: 'en', invocationId: name, args: {},
-      signal: new AbortController().signal, getVoiceChannel: async () => 'voice', reply: value => replies.push(value),
+      signal: new AbortController().signal, getVoiceChannel: async () => 'voice', reply: value => replies.push(botMessageText(value)),
+      publish: content => { chats.push({ serverId: 'a', channelId: 'text-a', content: botMessageText(content), localizations: content.localizations }); },
     });
     return replies;
   };
@@ -117,7 +121,8 @@ for (const locale of ['pt-BR', 'en']) for (const reason of ['join_failed', 'tran
 
     joining.mock.restore();
     const retry = await f.play('a', locale);
-    assert.match(retry.replies.at(-1), locale === 'pt-BR' ? /Adicionado à fila/ : /Added to queue/);
+    assert.equal(retry.replies.length, 1);
+    assert.equal(f.chats.filter(message => /Adicionado à fila|Added to queue/.test(message.content)).length, 1);
     await until(() => f.writes.length > 0);
   });
 }
@@ -184,7 +189,12 @@ test('registered music announces the end in persistent chat before its configure
   controller.abort();
   await until(() => f.chats.some(message => /Queue finished/.test(message.content)));
   assert.match(replies[0], /Track received/);
-  assert.match(replies.at(-1), /Added to queue/);
+  assert.equal(replies.length, 1);
+  assert.equal(f.chats.filter(message => /Added to queue/.test(message.content)).length, 1);
+  for (const message of f.chats) {
+    assert.ok(message.localizations.en);
+    assert.ok(message.localizations['pt-BR']);
+  }
   assert.ok(f.connections.has('a'));
   assert.equal(f.chats.filter(message => /Queue finished/.test(message.content)).length, 1);
   assert.ok(f.chats.every(message => message.serverId === 'a' && message.channelId === 'text-a'));
@@ -224,7 +234,7 @@ test('healthy playback keeps generic SDK and recovered peer errors in local diag
   await wait(70);
   assert.ok(f.writes.length > before);
   assert.equal(f.connections.get('a'), connection);
-  assert.equal(f.chats.length, 2);
+  assert.equal(f.chats.length, 3);
   assert.equal(logs.mock.callCount(), 1);
   assert.match(logs.mock.calls[0].arguments[0], /Runtime diagnostic.*Retired peer failed/);
   assert.doesNotMatch(logs.mock.calls[0].arguments[0], /private\.example|secret/);
@@ -255,7 +265,7 @@ test('a skipped failed track reports preparation but not playback until a replac
   await f.play();
   failed.release();
   await until(() => opened === 2);
-  assert.equal(f.chats.length, 3);
+  assert.equal(f.chats.length, 5);
   assert.equal(f.chats.filter(message => /Preparing to play/.test(message.content)).length, 2);
   assert.equal(f.chats.filter(message => /Now playing/.test(message.content)).length, 1,
     'Metadata/roster presence alone is not evidence that the replacement can play.');
@@ -306,7 +316,7 @@ test('recovery budget: an exhausted last track is reported once without a mislea
   await f.play();
   await until(() => f.chats.some(message => /Could not resume/.test(message.content)));
   await tick();
-  assert.equal(f.chats.length, 2);
+  assert.equal(f.chats.length, 3);
   assert.equal(f.chats.some(message => /Queue finished|Playback stopped/.test(message.content)), false);
 });
 
@@ -364,8 +374,9 @@ test('manual stop cancels an unproven replacement without resurrecting the earli
   await until(() => opened === 2);
   await f.control('stop');
   await tick();
-  assert.equal(f.chats.length, 3, 'A deliberate stop is not an automatic playback failure or normal EOF.');
-  assert.equal(f.chats.some(message => /Playback stopped|Queue finished/.test(message.content)), false);
+  assert.equal(f.chats.length, 6, 'Two additions and the explicit stop are public, without an automatic failure or normal EOF.');
+  assert.equal(f.chats.filter(message => /Playback stopped and queue cleared/.test(message.content)).length, 1);
+  assert.equal(f.chats.some(message => /Playback stopped on|Queue finished/.test(message.content)), false);
 });
 
 test('confirmed transport loss stops playback once, independently of an earlier generic SDK error', async t => {
@@ -374,7 +385,7 @@ test('confirmed transport loss stops playback once, independently of an earlier 
   await f.play();
   await until(() => f.chats.some(message => /Now playing/.test(message.content)));
   f.bot.emit('error', new Error('ICE temporarily disconnected.'), { serverId: 'a' });
-  assert.equal(f.chats.length, 2);
+  assert.equal(f.chats.length, 3);
   f.loseVoice('transport_failed');
   f.loseVoice('transport_failed');
   await until(() => f.chats.some(message => /Playback stopped/.test(message.content)));
@@ -396,7 +407,7 @@ test('a retired voice callback cannot stop a newer healthy SDK connection', asyn
   await wait(50);
   assert.equal(f.connections.get('a'), connection);
   assert.ok(f.writes.length > before);
-  assert.equal(f.chats.length, 2);
+  assert.equal(f.chats.length, 3);
 });
 
 test('server reconnection reports interrupted playback once without claiming the old queue resumed', async t => {
@@ -424,7 +435,7 @@ test('repeated reconnect events share one pending lost-playback notice', async t
   let attempts = 0;
   const send = f.bot.sendMessage;
   t.mock.method(f.bot, 'sendMessage', async (...args) => {
-    if (/queue was not resumed/.test(args[2])) { attempts++; await delivery.promise; }
+    if (/queue was not resumed/.test(botMessageText(args[2]))) { attempts++; await delivery.promise; }
     return send(...args);
   });
   f.bot.emit('connected', { serverId: 'a' });

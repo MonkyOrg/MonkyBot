@@ -4,6 +4,7 @@ const { randomUUID } = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const { registerTicTacToe } = require('../dist/commands/ticTacToe');
 const { MusicQueues } = require('../dist/music/queue');
+const { botMessageText } = require('./helpers/bot-message');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function deferred() {
@@ -63,7 +64,7 @@ function fixture(t, lifetime) {
   async function create(locale = 'en', overrides = {}) {
     const ctx = {
       serverId: 'server', channelId: 'text', invokerVoiceChannelId: 'voice', invokerId: 'x', invokerNickname: 'X',
-      invocationId: `game-${++count}`, locale, signal: new AbortController().signal, reply: text => replies.push(text),
+      invocationId: `game-${++count}`, locale, signal: new AbortController().signal, reply: text => replies.push(botMessageText(text, locale)),
       createScreen: async input => storeScreen(input, { serverId: ctx.serverId, channelId: ctx.invokerVoiceChannelId }),
       ...overrides,
     };

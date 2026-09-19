@@ -5,6 +5,7 @@ const { LocalExecutionError, LocalExecutionRpcError, ProtocolErrorCode } = requi
 const { createLocalMusicCommands, registerMusicCommands } = require('../dist/commands/music');
 const { MusicError, SourceRecoveryError, musicError } = require('../dist/music/errors');
 const { MusicQueues } = require('../dist/music/queue');
+const { botMessageText } = require('./helpers/bot-message');
 const {
   LocalMusicSourceFactory,
   localMusicFailure,
@@ -349,7 +350,7 @@ test('production registration uses local execution and controls do not request c
     getServerSettings: () => ({ schemaRevision: 1, revision: 1, values: { music_idle_seconds: 60 } }),
     onSettingsChanged: () => () => {},
     command: command => commands.set(command.name, command),
-    sendMessage: async (_serverId, _channelId, content) => { chats.push(content); },
+    sendMessage: async (_serverId, _channelId, content) => { chats.push(botMessageText(content)); },
     getVoiceConnection: () => connection,
     joinVoice: async () => connection = { channelId: 'voice', humanParticipantCount: 1, writeOpus: async () => {} },
     leaveVoice: async () => { connection = undefined; },
@@ -362,11 +363,13 @@ test('production registration uses local execution and controls do not request c
   const replies = [];
   const ctx = {
     ...context({ args: { busca: url } }), invocationId: 'invocation',
-    getVoiceChannel: async () => 'voice', reply: text => replies.push(text),
+    getVoiceChannel: async () => 'voice', reply: text => replies.push(botMessageText(text)),
+    publish: text => chats.push(botMessageText(text)),
   };
   await commands.get('play').handler(ctx);
   assert.match(replies[0], /Track received/);
-  assert.match(replies.at(-1), /Added to queue/);
+  assert.equal(replies.length, 1);
+  assert.equal(chats.filter(text => /Added to queue/.test(text)).length, 1);
   await until(() => f.calls.releases.length === 1);
   assert.equal(f.calls.retains.length, 1);
   assert.equal(f.calls.streams.length, 1);
@@ -427,12 +430,12 @@ test('local command, retained source, queue clock and release compose without a 
     ...context({ args: { busca: url } }),
     invocationId: 'invocation',
     getVoiceChannel: async () => 'voice',
-    reply: value => replies.push(value),
+    reply: value => replies.push(botMessageText(value)),
   };
   await createLocalMusicCommands(queues, f.provider)
     .find(command => command.name === 'play').handler(ctx);
   assert.match(replies[0], /Track received/);
-  assert.match(replies.at(-1), /Added to queue/);
+  assert.equal(replies.length, 1);
   await until(() => f.calls.releases.length === 1);
   assert.deepEqual(writes, [1, 2]);
   assert.equal(f.calls.advanced, 2);

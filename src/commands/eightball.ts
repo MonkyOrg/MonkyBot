@@ -1,5 +1,4 @@
-import { translate, type LocalizedCommandDefinition } from './i18n';
-import { normalizeCliLocale } from '../cli/i18n';
+import { message, type LocalizedCommandDefinition } from './i18n';
 
 const responses = {
   'pt-BR': [
@@ -68,13 +67,14 @@ export const eightBallCommand: LocalizedCommandDefinition = {
     if (ctx.signal.aborted) return;
     const question = ctx.args.pergunta;
     if (typeof question !== 'string' || !question.trim() || question.length > 200) {
-      ctx.reply(translate(ctx.locale,
+      ctx.reply(message(ctx.locale,
         '⚠️ Escreva uma pergunta com até 200 caracteres.',
         '⚠️ Enter a question with up to 200 characters.'));
       return;
     }
-    const choices = responses[normalizeCliLocale(ctx.locale)];
-    const answer = choices[Math.floor(Math.random() * choices.length)];
-    ctx.reply(`🎱 *"${question.trim()}"*\n\n**${answer}**`);
+    const index = Math.floor(Math.random() * responses.en.length);
+    ctx.reply(message(ctx.locale,
+      `🎱 *"${question.trim()}"*\n\n**${responses['pt-BR'][index]}**`,
+      `🎱 *"${question.trim()}"*\n\n**${responses.en[index]}**`));
   },
 };

@@ -1,5 +1,5 @@
 import type {
-  BotClient, CommandAudioPreviewContext, CommandAudioPreviewData, CommandAudioPreviewResponse,
+  BotClient, BotLocale, CommandAudioPreviewContext, CommandAudioPreviewData, CommandAudioPreviewResponse,
   CommandAutocompleteContext, CommandContext, CommandDefinition, LocalExecutionProvider, LocalMediaTrack,
 } from '@monky/bot-sdk';
 import { LIMITS } from '@monky/bot-sdk';
@@ -7,7 +7,7 @@ import { MusicQueues, type MusicActor, type MusicNotice } from '../music/queue';
 import { MusicError, aborted, musicError } from '../music/errors';
 import { IncompleteAudioError, MUSIC_PREVIEW_DURATION_MS, musicInput, videoUrl, type MusicSource, type Track } from '../music/source';
 import { bounded, errorDiagnostic } from '../music/process';
-import { translate, type LocalizedCommandDefinition } from './i18n';
+import { message, translate, type LocalizedCommandDefinition } from './i18n';
 import { cliText } from '../cli/i18n';
 import { defaultMusicIdleSeconds, musicIdleMilliseconds, musicSettingsDefinition } from '../music/settings';
 import { LocalMusicSourceFactory, localMusicAutocomplete, localMusicPreview } from '../music/localSource';
@@ -64,17 +64,22 @@ function label(track: Track): string {
   return `${track.title} (${time(track.duration)})`;
 }
 
-function replyLines(ctx: CommandContext, text: string): void {
-  let part = '';
-  for (const line of text.split('\n')) {
-    if (line.length > LIMITS.MAX_MESSAGE_LENGTH) throw new MusicError('unavailable');
-    const next = part ? `${part}\n${line}` : line;
-    if (next.length > LIMITS.MAX_MESSAGE_LENGTH) {
-      ctx.reply(part);
-      part = line;
-    } else part = next;
+function replyLines(ctx: CommandContext, ptBR: string, en: string): void {
+  const lines = { 'pt-BR': ptBR.split('\n'), en: en.split('\n') };
+  if (lines['pt-BR'].length !== lines.en.length) throw new Error('Localized music replies must keep matching lines');
+  let ptPart = '', enPart = '';
+  for (let i = 0; i < lines.en.length; i++) {
+    const ptLine = lines['pt-BR'][i], enLine = lines.en[i];
+    if (Math.max(ptLine.length, enLine.length) > LIMITS.MAX_MESSAGE_LENGTH) throw new MusicError('unavailable');
+    const ptNext = ptPart ? `${ptPart}\n${ptLine}` : ptLine;
+    const enNext = enPart ? `${enPart}\n${enLine}` : enLine;
+    if (Math.max(ptNext.length, enNext.length) > LIMITS.MAX_MESSAGE_LENGTH) {
+      ctx.reply(message(ctx.locale, ptPart, enPart));
+      ptPart = ptLine;
+      enPart = enLine;
+    } else { ptPart = ptNext; enPart = enNext; }
   }
-  if (part.trim()) ctx.reply(part);
+  if (ptPart.trim()) ctx.reply(message(ctx.locale, ptPart, enPart));
 }
 
 interface MusicInteractions<T extends Track> {
@@ -132,34 +137,34 @@ function createMusicCommandSet<TQueue extends Track, TLookup extends Track>(
         queues.assertControl(caller);
         if (definition.name === 'queue' || definition.name === 'nowplaying') {
           const state = queues.snapshot(ctx.serverId);
-          const current = state.current
-            ? `${state.paused ? '⏸' : state.started ? '▶' : '⏳'} ${label(state.current)} — ${time(state.elapsedMs / 1000)}`
-            : translate(ctx.locale, 'Nenhuma faixa está tocando.', 'Nothing is playing.');
-          const upcoming = definition.name === 'queue'
-            ? `\n\n${translate(ctx.locale, 'Próximas faixas', 'Up next')}:\n${state.upcoming.map((item, index) =>
-              `${index + 1}. ${item.pending ? translate(ctx.locale, 'Carregando…', 'Loading…')
-                : item.title}${item.waitingForRequester
-                ? translate(ctx.locale, ' — aguardando solicitante', ' — waiting for requester') : ''}`).join('\n') ||
-              translate(ctx.locale, 'Fila vazia.', 'Queue empty.')}` : '';
-          replyLines(ctx, `${current}${upcoming}`);
+          const render = (locale: BotLocale): string => {
+            const current = state.current
+              ? `${state.paused ? '⏸' : state.started ? '▶' : '⏳'} ${label(state.current)} — ${time(state.elapsedMs / 1000)}`
+              : translate(locale, 'Nenhuma faixa está tocando.', 'Nothing is playing.');
+            const upcoming = definition.name === 'queue'
+              ? `\n\n${translate(locale, 'Próximas faixas', 'Up next')}:\n${state.upcoming.map((item, index) =>
+                `${index + 1}. ${item.pending ? translate(locale, 'Carregando…', 'Loading…')
+                  : item.title}${item.waitingForRequester
+                  ? translate(locale, ' — aguardando solicitante', ' — waiting for requester') : ''}`).join('\n') ||
+                translate(locale, 'Fila vazia.', 'Queue empty.')}` : '';
+            return `${current}${upcoming}`;
+          };
+          replyLines(ctx, render('pt-BR'), render('en'));
           return;
         }
         if (definition.name === 'play') {
           const input = musicInput(ctx.args.busca);
           if (input.kind !== 'url') throw new MusicError('selection');
-          ctx.reply(translate(ctx.locale,
+          ctx.reply(message(ctx.locale,
             '⏳ Recebi a música. Estou validando os dados para adicioná-la à fila…',
             '⏳ Track received. I am checking its details before adding it to the queue…'));
-          const track = await queues.enqueue(caller, input.value, ctx.signal, () => actor(ctx));
-          if (!ctx.signal.aborted) ctx.reply(translate(ctx.locale,
-            `➕ Adicionado à fila: ${label(track)}.`,
-            `➕ Added to queue: ${label(track)}.`));
+          await queues.enqueue(caller, input.value, ctx.signal, () => actor(ctx));
         } else {
           const control = definition.name;
           if (control !== 'pause' && control !== 'resume' && control !== 'skip' && control !== 'stop' &&
               control !== 'leave' && control !== 'remove' && control !== 'clear') return;
           const position = typeof ctx.args.position === 'number' ? ctx.args.position : undefined;
-          if (control === 'skip') ctx.reply(translate(ctx.locale,
+          if (control === 'skip') ctx.reply(message(ctx.locale,
             '⏳ Recebi o pedido para pular a faixa. Encerrando o áudio atual…',
             '⏳ Skip received. Stopping the current audio…'));
           await queues.control(caller, control, position);
@@ -170,7 +175,7 @@ function createMusicCommandSet<TQueue extends Track, TLookup extends Track>(
               leave: ['Reprodução parada, fila limpa e sala desconectada.', 'Playback stopped, queue cleared and voice disconnected.'],
               remove: ['Faixa removida da fila.', 'Track removed from the queue.'], clear: ['Próximas faixas removidas; faixa atual preservada.', 'Upcoming tracks cleared; current track preserved.'],
             };
-            ctx.reply(translate(ctx.locale, done[control][0], done[control][1]));
+            ctx.publish(message(ctx.locale, done[control][0], done[control][1]));
           }
         }
       } catch (error: unknown) {
@@ -180,7 +185,7 @@ function createMusicCommandSet<TQueue extends Track, TLookup extends Track>(
                 'local_permission', 'local_client_unavailable', 'local_transport'].includes(error.code)) {
             console.error(`[music] ${cliText('Comando falhou', 'Command failed')} (command=${definition.name}, stage=execute): ${errorDiagnostic(error)}`);
           }
-          ctx.reply(`⚠️ ${musicError(error, ctx.locale)}`);
+          ctx.reply(message(ctx.locale, `⚠️ ${musicError(error, 'pt-BR')}`, `⚠️ ${musicError(error, 'en')}`));
         }
       }
     },
@@ -224,7 +229,8 @@ export function registerMusicCommands(bot: BotClient): () => Promise<void> {
   bot.settings(musicSettingsDefinition(seconds));
   const notice = async (event: MusicNotice, signal?: AbortSignal): Promise<void> => {
     if (signal) aborted(signal);
-    const sending = bot.sendMessage(event.actor.serverId, event.actor.textChannelId, musicNoticeText(event));
+    const sending = bot.sendMessage(event.actor.serverId, event.actor.textChannelId,
+      message(event.actor.locale, musicNoticeText(event, 'pt-BR'), musicNoticeText(event, 'en')));
     if (signal) await bounded(sending, signal, 5000);
     else await sending;
   };
@@ -258,7 +264,7 @@ export function registerMusicCommands(bot: BotClient): () => Promise<void> {
     }
     const { actor } = interruption;
     interruption.sending = true;
-    void bounded(bot.sendMessage(serverId, actor.textChannelId, translate(actor.locale,
+    void bounded(bot.sendMessage(serverId, actor.textChannelId, message(actor.locale,
       '⚠️ O bot perdeu a conexão com o servidor e a reprodução foi interrompida. A conexão voltou, mas a fila não foi retomada.',
       '⚠️ The bot lost its server connection and playback was interrupted. The connection is back, but the queue was not resumed.')),
     new AbortController().signal, 10_000)
@@ -312,9 +318,11 @@ export function registerMusicCommands(bot: BotClient): () => Promise<void> {
   return dispose;
 }
 
-export function musicNoticeText(event: MusicNotice): string {
-  const locale = event.actor.locale;
+export function musicNoticeText(event: MusicNotice, locale = event.actor.locale): string {
   switch (event.type) {
+    case 'queued':
+      return translate(locale, `➕ Adicionado à fila por ${event.actor.invokerNickname}: ${label(event.track)}.`,
+        `➕ Added to queue by ${event.actor.invokerNickname}: ${label(event.track)}.`);
     case 'loading':
       return translate(locale,
         `⏳ Preparando para tocar: ${label(event.track)}. Aguarde o início do áudio…`,

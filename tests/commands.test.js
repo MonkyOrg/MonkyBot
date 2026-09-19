@@ -11,6 +11,7 @@ const { helpCommand } = require('../dist/commands/help');
 const { generateEcosystem } = require('../dist/cli/pm2');
 const { setCliLocale, normalizeCliLocale } = require('../dist/cli/i18n');
 const sdk = require('@monky/bot-sdk');
+const { botMessageText } = require('./helpers/bot-message');
 
 const presentations = [
   ['ping', 'ping', 'ping'], ['dado', 'dado', 'dice'], ['moeda', 'moeda', 'coin'],
@@ -92,15 +93,17 @@ function context({ args = {}, locale = 'pt-BR', controller = new AbortController
   const replies = [];
   const published = [];
   const forms = [];
+  const messages = [];
+  const reply = content => { messages.push(content); replies.push(botMessageText(content, locale)); };
   return {
-    replies, published, forms, controller,
+    replies, published, forms, controller, messages,
     ctx: {
       invocationId: 'invocation', commandName: 'test', channelId: 'channel',
       invokerId: 'caller', invokerNickname: 'Tester', serverId: 'server',
       locale, args, signal: controller.signal,
-      reply: (content) => replies.push(content),
-      replyEphemeral: (content) => replies.push(content),
-      publish: (content) => published.push(content),
+      reply,
+      replyEphemeral: reply,
+      publish: (content) => published.push(botMessageText(content, locale)),
       prompt: async (form) => { forms.push(form); return null; },
       createSelector: async () => assert.fail('Unexpected public selector'),
     },
@@ -162,14 +165,14 @@ for (const locale of ['pt-BR', 'en']) {
       if (command === coinCommand) assert.match(state.replies[0], locale === 'en' ? /Heads|Tails/ : /Cara|Coroa/);
       if (command === pingCommand) assert.match(state.replies[0], locale === 'en' ? /is online/ : /está online/);
       if (command === helpCommand) {
-        assert.match(state.replies[0], locale === 'en' ? /Replies are private/ : /respostas são privadas/);
+        assert.match(state.replies[0], locale === 'en' ? /Queries and errors are private/ : /Consultas e erros são privados/);
         assert.ok(state.replies[0].includes(`**/${sdk.getCommandPresentation(pollCommand, locale).displayName}**`));
         assert.match(state.replies[0], locale === 'en' ? /\/8ball <question>/ : /\/bola-magica <pergunta>/);
         assert.match(state.replies[0], locale === 'en' ? /\/dice \[sides\]/ : /\/dado \[lados\]/);
         assert.match(state.replies[0], locale === 'en' ? /\/play <search>/ : /\/tocar <busca>/);
         assert.match(state.replies[0], locale === 'en' ? /\/remove <position>/ : /\/remover <posição>/);
-        assert.match(state.replies[0], locale === 'en' ? /Submitting the poll form publishes/ : /Ao enviar o formulário de enquete/);
-        assert.match(state.replies[0], locale === 'en' ? /Music requires voice membership/ : /Música exige estar em voz/);
+        assert.match(state.replies[0], locale === 'en' ? /Polls, results and music playback changes/ : /Enquetes, resultados e mudanças/);
+        assert.match(state.replies[0], locale === 'en' ? /Music requires membership/ : /Música exige estar na mesma sala/);
         assert.match(state.replies[0], locale === 'en' ? /invitation on the stage/ : /convite no palco/);
         assert.ok(state.replies[0].length <= 2000);
       }
@@ -201,6 +204,28 @@ test('already-aborted invocations are ignored by basic commands', async () => {
     const state = context({ controller });
     await command.handler(state.ctx);
     assert.equal(state.forms.length + state.replies.length + state.published.length, 0);
+  }
+});
+
+test('one random result is shared by both reader variants without translating user text', async t => {
+  const random = t.mock.method(Math, 'random', () => 0.1);
+  for (const command of [diceCommand, coinCommand, eightBallCommand]) {
+    const state = context({ locale: 'en', args: { pergunta: 'Minha pergunta stays original?' } });
+    const before = random.mock.callCount();
+    await command.handler(state.ctx);
+    assert.equal(random.mock.callCount(), before + 1, command.name);
+    const variants = state.messages[0].localizations;
+    assert.equal(state.messages[0].content, variants.en);
+    assert.notEqual(variants.en, variants['pt-BR']);
+    if (command === diceCommand) {
+      assert.match(variants.en, /d6\.\.\. \*\*1\*\*/);
+      assert.match(variants['pt-BR'], /d6\.\.\. \*\*1\*\*/);
+    } else if (command === coinCommand) {
+      assert.match(variants.en, /Heads/);
+      assert.match(variants['pt-BR'], /Cara/);
+    } else {
+      for (const text of Object.values(variants)) assert.ok(text.includes(state.ctx.args.pergunta));
+    }
   }
 });
 

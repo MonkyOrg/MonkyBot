@@ -27,10 +27,10 @@
     "node": ">=18"
   },
   "monky": {
-    "protocolVersion": 20
+    "protocolVersion": 21
   },
   "dependencies": {
-    "@monky/bot-sdk": "file:vendor/monky-bot-sdk-22.1.0.tgz"
+    "@monky/bot-sdk": "file:vendor/monky-bot-sdk-23.0.2-beta.tgz"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
