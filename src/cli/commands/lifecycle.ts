@@ -17,7 +17,7 @@ import { assertManifestPortAvailable, DEFAULT_MANIFEST_PORT, getManifestBindHost
 import { ManifestReadinessError, verifyManifest, waitForManifest } from '../manifestReadiness';
 import { DEFAULT_BOT_NAME } from '../../profile';
 import { getManifestUrl } from '../../utils/manifest';
-import { cliText } from '../i18n';
+import { cliText, languageCommand } from '../i18n';
 
 function loadConfigOrDie() {
   const config = readConfig();
@@ -321,6 +321,15 @@ export function logsCommand(args: string[]): void {
 }
 
 export async function configCommand(args: string[]): Promise<void> {
+  if (args[0] === 'language') {
+    await languageCommand(args.slice(1));
+    return;
+  }
+  if (!args.length && process.stdin.isTTY && process.stdout.isTTY && !process.env.CI) {
+    const { configurationMenu } = await import('../menu');
+    await configurationMenu();
+    return;
+  }
   const config = readConfig();
 
   if (args.length === 0 || args[0] === 'show') {

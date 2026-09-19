@@ -128,9 +128,10 @@ monkybot status              # Exibe estado (PID, uptime, memória, CPU)
 monkybot logs                # Exibe logs em tempo real (Ctrl+C para sair)
 monkybot logs --lines 100    # Últimas 100 linhas
 monkybot logs --no-follow    # Imprime logs recentes e sai
-monkybot config              # Exibe a configuração
+monkybot config              # Abre Configurações em um terminal
+monkybot config show         # Exibe a configuração diretamente
 monkybot config set <k> <v>  # Altera uma configuração
-monkybot language en         # Salva o idioma do CLI (pt-BR ou en)
+monkybot config language en-US # Salva o idioma do CLI (pt-BR ou en-US)
 monkybot --version           # Versão instalada
 monkybot update              # Atualiza para a stable mais recente
 monkybot update --beta       # Inclui betas e stable; instala a versão mais nova
@@ -146,9 +147,12 @@ A configuração fica salva em `~/.monkybot/config.json`. O pm2 garante que o bo
 ### Idioma do CLI e dos logs
 
 Na primeira utilização interativa de um comando, o CLI pergunta **Português
-(Brasil)** ou **English** e salva apenas `~/.monkybot/preferences.json`.
+(Brasil)** ou **English (US)** e salva apenas `~/.monkybot/preferences.json`.
 Isso não refaz o setup nem modifica `config.json`, vínculos, portas ou `.keys`.
-Para mudar depois, use `monkybot language pt-BR` ou `monkybot language en`.
+Para mudar depois, abra `monkybot config` e escolha **Idioma / Language**,
+ou use `monkybot config language pt-BR` / `monkybot config language en-US`.
+O menu seguinte já usa o novo idioma. Sem TTY ou em CI, `config` mantém a
+consulta direta da configuração. `language` continua funcionando como alias.
 
 `--help`, `--version`, consultas `update --check`, execução com `--yes`, CI e
 entrada/saída não interativas não abrem essa pergunta. Sem preferência salva,

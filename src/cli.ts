@@ -11,7 +11,8 @@ import {
   configCommand,
 } from './cli/commands/lifecycle';
 import { updateCommand, autoUpdateCommand } from './cli/commands/update';
-import { cliText, cliT, getCliLocale, initializeCliLanguage, parseCliLocale, saveCliLocale } from './cli/i18n';
+import { cliText, initializeCliLanguage, languageCommand } from './cli/i18n';
+import { CliPromptCancelled } from '@monky/bot-sdk';
 import { errorDiagnostic } from './music/process';
 
 function getVersion(): string {
@@ -40,9 +41,10 @@ ${color('COMANDOS', ANSI.bold)}
   logs                   Exibe os logs do bot em tempo real
   update                 Atualiza o Monky Bot para a última stable
   autoupdate             Gerencia atualização automática
-  config                 Exibe a configuração atual
+  config                 Abre Configurações (exibe a configuração em scripts)
+  config language [pt-BR|en-US]  Consulta ou altera o idioma do CLI
   config set <k> <v>     Altera uma configuração
-  language <pt-BR|en>    Salva o idioma do CLI
+  language [pt-BR|en-US] Atalho para config language
 
 ${color('OPÇÕES', ANSI.bold)}
   --version, -v          Exibe a versão
@@ -91,9 +93,10 @@ ${color('COMMANDS', ANSI.bold)}
   logs                   Show live bot logs
   update                 Update Monky Bot to the latest stable
   autoupdate             Manage automatic updates
-  config                 Show current configuration
+  config                 Open Settings (show configuration in scripts)
+  config language [pt-BR|en-US]  Show or change the CLI language
   config set <k> <v>      Change a setting
-  language <pt-BR|en>     Save the CLI language
+  language [pt-BR|en-US]  Alias for config language
 
 ${color('OPTIONS', ANSI.bold)}
   --version, -v           Show version
@@ -147,11 +150,11 @@ async function main(): Promise<void> {
   }
 
   if (command === 'language') {
-    const selected = parseCliLocale(rest[0]);
-    if (rest.length === 1 && selected) saveCliLocale(selected);
-    else if (rest.length) throw new Error(cliT('language.usage'));
-    else await initializeCliLanguage({ force: true });
-    console.log(cliT(rest.length ? 'language.saved' : 'language.current', { locale: getCliLocale() }));
+    await languageCommand(rest);
+    return;
+  }
+  if (command === 'config' && rest[0] === 'language') {
+    await configCommand(rest);
     return;
   }
 
@@ -213,6 +216,10 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
+  if (error instanceof CliPromptCancelled) {
+    console.log(cliText('Operação cancelada.', 'Operation cancelled.'));
+    return;
+  }
   console.error(color(`${cliText('Erro', 'Error')}: ${errorDiagnostic(error)}`, ANSI.red));
   console.error(color(cliText('Use "monkybot --help"', 'Use "monkybot --help"'), ANSI.dim));
   process.exit(1);

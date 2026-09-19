@@ -597,6 +597,7 @@ for (const [command, method] of [['setup', 'setupCommand'], ['start', 'startComm
     const errors = [];
     const context = {
       require(name) {
+        if (name === '@monky/bot-sdk') return require('@monky/bot-sdk');
         if (name === './cli/constants') return require('../dist/cli/constants');
         if (name === './cli/i18n') return require('../dist/cli/i18n');
         if (name === './music/process') return require('../dist/music/process');
