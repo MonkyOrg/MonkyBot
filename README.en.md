@@ -6,9 +6,16 @@ The **official reference bot** for Monky — utility commands, fun and more.
 
 ## Compatibility
 
-This version requires **Monky protocol 21**. Update the Monky app and server
+This version requires **Monky protocol 22**, with official SDK **24.0.1**. Update the Monky app and server
 together before updating the bot; earlier protocol versions are not compatible.
 The bundled SDK is checked during the build and needs no separate installation.
+Profiles, identities, registrations, languages and requested capabilities are
+preserved; this update does not enable microphone reception.
+
+The official SDK fixes duplicated dependencies that prevented voice
+initialization in the 24.0.0-beta archive. Distributed bytes come from stable
+[Monky v24.0.1](https://github.com/MonkyOrg/Monky/releases/tag/v24.0.1),
+without local QA archives or modifications to the vendored SDK.
 
 The compatible SDK is included in `vendor/` and pinned in `package-lock.json`.
 This version removes

@@ -6,9 +6,16 @@ O **bot oficial de referência** do Monky — comandos utilitários, diversão e
 
 ## Compatibilidade
 
-Esta versão exige **protocolo Monky 21**. Atualize o aplicativo e o servidor Monky
+Esta versão exige **protocolo Monky 22**, com o SDK oficial **24.0.1**. Atualize o aplicativo e o servidor Monky
 juntos antes de atualizar o bot; servidores com protocolos anteriores não são compatíveis.
 O SDK incluído no pacote é verificado no build e não precisa ser instalado à parte.
+Perfis, identidades, vínculos, idiomas e capacidades solicitadas são preservados;
+a atualização não habilita recepção de microfones.
+
+O SDK oficial corrige a duplicação de dependências que impedia a inicialização
+de voz no pacote 24.0.0-beta. Os bytes distribuídos vêm da release stable
+[Monky v24.0.1](https://github.com/MonkyOrg/Monky/releases/tag/v24.0.1),
+sem pacotes locais de QA nem modificações no SDK vendorizado.
 
 O SDK compatível está incluído em `vendor/` e fixado no `package-lock.json`.
 Esta versão remove
