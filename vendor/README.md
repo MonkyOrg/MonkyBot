@@ -2,7 +2,35 @@
 
 ## SDK oficial ativo
 
-A dependencia ativa e `monky-bot-sdk-23.0.2-beta.tgz`, da
+A dependencia ativa e `monky-bot-sdk-24.0.1.tgz`, da
+[release stable Monky v24.0.1](https://github.com/MonkyOrg/Monky/releases/tag/v24.0.1).
+Inclui `@monky/shared` no protocolo **22** e a arvore completa de dependencias
+de producao. O MonkyBot mantem seu CLI proprio e as capacidades existentes;
+nao solicita `receive_voice` nem passa a ouvir microfones.
+
+Origem: commit `923ea76a84dcf8a9db5b3cc0d155fcdf6c3e17a9`,
+apos o merge do PR MonkyOrg/Monky#691. Os bytes foram produzidos pelo workflow
+[Release 35514443807](https://github.com/MonkyOrg/Monky/actions/runs/35514443807)
+e conferidos contra o digest do asset e o arquivo de checksums da release,
+sem modificacoes locais. O empacotador preserva as instancias compartilhadas
+dos registries ASN.1, corrigindo a inicializacao de voz do SDK 24.0.0-beta.
+SHA-256:
+`a6dc3935d0cd2d626b1f7695cd1ef82149e93d972d0aaf38e93c830b5a3142b3`.
+Tamanho: 5.995.670 bytes.
+
+Dependencia e lockfile fixam esses bytes, sem vinculos a outro checkout.
+Pacotes temporarios de QA nao acompanham o repositorio.
+O pin `MONKY_SDK_RELEASE` do workflow deve apontar para `v24.0.1`.
+
+Cliente, servidor e bot devem usar protocolo 22; o protocolo 21 nao e
+compativel. A mudanca exige uma release major do bot. O workflow ainda gera
+betas por padrao; promocao para stable exige solicitacao explicita.
+Preserve perfis, identidades, vinculos, preferencias e consentimentos
+existentes; nao e necessario refazer o setup.
+
+## SDK oficial anterior (protocolo 21)
+
+A dependencia anterior era `monky-bot-sdk-23.0.2-beta.tgz`, da
 [release oficial Monky v23.0.2-beta](https://github.com/MonkyOrg/Monky/releases/tag/v23.0.2-beta).
 Inclui `@monky/shared` no protocolo **21**, mensagens com variantes PT-BR/EN
 por leitor e as ferramentas create, doctor e CLI interativo reutilizavel.
@@ -15,10 +43,9 @@ e conferidos contra o digest do asset publicado, sem modificacoes locais.
 SHA-256:
 `a5471a013612652c462940807a4969e41deeb02b023fa00f0134d41b70a8ee0e`.
 
-Dependencia e lockfile apontam para esses bytes, sem vinculos a outro checkout.
-O pacote temporario de QA nao acompanha o repositorio. Cliente, servidor e bot
-precisam usar protocolo 21; o protocolo 20 nao e compativel. Esta atualizacao
-nao promove o bot nem o Monky para stable.
+Essa dependencia usava esses bytes, sem vinculos a outro checkout e sem
+pacotes de QA. Exigia cliente, servidor e bot no protocolo 21, sem
+compatibilidade com o protocolo 20 ou promocao para stable.
 
 ## SDK oficial anterior
 
@@ -57,16 +84,18 @@ apagam os cadastros.
 
 ## Atualizar o SDK
 
-Ao atualizar o SDK, baixe o pacote de uma nova release compativel, confira
-seu digest e atualize dependencia, lockfile e este registro de origem juntos.
-Substitua tag e nome do arquivo do exemplo pela nova versao:
+Ao atualizar, baixe uma release oficial compativel, confira seu digest e
+atualize dependencia, lockfile e este registro de origem juntos.
+Informe a tag oficial publicada, nunca uma versao local de QA:
 
 ```powershell
-gh release download v23.0.2-beta --repo MonkyOrg/Monky --pattern monky-bot-sdk-23.0.2-beta.tgz --dir vendor
-npm install --save-exact .\vendor\monky-bot-sdk-23.0.2-beta.tgz
+$tag = Read-Host "Tag oficial compativel do Monky"
+$version = $tag -replace '^v', ''
+gh release download $tag --repo MonkyOrg/Monky --pattern "monky-bot-sdk-$version.tgz" --dir vendor
+npm install --save-exact ".\vendor\monky-bot-sdk-$version.tgz"
 npm run check:sdk
 npm test
-gh variable set MONKY_SDK_RELEASE --repo MonkyOrg/MonkyBot --body v23.0.2-beta
+gh variable set MONKY_SDK_RELEASE --repo MonkyOrg/MonkyBot --body $tag
 ```
 
 Remova apenas o arquivo substituido. Nao reutilize um caminho antigo com

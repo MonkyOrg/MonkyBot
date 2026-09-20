@@ -6,6 +6,10 @@ const { test } = require('node:test');
 const { checkSdk } = require('../scripts/check-sdk');
 const protocolVersion = require('../package.json').monky.protocolVersion;
 
+test('the installed SDK matches the bot protocol and required runtime APIs', () => {
+  assert.equal(checkSdk(), protocolVersion);
+});
+
 function sdkFixture(t, { version = protocolVersion, missing } = {}) {
   const root = path.resolve(__dirname, '..', 'release', `sdk-test-${randomUUID()}`);
   const sdk = path.join(root, 'node_modules', '@monky', 'bot-sdk');
