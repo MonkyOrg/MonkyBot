@@ -15,6 +15,9 @@ release. SHA-256:
 `a679e0b56678620b34807ae4c23310f39c947940f6d2d7d07cdc0601a8f3323c`.
 Tamanho: 6.058.141 bytes.
 
+O SDK e o shared atuais declaram `GPL-3.0-or-later`. O pacote preserva tanto
+`LICENSE` quanto `LICENSE-MIT`, que contem os avisos historicos do upstream.
+
 Dependencia e lockfile fixam os mesmos bytes. No workflow manual desta beta,
 use `sdk_release=v27.0.7-beta` sem `promote_tag`; o input vale somente para
 essa execucao e nao altera o pin da main. Preserve perfis, identidades,
