@@ -6,15 +6,17 @@ The **official reference bot** for Monky — utility commands, fun and more.
 
 ## Compatibility
 
-This version requires **Monky protocol 22**, with official SDK **24.0.1**. Update the Monky app and server
-together before updating the bot; earlier protocol versions are not compatible.
+This beta uses **Monky protocol 25**, with official SDK **27.0.7-beta**.
+Use the Monky app and server **v27.0.7-beta** for the updated combination.
+Compatibility is negotiated with a minimum protocol of **24**; servers on
+protocol 22 or earlier are not compatible.
 The bundled SDK is checked during the build and needs no separate installation.
 Profiles, identities, registrations, languages and requested capabilities are
 preserved; this update does not enable microphone reception.
 
-The official SDK fixes duplicated dependencies that prevented voice
-initialization in the 24.0.0-beta archive. Distributed bytes come from stable
-[Monky v24.0.1](https://github.com/MonkyOrg/Monky/releases/tag/v24.0.1),
+The official SDK includes compatibility negotiation and current messaging
+and transport fixes. Distributed bytes come from beta
+[Monky v27.0.7-beta](https://github.com/MonkyOrg/Monky/releases/tag/v27.0.7-beta),
 without local QA archives or modifications to the vendored SDK.
 
 The compatible SDK is included in `vendor/` and pinned in `package-lock.json`.
@@ -713,7 +715,10 @@ and verifies registrations after a process restart. Module resolution outside th
 is rejected so checkout dependencies cannot mask packaging failures. The test
 does not change global installations or stop/restart existing bot or pm2 processes.
 
-CI runs the smoke test **before publishing**. The repository variable
+CI runs the smoke test **before publishing**. On manual dispatch, `sdk_release`
+pins the SDK tag for that run only, without changing the main branch setting.
+For this beta, use `v27.0.7-beta` and leave `promote_tag` empty.
+Without that input, the repository variable
 `MONKY_SDK_RELEASE` can pin the Monky release tag providing the SDK; otherwise,
 the latest published SDK is used, including betas. Either way, the build fails
 unless the SDK matches the protocol declared in `package.json` and supports

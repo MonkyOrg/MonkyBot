@@ -10,6 +10,11 @@ on:
         required: false
         default: ''
         type: string
+      sdk_release:
+        description: 'Official Monky SDK release for this beta only; empty uses MONKY_SDK_RELEASE.'
+        required: false
+        default: ''
+        type: string
 
 # Serialize both channels so concurrent runs cannot reuse versions or regress latest.
 concurrency:
@@ -42,7 +47,7 @@ jobs:
         if: steps.release.outputs.promotion != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MONKY_SDK_RELEASE: ${{ vars.MONKY_SDK_RELEASE }}
+          MONKY_SDK_RELEASE: ${{ inputs.sdk_release || vars.MONKY_SDK_RELEASE }}
         run: |
           set -euo pipefail
           SDK_ENDPOINT="repos/MonkyOrg/Monky/releases?per_page=30"

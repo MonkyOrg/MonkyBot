@@ -6,15 +6,17 @@ O **bot oficial de referência** do Monky — comandos utilitários, diversão e
 
 ## Compatibilidade
 
-Esta versão exige **protocolo Monky 22**, com o SDK oficial **24.0.1**. Atualize o aplicativo e o servidor Monky
-juntos antes de atualizar o bot; servidores com protocolos anteriores não são compatíveis.
+Esta beta usa **protocolo Monky 25**, com o SDK oficial **27.0.7-beta**.
+Use o aplicativo e o servidor Monky **v27.0.7-beta** para o conjunto atualizado.
+A compatibilidade é negociada, com piso de protocolo **24**; servidores no
+protocolo 22 ou anterior não são compatíveis.
 O SDK incluído no pacote é verificado no build e não precisa ser instalado à parte.
 Perfis, identidades, vínculos, idiomas e capacidades solicitadas são preservados;
 a atualização não habilita recepção de microfones.
 
-O SDK oficial corrige a duplicação de dependências que impedia a inicialização
-de voz no pacote 24.0.0-beta. Os bytes distribuídos vêm da release stable
-[Monky v24.0.1](https://github.com/MonkyOrg/Monky/releases/tag/v24.0.1),
+O SDK oficial inclui a negociação de compatibilidade e as correções atuais
+de mensagens e transporte. Os bytes distribuídos vêm da release beta
+[Monky v27.0.7-beta](https://github.com/MonkyOrg/Monky/releases/tag/v27.0.7-beta),
 sem pacotes locais de QA nem modificações no SDK vendorizado.
 
 O SDK compatível está incluído em `vendor/` e fixado no `package-lock.json`.
@@ -717,7 +719,10 @@ após reiniciar o processo. Resolução de módulos fora da instalação é reje
 para impedir que dependências do checkout escondam falhas. Nenhum bot ou pm2
 global é instalado, parado ou reiniciado.
 
-A CI executa esse teste **antes de publicar**. A variável de repositório
+A CI executa esse teste **antes de publicar**. No disparo manual, `sdk_release`
+fixa a tag do SDK somente naquela execução, sem alterar a configuração da main.
+Para esta beta, use `v27.0.7-beta` e deixe `promote_tag` vazio.
+Sem esse input, a variável de repositório
 `MONKY_SDK_RELEASE` pode fixar a tag da release do Monky que fornece o SDK; sem ela,
 usa-se o SDK publicado mais recente, betas inclusive. Em ambos os casos, o build
 falha se o SDK não corresponder ao protocolo declarado em `package.json` ou não

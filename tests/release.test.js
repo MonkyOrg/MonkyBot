@@ -15,6 +15,13 @@ const { repositoryName, validatePromotion, verifyDownloadedAsset, releaseNotes, 
 const ROOT = path.resolve(__dirname, '..');
 const REPOSITORY = 'MonkyOrg/MonkyBot';
 
+test('manual SDK selection is scoped to one release and preserves the existing main pin', () => {
+  const workflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+  assert.match(workflow, /sdk_release:\s+description:/);
+  assert.match(workflow, /MONKY_SDK_RELEASE: \$\{\{ inputs\.sdk_release \|\| vars\.MONKY_SDK_RELEASE \}\}/);
+  assert.match(workflow, /PROMOTE_TAG: \$\{\{ inputs\.promote_tag \}\}/);
+});
+
 function release(tag, overrides = {}) {
   return {
     tag_name: tag, draft: false, prerelease: tag.includes('-beta'),
