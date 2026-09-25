@@ -2,7 +2,46 @@
 
 ## SDK oficial ativo
 
-A dependencia ativa e `monky-bot-sdk-24.0.1.tgz`, da
+A dependencia ativa e `monky-bot-sdk-30.0.7-beta.tgz`, da
+[release Monky v30.0.7-beta](https://github.com/MonkyOrg/Monky/releases/tag/v30.0.7-beta).
+Inclui protocolo **27** e a correcao de metadados das dependencias incluidas
+no pacote para atualizacoes offline com cache vazio. Use cliente e servidor
+Monky 30.0.7-beta. Perfis, chaves, vinculos, idiomas e capacidades sao preservados.
+
+Origem: commit `48c0662d0096c7a83267f5b45217594e0a5f13f4`, workflow
+[Release 36159136723](https://github.com/MonkyOrg/Monky/actions/runs/36159136723).
+Bytes oficiais sem modificacoes. SHA-256:
+`ee8989f9015ea226b2a0a6e2aa95f93d981ab3898321ef90d46726d102502a01`.
+Tamanho: 6.063.351 bytes. Dependencia e lockfile fixam os mesmos bytes;
+o workflow usa `npm ci`, sem substituir o SDK durante a publicacao.
+Licencas GPL-3.0-or-later e avisos historicos MIT acompanham SDK e shared.
+
+## SDK oficial anterior (protocolo 25)
+
+A dependencia anterior era `monky-bot-sdk-27.0.7-beta.tgz`, da
+[release beta Monky v27.0.7-beta](https://github.com/MonkyOrg/Monky/releases/tag/v27.0.7-beta).
+Inclui protocolo **25**, negociacao com piso **24** e as correcoes atuais de
+mensagens, transporte e empacotamento. A linha anterior no protocolo 22 nao
+se conecta ao servidor atualizado; a nova versao do bot e major e beta.
+
+Origem: commit `54ab6308fc2d76ec7eaec422c03bc87c41e6d0ee`, workflow
+[Release 35951187823](https://github.com/MonkyOrg/Monky/actions/runs/35951187823).
+Bytes oficiais sem modificacoes, conferidos contra digest e checksums da
+release. SHA-256:
+`a679e0b56678620b34807ae4c23310f39c947940f6d2d7d07cdc0601a8f3323c`.
+Tamanho: 6.058.141 bytes.
+
+O SDK e o shared atuais declaram `GPL-3.0-or-later`. O pacote preserva tanto
+`LICENSE` quanto `LICENSE-MIT`, que contem os avisos historicos do upstream.
+
+Dependencia e lockfile fixam os mesmos bytes. No workflow manual desta beta,
+use `sdk_release=v27.0.7-beta` sem `promote_tag`; o input vale somente para
+essa execucao e nao altera o pin da main. Preserve perfis, identidades,
+vinculos e consentimentos. O bot nao ganha acesso a microfones.
+
+## SDK oficial anterior (protocolo 22)
+
+A dependencia anterior era `monky-bot-sdk-24.0.1.tgz`, da
 [release stable Monky v24.0.1](https://github.com/MonkyOrg/Monky/releases/tag/v24.0.1).
 Inclui `@monky/shared` no protocolo **22** e a arvore completa de dependencias
 de producao. O MonkyBot mantem seu CLI proprio e as capacidades existentes;
@@ -20,7 +59,7 @@ Tamanho: 5.995.670 bytes.
 
 Dependencia e lockfile fixam esses bytes, sem vinculos a outro checkout.
 Pacotes temporarios de QA nao acompanham o repositorio.
-O pin `MONKY_SDK_RELEASE` do workflow deve apontar para `v24.0.1`.
+O pin `MONKY_SDK_RELEASE` dessa linha apontava para `v24.0.1`.
 
 Cliente, servidor e bot devem usar protocolo 22; o protocolo 21 nao e
 compativel. A mudanca exige uma release major do bot. O workflow ainda gera
@@ -95,15 +134,14 @@ gh release download $tag --repo MonkyOrg/Monky --pattern "monky-bot-sdk-$version
 npm install --save-exact ".\vendor\monky-bot-sdk-$version.tgz"
 npm run check:sdk
 npm test
-gh variable set MONKY_SDK_RELEASE --repo MonkyOrg/MonkyBot --body $tag
 ```
 
 Remova apenas o arquivo substituido. Nao reutilize um caminho antigo com
 bytes diferentes: o cache do npm pode reaproveitar seu conteudo.
 
-A publicacao continua usando o SDK de uma release do Monky. Publique o
-SDK compativel antes do bot; a CI recusa protocolos diferentes. A variavel
-`MONKY_SDK_RELEASE` fixa essa mesma tag no workflow de publicacao.
+A publicacao usa os bytes oficiais fixados em `vendor/` e no lockfile.
+Publique o SDK compativel antes do bot; a CI recusa protocolos diferentes.
+Integre as alteracoes por PR na main para gerar a nova beta.
 
 ## Proveniencia anterior
 

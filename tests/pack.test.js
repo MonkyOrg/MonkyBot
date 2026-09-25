@@ -162,6 +162,30 @@ test('workspace links resolve dependencies from the real requesting workspace', 
   assert.equal(fromPackage(output, '@monky/bot-sdk')('./dist/index.js'), '3.0.0');
 });
 
+test('Monky packages preserve current licenses and historical MIT notices byte for byte', (t) => {
+  const { source, output } = fixture(t);
+  json(path.join(source, 'package.json'), { dependencies: { '@monky/bot-sdk': '*' } });
+  for (const name of ['bot-sdk', 'shared']) {
+    const directory = path.join(source, 'node_modules', '@monky', name);
+    moduleAt(directory, `@monky/${name}`, '1.0.0', {
+      main: 'dist/index.js',
+      dependencies: name === 'bot-sdk' ? { '@monky/shared': '*' } : {},
+    });
+    fs.mkdirSync(path.join(directory, 'dist'));
+    fs.writeFileSync(path.join(directory, 'dist', 'index.js'), 'module.exports = {};');
+    for (const filename of ['LICENSE', 'LICENSE-MIT']) {
+      fs.writeFileSync(path.join(directory, filename), `${name}: original ${filename}\r\n`);
+    }
+  }
+  assert.equal(bundleDependencies(source, output).packageCount, 2);
+  for (const name of ['bot-sdk', 'shared']) {
+    for (const filename of ['LICENSE', 'LICENSE-MIT']) {
+      const relative = path.join('node_modules', '@monky', name, filename);
+      assert.deepEqual(fs.readFileSync(path.join(output, relative)), fs.readFileSync(path.join(source, relative)));
+    }
+  }
+});
+
 test('declared npm polyfills that share Node builtin names remain bundled', (t) => {
   const { source, output } = fixture(t);
   json(path.join(source, 'package.json'), { dependencies: { voice: '*' } });
