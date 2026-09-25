@@ -6,16 +6,22 @@ O **bot oficial de referência** do Monky — comandos utilitários, diversão e
 
 ## Compatibilidade
 
-Esta versão exige **protocolo Monky 22**, com o SDK oficial **24.0.1**. Atualize o aplicativo e o servidor Monky
-juntos antes de atualizar o bot; servidores com protocolos anteriores não são compatíveis.
+Esta beta usa **protocolo Monky 27**, com o SDK oficial **30.0.7-beta**.
+Use o aplicativo e o servidor Monky **v30.0.7-beta** para o conjunto atualizado.
+A compatibilidade é negociada, com piso de protocolo **24**; servidores no
+protocolo 22 ou anterior não são compatíveis.
 O SDK incluído no pacote é verificado no build e não precisa ser instalado à parte.
 Perfis, identidades, vínculos, idiomas e capacidades solicitadas são preservados;
 a atualização não habilita recepção de microfones.
 
-O SDK oficial corrige a duplicação de dependências que impedia a inicialização
-de voz no pacote 24.0.0-beta. Os bytes distribuídos vêm da release stable
-[Monky v24.0.1](https://github.com/MonkyOrg/Monky/releases/tag/v24.0.1),
+O SDK oficial inclui a negociação de compatibilidade e as correções atuais
+de mensagens e transporte. Os bytes distribuídos vêm da release beta
+[Monky v30.0.7-beta](https://github.com/MonkyOrg/Monky/releases/tag/v30.0.7-beta),
 sem pacotes locais de QA nem modificações no SDK vendorizado.
+
+Esta beta inclui a correção das dependências empacotadas para atualizações
+offline com cache do npm vazio. Para atualizar, use `monkybot update --beta`;
+não é necessário refazer o setup nem gerar outra identidade.
 
 O SDK compatível está incluído em `vendor/` e fixado no `package-lock.json`.
 Esta versão remove
@@ -717,10 +723,12 @@ após reiniciar o processo. Resolução de módulos fora da instalação é reje
 para impedir que dependências do checkout escondam falhas. Nenhum bot ou pm2
 global é instalado, parado ou reiniciado.
 
-A CI executa esse teste **antes de publicar**. A variável de repositório
-`MONKY_SDK_RELEASE` pode fixar a tag da release do Monky que fornece o SDK; sem ela,
-usa-se o SDK publicado mais recente, betas inclusive. Em ambos os casos, o build
-falha se o SDK não corresponder ao protocolo declarado em `package.json` ou não
+A CI executa esse teste **antes de publicar** e também nos PRs. Novas betas
+são publicadas somente após merge na `main`. O workflow usa `npm ci` com o SDK
+oficial em `vendor/`, fixado pelo lockfile; não troca a dependência por uma
+versão mais recente durante o build. O disparo manual exige `promote_tag` e
+autorização explícita para promover uma beta existente, sem recompilar.
+O build falha se o SDK não corresponder ao protocolo declarado em `package.json` ou não
 oferecer seletores duráveis, voz, telas, execução local concreta e nomes de
 comandos localizados. O pacote preserva a localização e a identidade das
 dependências transitivas do SDK (incluindo WebRTC/werift), sem clonar uma

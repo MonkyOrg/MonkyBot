@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const { createMusicCommands, musicNoticeText } = require('../dist/commands/music');
 const { MusicQueues } = require('../dist/music/queue');
 const { MusicError } = require('../dist/music/errors');
-const { getCommandPresentation, localizeCommand } = require('@monky/bot-sdk');
+const { getCommandPresentation, localizeCommand, LIMITS } = require('@monky/bot-sdk');
 const { botMessageText } = require('./helpers/bot-message');
 
 const video = { id: 'abcdefghijk', title: 'Authorized original', url: 'https://www.youtube.com/watch?v=abcdefghijk', duration: 20 };
@@ -304,22 +304,25 @@ test('all aborted music invocations are inert', async () => {
   }
 });
 
-test('a full 50-track queue preserves complete titles across bounded reply cards', async () => {
-  const queues = { assertControl: () => {}, snapshot: () => ({
-    current: { title: 'x'.repeat(150), duration: 3600 }, started: true, paused: false, elapsedMs: 3_000_000,
-    upcoming: Array.from({ length: 50 }, () => ({ title: 'y'.repeat(150), pending: false })),
-  }) };
-  for (const locale of ['en', 'pt-BR']) {
-    const ctx = context(locale);
-    await createMusicCommands(queues, {}).find(command => command.name === 'queue').handler(ctx);
-    assert.ok(ctx.replies.length > 1);
-    assert.ok(ctx.replies.every(reply => reply.length <= 2000));
-    const output = ctx.replies.join('\n');
-    assert.match(output, /50\. /);
-    assert.equal(output.match(/y{150}/g).length, 50);
-    assert.doesNotMatch(output, /…/);
-  }
-});
+for (const titleLength of [150, 400]) {
+  test(`a full 50-track queue preserves ${titleLength}-character titles within the SDK reply limit`, async () => {
+    const queues = { assertControl: () => {}, snapshot: () => ({
+      current: { title: 'x'.repeat(150), duration: 3600 }, started: true, paused: false, elapsedMs: 3_000_000,
+      upcoming: Array.from({ length: 50 }, () => ({ title: 'y'.repeat(titleLength), pending: false })),
+    }) };
+    for (const locale of ['en', 'pt-BR']) {
+      const ctx = context(locale);
+      await createMusicCommands(queues, {}).find(command => command.name === 'queue').handler(ctx);
+      if (titleLength === 150) assert.equal(ctx.replies.length, 1);
+      else assert.ok(ctx.replies.length > 1);
+      assert.ok(ctx.replies.every(reply => reply.length <= LIMITS.MAX_MESSAGE_LENGTH));
+      const output = ctx.replies.join('\n');
+      assert.match(output, /50\. /);
+      assert.equal(output.match(new RegExp(`y{${titleLength}}`, 'g')).length, 50);
+      assert.doesNotMatch(output, /…/);
+    }
+  });
+}
 
 test('ordinary queues retain one card with full song names, not a 30-character abbreviation', async () => {
   const titles = [

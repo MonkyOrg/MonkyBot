@@ -117,7 +117,7 @@ function bundleDependencies(sourceRoot, destinationRoot) {
     if (pkg.name.startsWith('@monky/')) {
       requiredFile(path.join(source, 'dist', 'index.js'));
       fs.cpSync(path.join(source, 'dist'), path.join(destination, 'dist'), { recursive: true });
-      for (const filename of ['LICENSE', 'LICENSE.md', 'README.md']) {
+      for (const filename of ['LICENSE', 'LICENSE.md', 'LICENSE-MIT', 'README.md']) {
         const file = path.join(source, filename);
         if (fs.existsSync(file)) fs.copyFileSync(file, path.join(destination, filename));
       }

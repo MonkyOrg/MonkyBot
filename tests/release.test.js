@@ -15,6 +15,16 @@ const { repositoryName, validatePromotion, verifyDownloadedAsset, releaseNotes, 
 const ROOT = path.resolve(__dirname, '..');
 const REPOSITORY = 'MonkyOrg/MonkyBot';
 
+test('release builds use the reviewed SDK lockfile and require merged main', () => {
+  const workflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+  assert.match(workflow, /run: npm ci --ignore-scripts --no-audit --no-fund/);
+  assert.ok(!workflow.includes('npm pkg set'));
+  assert.ok(!workflow.includes('sdk_release'));
+  assert.match(workflow, /RELEASE_REF.*refs\/heads\/main/);
+  assert.match(workflow, /RELEASE_EVENT.*push/);
+  assert.match(workflow, /PROMOTE_TAG: \$\{\{ inputs\.promote_tag \}\}/);
+});
+
 function release(tag, overrides = {}) {
   return {
     tag_name: tag, draft: false, prerelease: tag.includes('-beta'),
@@ -250,7 +260,7 @@ test('every workflow shell script passes bash -n', (t) => {
       scripts.push(body.join('\n'));
     }
   }
-  assert.equal(scripts.length, 8);
+  assert.equal(scripts.length, 9);
   for (const script of scripts) {
     const result = spawnSync(bash, ['-n'], { input: script, encoding: 'utf8', cwd: ROOT });
     if (result.error) throw result.error;
