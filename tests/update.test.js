@@ -364,6 +364,22 @@ test('manual config, identity and botDir are retained by the newly installed CLI
   assert.equal(ecosystem.env.MONKY_BOT_TOKEN, f.config.botToken);
 });
 
+for (const version of [null, 0]) {
+  test(`update --yes never approves missing or outdated host consent (${version})`, async t => {
+    const f = updaterFixture(t, { config: { hostConsent: null } });
+    if (version !== null) {
+      f.config.hostConsent = { version, botDir: f.config.botDir };
+      fs.writeFileSync(f.configFile, JSON.stringify(f.config));
+    }
+    const result = await f.run();
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /confirmação do operador/);
+    assert.equal(result.calls.some(call => call.event === 'pm2'), false,
+      'The existing process must not be stopped or restarted without current host consent.');
+    assert.equal(result.calls.some(call => call.event === 'manifest-ready'), false);
+  });
+}
+
 test('fresh restart rejects a real port collision and never claims restart success', async t => {
   const otherService = await listen(t);
   const f = updaterFixture(t, { port: otherService.address().port });

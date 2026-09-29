@@ -82,8 +82,10 @@ de mensagens e transporte. Os bytes distribuídos vêm da release beta
 sem pacotes locais de QA nem modificações no SDK vendorizado.
 
 Esta beta inclui a correção das dependências empacotadas para atualizações
-offline com cache do npm vazio. Para atualizar, use `monkybot update --beta`;
-não é necessário refazer o setup nem gerar outra identidade.
+offline com cache do npm vazio. Para atualizar, use `monkybot update --beta`.
+Instalações que ainda não registraram o consentimento do host precisam confirmá-lo
+uma vez com `monkybot setup`, mantendo o diretório e os vínculos existentes.
+Não gere outra identidade.
 
 O SDK compatível está incluído em `vendor/` e fixado no `package-lock.json`.
 Esta versão remove
@@ -99,6 +101,10 @@ recepção da voz dos participantes. Vínculos manuais e bots migrados ficam sem
 acessos até essa revisão; negar um acesso impede a funcionalidade correspondente.
 A autorização do servidor para solicitar execução local não substitui o
 consentimento de cada pessoa para preparar e usar ferramentas no seu computador.
+
+Ao abrir um miniapp, o participante vê um aviso do que o app pode fazer e escolhe
+**Continuar e abrir** ou **Cancelar**. Isso não concede capacidades ao bot:
+quem autoriza comandos, mensagens, voz, execução local e miniapps é o administrador.
 
 Todo push na `main` gera uma versão `-beta`, marcada como pré-release, sem
 substituir a stable, independentemente do canal do SDK. Uma stable só é
@@ -116,6 +122,30 @@ monkybot restart
 O cliente apenas vincula o bot, ajusta suas configurações de funcionamento e
 desfaz o vínculo. Nome e avatar pertencem ao bot e não são editáveis pelo
 administrador no cliente.
+
+## Consentimento de quem hospeda
+
+Antes de salvar/iniciar, `monkybot setup` descreve os acessos do host e pede
+confirmação, com **Não** como padrão. O bot lê seu programa/assets, grava identidade
+e vínculos em `<botDir>/.keys`, conecta-se a servidores e serviços externos e
+abre portas para manifest e jogos. O CLI grava configuração e gerencia o PM2.
+Cancelar preserva a configuração e não inicia/reinicia o processo.
+
+A confirmação fica em `hostConsent` no `config.json`, vinculada ao diretório
+de trabalho e à versão da política. Start/restart e o runtime não iniciam sem
+confirmação válida. Alterar o diretório ou a versão dos acessos exige nova revisão;
+`update --yes` e auto-update não a aprovam automaticamente.
+Isso é consentimento para executar um programa confiável com os direitos da conta
+do sistema, não uma sandbox. Docker/WSL não são exigidos por esta política.
+
+Em execução direta/automatizada, após revisar os acessos acima, o operador pode
+declarar a aprovação da política atual com `MONKY_HOST_CONSENT=1`. O valor é
+versionado, não um aceite automático de futuras políticas. Sem essa variável,
+o runtime procura a confirmação salva para o seu diretório atual.
+Para deixar de hospedar, pare o bot com `monkybot stop` (ou encerre seu processo
+direto); retire o campo `hostConsent` e a variável, inclusive de configurações
+de serviço/PM2 onde tenha sido salva, para impedir novos inícios.
+Esse consentimento nunca concede capacidades nos servidores onde o bot é instalado.
 
 ## Início rápido
 
@@ -389,6 +419,9 @@ o vínculo. Uma falha ao atualizar a foto é informada, mas não remove os coman
 ### Modo alternativo (desenvolvimento)
 
 Para desenvolvimento local sem pm2, você pode rodar diretamente:
+
+Revise os acessos do host acima e defina `MONKY_HOST_CONSENT=1` no ambiente
+ou use a confirmação salva para este diretório pelo setup.
 
 ```bash
 npm run dev

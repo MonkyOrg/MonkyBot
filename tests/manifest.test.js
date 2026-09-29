@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const { test, beforeEach } = require('node:test');
 const { setCliLocale } = require('../dist/cli/i18n');
+const { hostConsentFor } = require('../dist/cli/hostConsent');
 
 beforeEach(() => setCliLocale('en'));
 const { getManifestUrl } = require('../dist/utils/manifest');
@@ -35,6 +36,7 @@ test('marketplace startup validates the advertised endpoint before touching pm2'
   t.mock.method(config, 'readConfig', () => ({
     mode: 'marketplace',
     botDir: process.cwd(),
+    hostConsent: hostConsentFor(process.cwd()),
     servePort: 7780,
   }));
   const ensurePm2 = t.mock.method(pm2, 'ensurePm2', () => {
