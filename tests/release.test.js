@@ -227,6 +227,10 @@ test('notes use the exact channel/version installation URL and treat source note
     assert.ok(notes.includes(`npm install -g "https://github.com/${REPOSITORY}/releases/download/v${version}/monky-bot-${version}.tgz"`));
     assert.ok(notes.includes(changes));
     assert.ok(!notes.includes('install-monkybot.sh'));
+    assert.match(notes, /confirmação do operador/);
+    assert.match(notes, /mesmo diretório e os vínculos existentes/);
+    assert.match(notes, /--yes` não concedem esse consentimento/);
+    assert.doesNotMatch(notes, /não refaça o setup/);
   }
 });
 
