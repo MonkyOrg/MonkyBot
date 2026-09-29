@@ -18,6 +18,7 @@ import { ManifestReadinessError, verifyManifest, waitForManifest } from '../mani
 import { DEFAULT_BOT_NAME } from '../../profile';
 import { getManifestUrl } from '../../utils/manifest';
 import { cliText, languageCommand } from '../i18n';
+import { assertHostConsent } from '../hostConsent';
 
 function loadConfigOrDie() {
   const config = readConfig();
@@ -124,6 +125,7 @@ function printManifestReady(url: string | undefined): void {
 
 export async function startCommand(): Promise<void> {
   const config = loadConfigOrDie();
+  assertHostConsent(config.botDir, config.hostConsent);
   manifestUrl(config);
 
   const proc = managedBotProcess(config);
@@ -201,6 +203,7 @@ export function stopCommand(): void {
 }
 
 export async function restartBot(config: BotConfig, fresh = false): Promise<string | undefined> {
+  assertHostConsent(config.botDir, config.hostConsent);
   manifestUrl(config);
   const proc = managedBotProcess(config);
   const host = managedManifestHost(proc);

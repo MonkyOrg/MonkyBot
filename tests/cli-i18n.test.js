@@ -263,6 +263,7 @@ for (const locale of ['pt-BR', 'en']) {
       }
       sdk.BotClient = FixtureBot;
       process.env.MONKY_SERVE = 'true';
+      process.env.MONKY_HOST_CONSENT = '1';
       process.env.MONKY_SERVE_PORT = '7780';
       process.env.MONKY_SERVE_PUBLIC_HOST = 'bot.example.test';
       global.fetch = () => { throw new Error('Unexpected network request'); };
@@ -277,6 +278,7 @@ for (const locale of ['pt-BR', 'en']) {
 
 test('fatal bootstrap logging also redacts the original error cause rather than dumping the Error object', t => {
   const result = isolated(t, `
+    process.env.MONKY_HOST_CONSENT = '1';
     const { MusicError } = require('./dist/music/errors');
     require('./dist/utils/keys').loadOrGenerateKeys = () => {
       throw new Error('Fixture bootstrap failure', {

@@ -5,6 +5,7 @@ import {
 } from '@monky/bot-sdk';
 import { CONFIG_DIR, CONFIG_FILE } from './constants';
 import { cliText } from './i18n';
+import type { HostConsent } from './hostConsent';
 
 export interface BotConfig {
   /** Modo: 'manual' (um servidor) ou 'marketplace' (serve manifest). */
@@ -23,6 +24,7 @@ export interface BotConfig {
 
   /** Diretório de trabalho do bot (onde ficam as chaves .keys/ e dados). */
   botDir: string;
+  hostConsent?: HostConsent;
 }
 
 function localizedValidation<T>(validate: () => T, portuguese: string, english: string): T {

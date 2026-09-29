@@ -18,6 +18,7 @@ const processHelpers = require('../dist/cli/process');
 const { DEFAULT_BOT_NAME } = require('../dist/profile');
 const { setBindHost, listen, freePort } = require('./helpers/manifest-port');
 const { setCliLocale } = require('../dist/cli/i18n');
+const { hostConsentFor } = require('../dist/cli/hostConsent');
 
 beforeEach((t) => {
   setCliLocale('pt-BR');
@@ -38,7 +39,7 @@ function captureLogs(t) {
   return lines;
 }
 
-function interactiveAnswers(t, answers, terminal = []) {
+function interactiveAnswers(t, answers, terminal = [], hostAnswer = 'yes') {
   const pending = [...answers];
   const questions = [];
   const failures = [];
@@ -58,10 +59,11 @@ function interactiveAnswers(t, answers, terminal = []) {
       }
     };
     rl.question = (question, callback) => {
-      assert.ok(pending.length, `Unexpected prompt: ${question}`);
+      const hostReview = /^(Autorizar execução|Allow execution)/.test(question);
+      assert.ok(hostReview || pending.length, `Unexpected prompt: ${question}`);
       questions.push(question);
       writeOutput(question);
-      const next = pending.shift();
+      const next = hostReview ? hostAnswer : pending.shift();
       queueMicrotask(() => {
         Promise.resolve().then(() => typeof next === 'function' ? next(rl) : next).then((answer) => {
           if (answer === null) {
@@ -97,6 +99,23 @@ function mockConfig(t, initialConfig = null) {
     current = JSON.parse(JSON.stringify(next));
   });
   return { get current() { return current; } };
+}
+
+for (const answer of ['', 'no', 'maybe', null]) {
+  test(`host consent cancellation preserves configuration and never restarts the bot (${String(answer)})`, async t => {
+    const initial = { mode: 'manual', botDir: CONFIG_DIR,
+      serverUrl: 'ws://localhost:3000/', botToken: 'fixture-token', botName: 'MonkyBot' };
+    const state = mockConfig(t, initial);
+    interactiveAnswers(t, ['', '', '', '', ''], [], answer);
+    const logs = captureLogs(t);
+    await assert.rejects(setupCommand(), answer === null ? /Setup cancelado/ : /Execução não autorizada/);
+    assert.deepEqual(state.current, initial);
+    assert.equal(config.writeConfig.mock.callCount(), 0);
+    assert.equal(lifecycle.restartCommand.mock.callCount(), 0);
+    assert.equal(processHelpers.runSync.mock.callCount(), 0);
+    assert.match(logs.join('\n'), /Cada administrador de servidor continua decidindo/);
+    assert.doesNotMatch(logs.join('\n'), /fixture-token/);
+  });
 }
 
 for (const locale of ['pt-BR', 'en']) {
@@ -148,6 +167,7 @@ test('setup defaults to the recommended URL installation for fresh configs', asy
   assert.deepEqual(state.current, {
     mode: 'marketplace',
     botDir: CONFIG_DIR,
+    hostConsent: hostConsentFor(CONFIG_DIR),
     servePort: port,
     publicHost: 'bot.example.test',
     botName: DEFAULT_BOT_NAME,
@@ -174,6 +194,7 @@ test('setup reprompts invalid mode choices and only reveals the advanced manual 
   assert.match(questions[4], /Token do bot/);
   assert.deepEqual(state.current, {
     mode: 'manual',
+    hostConsent: hostConsentFor(CONFIG_DIR),
     botDir: CONFIG_DIR,
     serverUrl: 'ws://192.0.2.15:3000/',
     botToken: token,
@@ -201,7 +222,7 @@ test('setup preserves existing manual mode, working directory, name and hidden t
   await setupCommand();
 
   assert.equal(questions[0], 'Modo [2]: ');
-  assert.deepEqual(state.current, existing);
+  assert.deepEqual(state.current, { ...existing, hostConsent: hostConsentFor(existing.botDir) });
   assert.equal(lifecycle.restartCommand.mock.callCount(), 1);
   assert.equal(lines.join('\n').includes(existing.botToken), false);
   assert.equal(terminal.join('').includes(existing.botToken), false);
@@ -223,7 +244,7 @@ test('setup preserves existing URL installation settings by default', async (t) 
   await setupCommand();
 
   assert.equal(questions[0], 'Modo [1]: ');
-  assert.deepEqual(state.current, existing);
+  assert.deepEqual(state.current, { ...existing, hostConsent: hostConsentFor(existing.botDir) });
   assert.equal(lifecycle.restartCommand.mock.callCount(), 1);
 });
 
@@ -245,6 +266,7 @@ test('setup reuses SDK validation and reprompts invalid URL, token and identity 
   assert.equal(config.writeConfig.mock.calls.length, 1);
   assert.deepEqual(state.current, {
     mode: 'manual',
+    hostConsent: hostConsentFor(CONFIG_DIR),
     botDir: CONFIG_DIR,
     serverUrl: 'ws://192.0.2.15:3000/',
     botToken: 'synthetic-token',

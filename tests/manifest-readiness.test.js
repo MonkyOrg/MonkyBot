@@ -13,6 +13,7 @@ const configModule = require('../dist/cli/config');
 const lifecycle = require('../dist/cli/commands/lifecycle');
 const { setupCommand } = require('../dist/cli/commands/setup');
 const { setCliLocale } = require('../dist/cli/i18n');
+const { hostConsentFor } = require('../dist/cli/hostConsent');
 const pm2 = require('../dist/cli/pm2');
 const processHelpers = require('../dist/cli/process');
 const readiness = require('../dist/cli/manifestReadiness');
@@ -41,7 +42,7 @@ function identity(t, registrations = true) {
   });
   return {
     publicKey, cleanup,
-    config: { mode: 'marketplace', botDir, botName: 'MonkyBot', publicHost: 'bot.example.test', servePort: 0 },
+    config: { mode: 'marketplace', botDir, hostConsent: hostConsentFor(botDir), botName: 'MonkyBot', publicHost: 'bot.example.test', servePort: 0 },
     unchanged() {
       for (const [name, bytes] of files) {
         assert.equal(digest(fs.readFileSync(path.join(keysDir, name))), digest(bytes), `${name} must be preserved.`);
@@ -330,6 +331,10 @@ function answers(t, values) {
   t.mock.method(readline, 'createInterface', () => {
     const rl = new EventEmitter();
     rl.question = (_question, callback) => {
+      if (/^Allow execution/.test(_question)) {
+        queueMicrotask(() => callback('yes'));
+        return;
+      }
       assert.ok(pending.length, 'Unexpected setup prompt.');
       const answer = pending.shift();
       queueMicrotask(() => callback(answer));
@@ -484,34 +489,44 @@ test('setup distinguishes saved configuration from a failed fresh runtime launch
   state.unchanged();
 });
 
-test('the compiled bot runtime itself serves a ready manifest while reusing its identity', { timeout: 20000 }, async t => {
-  const state = identity(t, false);
-  state.config.servePort = await freePort(t);
-  const child = spawn(process.execPath, [path.resolve(__dirname, '..', 'dist', 'index.js')], {
-    cwd: state.config.botDir, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
+for (const consentSource of ['environment', 'saved-config']) {
+  test(`the compiled bot runtime serves a ready manifest with ${consentSource} consent and reuses its identity`, { timeout: 20000 }, async t => {
+    const state = identity(t, false);
+    state.config.servePort = await freePort(t);
+    const env = {
       ...process.env, NODE_OPTIONS: '', NODE_PATH: '', TEMP: state.config.botDir, TMP: state.config.botDir,
+      HOME: state.config.botDir, USERPROFILE: state.config.botDir,
       MONKY_BOT_LOCALE: 'en', MONKY_BOT_NAME: state.config.botName,
       MONKY_SERVE: 'true', MONKY_SERVE_PORT: String(state.config.servePort),
       MONKY_SERVE_HOST: '127.0.0.1', MONKY_SERVE_PUBLIC_HOST: state.config.publicHost,
       MONKY_SERVER_URL: '', MONKY_BOT_TOKEN: '',
-    },
-  });
-  let diagnostics = '';
-  child.stdout.on('data', chunk => { diagnostics += chunk; });
-  child.stderr.on('data', chunk => { diagnostics += chunk; });
-  const exited = once(child, 'exit');
-  state.cleanup.push(async () => {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill();
-      const force = setTimeout(() => child.kill('SIGKILL'), 3000);
-      try { await exited; } finally { clearTimeout(force); }
+    };
+    delete env.MONKY_HOST_CONSENT;
+    if (consentSource === 'environment') env.MONKY_HOST_CONSENT = '1';
+    else {
+      const configDirectory = path.join(state.config.botDir, '.monkybot');
+      fs.mkdirSync(configDirectory);
+      fs.writeFileSync(path.join(configDirectory, 'config.json'), JSON.stringify(state.config));
     }
+    const child = spawn(process.execPath, [path.resolve(__dirname, '..', 'dist', 'index.js')], {
+      cwd: state.config.botDir, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env,
+    });
+    let diagnostics = '';
+    child.stdout.on('data', chunk => { diagnostics += chunk; });
+    child.stderr.on('data', chunk => { diagnostics += chunk; });
+    const exited = once(child, 'exit');
+    state.cleanup.push(async () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill();
+        const force = setTimeout(() => child.kill('SIGKILL'), 3000);
+        try { await exited; } finally { clearTimeout(force); }
+      }
+    });
+    await once(child, 'spawn');
+    assert.equal(await readiness.waitForManifest(state.config, '127.0.0.1'),
+      getManifestUrl(state.config.publicHost, state.config.servePort));
+    assert.equal(child.exitCode, null, 'The isolated bot must still be running.');
+    assert.doesNotMatch(diagnostics, /Fatal:|BEGIN PRIVATE KEY/);
+    state.unchanged();
   });
-  await once(child, 'spawn');
-  assert.equal(await readiness.waitForManifest(state.config, '127.0.0.1'),
-    getManifestUrl(state.config.publicHost, state.config.servePort));
-  assert.equal(child.exitCode, null, 'The isolated bot must still be running.');
-  assert.doesNotMatch(diagnostics, /Fatal:|BEGIN PRIVATE KEY/);
-  state.unchanged();
-});
+}

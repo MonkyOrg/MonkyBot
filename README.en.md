@@ -82,8 +82,10 @@ and transport fixes. Distributed bytes come from beta
 without local QA archives or modifications to the vendored SDK.
 
 This beta includes the bundled dependency metadata fix for offline updates
-with an empty npm cache. Upgrade with `monkybot update --beta`; there is no
-need to run setup again or generate a new identity.
+with an empty npm cache. Upgrade with `monkybot update --beta`.
+Installations without recorded host consent must confirm it once using
+`monkybot setup`, keeping the existing directory and registrations.
+Do not generate a new identity.
 
 The compatible SDK is included in `vendor/` and pinned in `package-lock.json`.
 This version removes
@@ -100,6 +102,10 @@ until that review; denying access prevents the corresponding feature.
 Server permission to request local execution never replaces each person's
 consent to prepare and run tools on their computer.
 
+When opening a miniapp, participants see what the app may do and choose
+**Continue and open** or **Cancel**. This grants no bot capabilities:
+the administrator authorizes commands, messages, voice, local execution and miniapps.
+
 Every push to `main` produces a `-beta` prerelease without replacing stable,
 regardless of the SDK channel. A stable release is published only through
 explicit promotion of a beta.
@@ -115,6 +121,30 @@ monkybot restart
 
 The client only links the bot, adjusts its behavior settings, and unlinks it.
 The bot owns its name and avatar; administrators cannot edit them in the client.
+
+## Host operator consent
+
+Before saving/starting, `monkybot setup` describes host access and requests
+confirmation, defaulting to **No**. The bot reads its program/assets, writes
+identity and registrations to `<botDir>/.keys`, connects to servers and external
+services, and listens on manifest/game ports. The CLI writes configuration and
+manages PM2. Cancelling preserves configuration and does not start/restart a process.
+
+Consent is stored in `config.json` as `hostConsent`, bound to the working directory
+and policy version. Start/restart and the runtime refuse to start without valid
+consent. A different directory or access-policy version requires another review;
+`update --yes` and auto-update never approve it automatically.
+This is consent to run trusted software with the system account rights, not a
+sandbox. This policy does not require Docker/WSL.
+
+For direct/automated execution, after reviewing the accesses above, operators may
+declare consent to the current policy with `MONKY_HOST_CONSENT=1`. This value is
+versioned, not blanket approval of future policies. Without this variable, the
+runtime looks for saved consent for its current directory.
+To stop hosting, use `monkybot stop` (or stop the direct process); remove the
+`hostConsent` field and the variable, including any saved service/PM2
+configuration, to prevent subsequent starts.
+This consent never grants capabilities on servers that install the bot.
 
 ## Quick Start
 
@@ -388,6 +418,9 @@ A failed photo update is reported but does not remove the commands.
 ### Alternative mode (development)
 
 For local development without pm2, you can run directly:
+
+Review the host accesses above and set `MONKY_HOST_CONSENT=1` in the environment
+or use consent saved by setup for this directory.
 
 ```bash
 npm run dev

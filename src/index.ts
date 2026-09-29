@@ -5,7 +5,8 @@ import { loadOrGenerateKeys, REGISTRATIONS_PATH } from './utils/keys';
 import { getManifestUrl, identifyManifest } from './utils/manifest';
 import { errorDiagnostic, safeDiagnostic } from './music/process';
 import { cliText } from './cli/i18n';
-import { validateCliPublicHost } from './cli/config';
+import { readConfig, validateCliPublicHost } from './cli/config';
+import { assertHostConsent } from './cli/hostConsent';
 
 // ── Configuration ────────────────────────────────────────────────────
 // Todas as variáveis de ambiente são opcionais — veja README.md para detalhes.
@@ -26,6 +27,7 @@ const config = {
 // ── Bootstrap ────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+  assertHostConsent(process.cwd(), process.env.MONKY_HOST_CONSENT === undefined ? readConfig()?.hostConsent : undefined);
   console.log(`🤖 ${config.botName}`);
   console.log('');
 

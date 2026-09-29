@@ -10,6 +10,7 @@ import {
 import { assertManifestPortAvailable, DEFAULT_MANIFEST_PORT } from '../manifestPort';
 import { DEFAULT_BOT_NAME } from '../../profile';
 import { cliText } from '../i18n';
+import { reviewHostConsent } from '../hostConsent';
 import { managedBotProcess, managedManifestHost, restartCommand, stopManagedBotBeforeRestart } from './lifecycle';
 
 const DEFAULT_MANUAL_SERVER_URL = 'ws://localhost:3000';
@@ -238,6 +239,7 @@ export async function setupCommand(): Promise<void> {
         (answer) => validateBotName(answer || defaultName)),
     };
 
+    config.hostConsent = await reviewHostConsent(config.botDir, ask);
     ensureOpen();
     if (config.mode === 'marketplace') {
       const port = config.servePort ?? DEFAULT_MANIFEST_PORT;

@@ -43,6 +43,7 @@ function updaterFixture(t, options = {}) {
   fs.copyFileSync(path.join(fixtures, 'update-npm.cjs'), npmEntry);
   const config = {
     mode: 'marketplace', botDir, servePort: options.port ?? 7780,
+    hostConsent: { version: 1, botDir },
     publicHost: 'bot.example.test', botName: 'Fixture bot',
     ...options.config,
   };

@@ -103,9 +103,12 @@ async function smokePack(tarball) {
     const pkg = JSON.parse(fs.readFileSync(path.join(bot, 'package.json'), 'utf8'));
     const env = {
       ...process.env,
+      HOME: runtime,
+      USERPROFILE: runtime,
       NODE_OPTIONS: '',
       NODE_PATH: '',
       MONKYBOT_SMOKE_MODULES: modules,
+      MONKY_HOST_CONSENT: '1',
       MONKY_SERVE: 'true',
       MONKY_SERVE_HOST: '127.0.0.1',
       MONKY_SERVE_PORT: '0',

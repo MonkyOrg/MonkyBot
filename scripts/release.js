@@ -69,10 +69,11 @@ function releaseNotes(plan) {
   return [
     `## 🤖 Monky Bot ${tag}`, '', introduction, '', '### Instalação desta versão', '',
     '```bash', `npm install -g "${url}"`, '```', '',
-    'Para atualizar uma instalação existente, mantenha o mesmo botDir e a pasta .keys; não refaça o setup:',
+    'Para atualizar uma instalação existente, mantenha o mesmo botDir e a pasta .keys; não gere outra identidade:',
     '', '```bash', 'monkybot restart', '```', '',
-    'Somente na primeira instalação:', '',
-    '```bash', 'monkybot setup', 'monkybot start', '```', '',
+    'Se o início solicitar confirmação do operador, execute `monkybot setup`, mantendo o mesmo diretório e os vínculos existentes, e revise os acessos da máquina. Atualizações com `--yes` não concedem esse consentimento. Em automações, siga a política de consentimento documentada no README.', '',
+    'Na primeira instalação, o setup também inicia o bot após sua confirmação:', '',
+    '```bash', 'monkybot setup', '```', '',
     `Código-fonte: \`${plan.target}\``, '', '### Mudanças', '', plan.changes || 'Sem mudanças adicionais.', '',
   ].join('\n');
 }

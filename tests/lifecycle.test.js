@@ -12,6 +12,7 @@ const processHelpers = require('../dist/cli/process');
 const manifestPort = require('../dist/cli/manifestPort');
 const manifestReadiness = require('../dist/cli/manifestReadiness');
 const { getManifestUrl } = require('../dist/utils/manifest');
+const { hostConsentFor } = require('../dist/cli/hostConsent');
 const { setBindHost, closeServer, listen, freePort, captureBinds } = require('./helpers/manifest-port');
 
 const botDir = path.resolve(__dirname, '..');
@@ -20,7 +21,7 @@ const entry = path.join(botDir, 'dist', 'index.js');
 beforeEach(() => setCliLocale('pt-BR'));
 
 function marketplace(port) {
-  return { mode: 'marketplace', botDir, servePort: port, publicHost: 'bot.example.test', botName: 'MonkyBot' };
+  return { mode: 'marketplace', botDir, hostConsent: hostConsentFor(botDir), servePort: port, publicHost: 'bot.example.test', botName: 'MonkyBot' };
 }
 
 function managedProcess(status = 'online') {
@@ -433,7 +434,7 @@ test('valid empty and populated pm2 inventories are preserved', (t) => {
 });
 
 test('explicit stop targets only the identified pm2 ID and never probes ports', (t) => {
-  const state = fixture(t, { mode: 'manual', botDir }, managedProcess());
+  const state = fixture(t, { mode: 'manual', botDir, hostConsent: hostConsentFor(botDir) }, managedProcess());
   t.mock.method(manifestPort, 'assertManifestPortAvailable', () => assert.fail('Stop must not probe.'));
   lifecycle.stopCommand();
   assert.deepEqual(state.run.mock.calls[0].arguments.slice(0, 2), ['pm2', ['stop', '17']]);
@@ -444,6 +445,7 @@ for (const action of ['start', 'restart']) {
     const service = await listen(t);
     const initial = {
       mode: 'manual', botDir, serverUrl: 'ws://127.0.0.1:3000/',
+      hostConsent: hostConsentFor(botDir),
       botToken: 'synthetic-token', servePort: service.address().port,
     };
     const state = fixture(t, initial, action === 'restart' ? managedProcess() : null);
@@ -454,6 +456,29 @@ for (const action of ['start', 'restart']) {
     assert.equal(service.listening, true);
     assert.doesNotMatch(state.lines.join('\n'), /Manifest:/);
   });
+
+  for (const action of ['start', 'restart']) {
+    for (const invalid of ['missing', 'old-version', 'other-directory']) {
+      test(`${action} requires current operator consent before any managed process changes (${invalid})`, async t => {
+        const previous = process.env.MONKY_HOST_CONSENT;
+        delete process.env.MONKY_HOST_CONSENT;
+        t.after(() => {
+          if (previous === undefined) delete process.env.MONKY_HOST_CONSENT;
+          else process.env.MONKY_HOST_CONSENT = previous;
+        });
+        const initial = marketplace(7780);
+        if (invalid === 'missing') delete initial.hostConsent;
+        if (invalid === 'old-version') initial.hostConsent.version = 0;
+        if (invalid === 'other-directory') initial.hostConsent.botDir = path.join(botDir, 'another');
+        const state = fixture(t, initial, managedProcess());
+        await assert.rejects(action === 'start' ? lifecycle.startCommand() : lifecycle.restartCommand(['--fresh']),
+          /confirmação do operador/);
+        assert.deepEqual(state.effects, []);
+        assert.equal(state.find.mock.callCount(), 0);
+        assert.equal(state.write.mock.callCount(), 0);
+      });
+    }
+  }
 }
 
 for (const key of ['servePort', 'mode']) {
