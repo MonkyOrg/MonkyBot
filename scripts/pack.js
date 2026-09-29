@@ -9,6 +9,7 @@ const path = require('node:path');
 const { createRequire } = require('node:module');
 const { runNpm } = require('./npm');
 const { checkSdk } = require('./check-sdk');
+const { createHash } = require('node:crypto');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -185,6 +186,20 @@ function pack({ version, out = path.join(ROOT, 'release'), root = ROOT } = {}) {
   checkSdk(root);
   for (const filename of ['index.js', 'cli.js']) requiredFile(path.join(root, 'dist', filename));
   requiredFile(path.join(root, 'assets', 'monky-logo.png'));
+  requiredFile(path.join(root, 'assets', 'games', 'app.js'));
+  const doom = path.join(root, 'assets', 'games', 'doom');
+  const engine = readJson(path.join(doom, 'engine-build.json'));
+  if (engine.debug !== false || !engine.files?.['source/engine.tar.gz'] ||
+      !engine.files?.['licenses/Emscripten.txt'] || !engine.files?.['source/ports/SDL2-2.32.8.zip']) {
+    throw new Error('Game engine build/source/license metadata is incomplete or a debug build.');
+  }
+  for (const [filename, expected] of Object.entries(engine.files)) {
+    const file = path.resolve(doom, filename);
+    if (!file.startsWith(doom + path.sep)) throw new Error('Invalid engine artifact path.');
+    requiredFile(file);
+    if (createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== expected) throw new Error(`Game artifact changed: ${filename}`);
+  }
+  for (const filename of ['freedoom1.wad', 'COPYING-engine.txt', 'COPYING-freedoom.txt', 'CREDITS-freedoom.txt']) requiredFile(path.join(doom, filename));
 
   const staging = path.join(root, 'release', 'bot-pack');
   fs.rmSync(staging, { recursive: true, force: true });

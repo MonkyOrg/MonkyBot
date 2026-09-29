@@ -7,6 +7,7 @@ import { pollCommand, registerPollCommand } from './poll';
 import { helpCommand } from './help';
 import { musicDefinitions, registerMusicCommands } from './music';
 import { ticTacToeDefinition, registerTicTacToe } from './ticTacToe';
+import { gameDefinitions, registerGames } from './games';
 import { cliText } from '../cli/i18n';
 
 const basicCommands: readonly CommandDefinition[] = [
@@ -16,7 +17,7 @@ export const requestedCapabilities: BotCapability[] = [
   'commands', 'send_messages', 'publish_voice', 'local_execution', 'selectors', 'miniapps',
 ];
 export const commands: readonly Omit<CommandDefinition, 'handler'>[] = [
-  ...basicCommands, ...musicDefinitions, ticTacToeDefinition,
+  ...basicCommands, ...musicDefinitions, ticTacToeDefinition, ...Object.values(gameDefinitions),
 ];
 
 export function registerAllCommands(bot: BotClient): () => Promise<void> {
@@ -26,9 +27,10 @@ export function registerAllCommands(bot: BotClient): () => Promise<void> {
   const disposePoll = registerPollCommand(bot);
   const disposeMusic = registerMusicCommands(bot);
   const disposeGames = registerTicTacToe(bot);
+  const disposeLibrary = registerGames(bot);
   console.log(cliText(`📋 ${commands.length} comandos registrados.`, `📋 ${commands.length} commands registered.`));
   return async () => {
     disposePoll();
-    await Promise.all([disposeMusic(), disposeGames()]);
+    await Promise.all([disposeMusic(), disposeGames(), disposeLibrary()]);
   };
 }
