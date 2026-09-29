@@ -1,0 +1,29 @@
+{
+  "source": "https://github.com/VectorPrivacy/DOOM",
+  "commit": "1c006ebc71b75126755158e3f2a392e9a27833b1",
+  "compiler": "Emscripten 4.0.15",
+  "debug": false,
+  "files": {
+    "engine.js": "6411d972699e32f76da66c75a82ac1f3f2e36b3fb7700ca8bb5b69c065fa00f5",
+    "engine.wasm": "f657c4cdcc2562c7923ba33af7749600a801d655cfdc09b85a3465b8160e0d54",
+    "source/engine.tar.gz": "a69bbda1a706ac48f1249fd9d51c16a2f0557e61df3330a5a7f1e0e539d2f5b7",
+    "source/build.cjs": "f016ff5b291837f50bf45a8da654730d75efc184f1acfbabc828d44879ee72b5",
+    "source/monky.c": "b4a003a2dd11d07efa45883ee60aaf41a602e2c9b5fac6440b34b528e9842aef",
+    "source/ports/ogg-1.3.5.zip": "fd4e5ba7e93b84b3ec41cdf01494cc586ef6e912b313dbab25512dd02665dfaf",
+    "source/ports/SDL2-2.32.8.zip": "80193a6ec899ba00b5914adefecdd669e32a14b067500ad063c80156611f9366",
+    "source/ports/SDL2_mixer-2.8.0.zip": "3aa9b3abd7cefb3e7952ec2d0acf38c70947f04be14d74ed45f57155c7457386",
+    "source/ports/SDL2_net-version_2.zip": "fc8caf8ea278f91bff6eb4ac3074fee8657c428a2767bcebc2cf142f2b3e35bd",
+    "source/ports/vorbis-1.3.7.zip": "57c8bc92d2741934b8dc939af49c2639edc44b8879cba2ec14ad3189e2814582",
+    "licenses/compiler-rt.txt": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d",
+    "licenses/Emscripten.txt": "620a78084fc7ca97c0b5dea9abf891f3ffcadfdbf305276f099c9c4e12fc1d86",
+    "licenses/libcxx.txt": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b",
+    "licenses/libcxxabi.txt": "e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c",
+    "licenses/musl.txt": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af",
+    "licenses/ogg-1.3.5.txt": "d2ab5758336489da61c12cc5bb757da5339c4ae9001f9bb0562b4370249af814",
+    "licenses/SDL2-2.32.8.txt": "97f35b302b361680ec1e891e95d2d52097bb95abff361434916d99dc1305f127",
+    "licenses/SDL2_mixer-2.8.0.txt": "a0e8ce06504966e45088ee1cc7583cc8af9aac615d4cf56d47d847da9cb15139",
+    "licenses/SDL2_net-version_2.txt": "b235497af93fbcb56462dd4622af3c6ebac6e11cc83aa616a1d8327cb78efcbd",
+    "licenses/vorbis-1.3.7.txt": "ec1815db59fcd302846df949d7424876cb2e2dc5ed1606c5fb0b36787b1cf43a",
+    "licenses/yuv2rgb.txt": "f7d74004cc75778cae46c5f0139f244d67c07ef64cf51937e8272352197dcb18"
+  }
+}

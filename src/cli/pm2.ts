@@ -157,6 +157,9 @@ export function generateEcosystem(config: BotConfig, manifestHost = getManifestB
     env.MONKY_MUSIC_FFMPEG = musicTools.ffmpeg;
   }
   if (config.botName) env.MONKY_BOT_NAME = config.botName;
+  for (const name of ['MONKY_GAMES_HOST', 'MONKY_GAMES_PORT', 'MONKY_GAMES_PUBLIC_URL']) {
+    if (process.env[name] !== undefined) env[name] = process.env[name]!;
+  }
   if (config.mode === 'manual') {
     if (config.serverUrl) env.MONKY_SERVER_URL = config.serverUrl;
     if (config.botToken) env.MONKY_BOT_TOKEN = config.botToken;

@@ -8,7 +8,7 @@ const { createRequire } = require('node:module');
 const { runNpm } = require('./npm');
 
 const ROOT = path.resolve(__dirname, '..');
-const COMMANDS = ['8ball', 'ajuda', 'clear', 'dado', 'enquete', 'jogo-da-velha', 'leave', 'moeda',
+const COMMANDS = ['8ball', 'ajuda', 'clear', 'dado', 'doom', 'enquete', 'jogo-da-velha', 'leave', 'moeda', 'nes',
   'nowplaying', 'pause', 'ping', 'play', 'queue', 'remove', 'resume', 'skip', 'stop'];
 
 function waitForManifest(child, logs) {

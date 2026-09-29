@@ -4,6 +4,68 @@ The **official reference bot** for Monky — utility commands, fun and more.
 
 > 📖 To create your **own** bot from scratch, see the [Bot Documentation](https://monkyorg.github.io/Monky/en/bots).
 
+## DOOM and NES emulator
+
+In a voice room, use **`/doom`** for DOOM/Freedoom or **`/nes`** for the NES emulator.
+The commands open their miniapps directly; there is no `/games` catalog.
+Open the miniapp on the stage: its creator gets player 1, one friend joins as
+player 2, and everyone else can watch. DOOM files load automatically,
+then the creator starts once both players are ready. NES can also start solo.
+Closing a player's view interrupts play; spectators can join later.
+Sessions expire after 30 minutes.
+
+In DOOM, click the canvas to capture the mouse: move to turn and use the left
+button or space to fire. `Esc` releases the cursor; click again to recapture.
+During play, the game fills the miniapp area while preserving its aspect ratio.
+Use Monky's existing stage fullscreen control to expand the view.
+Switching windows, exiting fullscreen or ending the game releases held controls.
+**Controls and options** (or `F2`) also releases the mouse and shows the DOOM
+instructions. Only the host can **Restart game** or **Return to lobby**, with
+confirmation and synchronized effects for players and spectators. In DOOM both
+actions discard progress; starting again keeps the seats and does not require
+reopening the miniapp. `Esc` remains available to release the mouse.
+
+DOOM uses a GPL engine with bundled **Freedoom 0.13.0**: free maps, graphics and
+music, different from commercial DOOM. In NES, **only the person who ran `/nes`
+chooses the ROM**: an iNES file up to 4 MiB that they have permission to share.
+The bot keeps it only in session memory and sends it over authenticated connections
+to players and spectators, including late arrivals. The bot does not save the file
+or expose a public download URL. Ending the session or leaving as host releases it.
+Others see a waiting-for-host message and can already choose **Join as player 2**,
+without selecting any file. A free seat can also be taken during a solo game.
+Spectators start watching automatically when the host starts, with input replay
+to synchronize late arrivals.
+
+**NES controls:** arrows = D-pad, `X` = A, `Z` = B, `Enter` = Start and `Shift` =
+Select. Each player uses these keys for their own controller; for co-op, select
+the game's two-player mode. Instructions appear in the lobby and under
+**Controls and options**, available during play or with `Esc`. The menu does not
+pause the game. Only the host has **Restart ROM** and **Return to lobby**, with
+confirmation and synchronized effects for everyone. In NES, returning to the
+lobby preserves progress: **Resume game** restores it for players and spectators.
+**Start over** requires confirmation; choosing another valid ROM also discards
+the old progress. Resume works only in the current session with the same ROM;
+it is not a persistent save on disk.
+No commercial game is bundled with the emulator. Automated coverage uses an
+original homebrew fixture. Sources, credits and rebuild instructions are in `assets/games`.
+
+A **Monky client supporting web miniapps** is required. Older clients display
+an update message. The bot serves game assets and multiplayer on port **7781**,
+separate from its manifest. Set `MONKY_GAMES_PUBLIC_URL` to an HTTP(S) origin
+reachable by every participant. In production use HTTPS/WSS with a proxy
+forwarding `/games/*` and WebSocket upgrades. `MONKY_GAMES_HOST` and
+`MONKY_GAMES_PORT` set the bind. Without an explicit URL, it uses
+`http://<MONKY_SERVE_PUBLIC_HOST or localhost>:7781`. `localhost` only works
+when the bot and clients run on the same computer.
+
+The listener starts on demand and checks files and its port before creating a
+miniapp. Each client checks HTTP access and WebSocket authentication before
+enabling play. A local bind does not prove external reachability: firewall,
+DNS and proxy must allow players' connections. Failures appear in the miniapp.
+CLI start/restart copies game overrides into its ecosystem.
+To exercise both engines from a checkout, run `npm run test:games:browser`
+with `MONKY_GAMES_ELECTRON` pointing to the Monky checkout's Electron executable.
+
 ## Compatibility
 
 This beta uses **Monky protocol 27**, with official SDK **30.0.7-beta**.
@@ -380,6 +442,8 @@ come from the bot; the client does not create or edit its profile.
 | `/remove <position>` | Remove a 1-based position from the upcoming queue |
 | `/clear` | Clear only upcoming tracks, preserving the current track |
 | `/tic-tac-toe` | Shared screen for 2 players and spectators |
+| `/doom` | Co-op DOOM/Freedoom with bundled free game data |
+| `/nes` | NES emulator with a local ROM, for solo or two-player games |
 | `/help` | List all commands |
 
 Type `/`, select a command, and fill its named parameters. For example, `lados`

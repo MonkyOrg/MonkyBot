@@ -19,7 +19,7 @@ const presentations = [
   ['play', 'tocar', 'play'], ['queue', 'fila', 'queue'], ['nowplaying', 'tocando', 'nowplaying'],
   ['pause', 'pausar', 'pause'], ['resume', 'retomar', 'resume'], ['skip', 'pular', 'skip'],
   ['stop', 'parar', 'stop'], ['leave', 'sair', 'leave'], ['remove', 'remover', 'remove'],
-  ['clear', 'limpar', 'clear'], ['jogo-da-velha', 'jogo-da-velha', 'tic-tac-toe'],
+  ['clear', 'limpar', 'clear'], ['jogo-da-velha', 'jogo-da-velha', 'tic-tac-toe'], ['doom', 'doom', 'doom'], ['nes', 'nes', 'nes'],
 ];
 
 test('production declares only the capabilities its commands use', () => {
@@ -28,8 +28,8 @@ test('production declares only the capabilities its commands use', () => {
   ]);
 });
 
-test('all 17 official definitions declare the expected presentation names and retain translated option text', () => {
-  assert.equal(commands.length, 17);
+test('all 19 official definitions declare the expected presentation names and retain translated option text', () => {
+  assert.equal(commands.length, 19);
   assert.deepEqual(commands.map(command => command.name), presentations.map(([canonical]) => canonical));
   for (const command of commands) {
     const text = command.localizations.en;
@@ -115,7 +115,7 @@ test('all public command names register with the current SDK and dispose listene
   const dispose = registerAllCommands(bot);
   try {
     assert.deepEqual(commands.map((command) => command.name), ['ping', 'dado', 'moeda', '8ball', 'enquete', 'ajuda',
-      'play', 'queue', 'nowplaying', 'pause', 'resume', 'skip', 'stop', 'leave', 'remove', 'clear', 'jogo-da-velha']);
+      'play', 'queue', 'nowplaying', 'pause', 'resume', 'skip', 'stop', 'leave', 'remove', 'clear', 'jogo-da-velha', 'doom', 'nes']);
     assert.equal(commands.find(command => command.name === 'play').options[0].autocomplete, true);
     assert.equal(commands.find(command => command.name === 'jogo-da-velha').voiceRequirement, 'joined');
     assert.equal(pollCommand.options, undefined);
@@ -277,5 +277,27 @@ test('PM2 passes the configured bot identity in both modes', () => {
   for (const mode of ['manual', 'marketplace']) {
     const ecosystem = generateEcosystem({ mode, botDir: process.cwd(), botName: 'My MonkyBot' });
     assert.match(ecosystem, /MONKY_BOT_NAME: 'My MonkyBot'/);
+  }
+});
+
+test('PM2 preserves and safely quotes the game service environment in both modes', () => {
+  const values = {
+    MONKY_GAMES_HOST: '127.0.0.1',
+    MONKY_GAMES_PORT: '7781',
+    MONKY_GAMES_PUBLIC_URL: "https://games.example.test/quote'\\\r\n",
+  };
+  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  try {
+    Object.assign(process.env, values);
+    for (const mode of ['manual', 'marketplace']) {
+      const context = { module: {} };
+      require('node:vm').runInNewContext(generateEcosystem({ mode, botDir: process.cwd() }), context);
+      for (const [key, value] of Object.entries(values)) assert.equal(context.module.exports.apps[0].env[key], value);
+    }
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });

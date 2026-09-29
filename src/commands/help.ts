@@ -7,6 +7,7 @@ import { eightBallCommand } from './eightball';
 import { pollCommand } from './poll';
 import { musicDefinitions } from './music';
 import { ticTacToeDefinition } from './ticTacToe';
+import { gameDefinitions } from './games';
 
 const usageNames: Readonly<Record<string, readonly [string, string]>> = {
   lados: ['lados', 'sides'],
@@ -25,7 +26,7 @@ export const helpCommand: LocalizedCommandDefinition = {
   handler: (ctx) => {
     if (ctx.signal.aborted) return;
     const definitions = [pingCommand, diceCommand, coinCommand, eightBallCommand, pollCommand, helpCommand,
-      ...musicDefinitions, ticTacToeDefinition];
+      ...musicDefinitions, ticTacToeDefinition, ...Object.values(gameDefinitions)];
     const render = (locale: BotLocale): string => {
       const lines = definitions.map((definition) => {
         const { displayName } = getCommandPresentation(definition, locale);
