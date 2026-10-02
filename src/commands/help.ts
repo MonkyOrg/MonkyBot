@@ -4,7 +4,7 @@ import { pingCommand } from './ping';
 import { diceCommand } from './dice';
 import { coinCommand } from './coin';
 import { eightBallCommand } from './eightball';
-import { pollCommand } from './poll';
+import { giveawayCommand, reminderCommand } from './scheduled';
 import { musicDefinitions } from './music';
 import { ticTacToeDefinition } from './ticTacToe';
 import { gameDefinitions } from './games';
@@ -25,7 +25,8 @@ export const helpCommand: LocalizedCommandDefinition = {
   },
   handler: (ctx) => {
     if (ctx.signal.aborted) return;
-    const definitions = [pingCommand, diceCommand, coinCommand, eightBallCommand, pollCommand, helpCommand,
+    const definitions = [pingCommand, diceCommand, coinCommand, eightBallCommand,
+      reminderCommand, giveawayCommand, helpCommand,
       ...musicDefinitions, ticTacToeDefinition, ...Object.values(gameDefinitions)];
     const render = (locale: BotLocale): string => {
       const lines = definitions.map((definition) => {
@@ -42,8 +43,8 @@ export const helpCommand: LocalizedCommandDefinition = {
       });
       const title = translate(locale, 'MonkyBot — Comandos', 'MonkyBot — Commands');
       const privacy = translate(locale,
-        'Consultas e erros são privados. Enquetes, resultados e mudanças na reprodução musical aparecem no canal de origem. Música exige estar na mesma sala de voz do bot, inclusive busca e prévia. O jogo aparece por convite no palco, somente para quem está na mesma sala de voz.',
-        'Queries and errors are private. Polls, results and music playback changes appear in the originating channel. Music requires membership in the bot’s voice room, including search and preview. Games open by invitation on the stage, only for people in that voice room.');
+        'Consultas e erros são privados. Lembretes, sorteios, resultados e mudanças na reprodução musical aparecem no canal de origem. Música exige estar na mesma sala de voz do bot, inclusive busca e prévia. O jogo aparece por convite no palco, somente para quem está na mesma sala de voz.',
+        'Queries and errors are private. Reminders, giveaways, results and music playback changes appear in the originating channel. Music requires membership in the bot’s voice room, including search and preview. Games open by invitation on the stage, only for people in that voice room.');
       return `🤖 **${title}**\n\n${lines.join('\n')}\n\n${privacy}`;
     };
     ctx.reply(message(ctx.locale, render('pt-BR'), render('en')));

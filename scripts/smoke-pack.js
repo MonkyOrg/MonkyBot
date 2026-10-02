@@ -8,8 +8,8 @@ const { createRequire } = require('node:module');
 const { runNpm } = require('./npm');
 
 const ROOT = path.resolve(__dirname, '..');
-const COMMANDS = ['8ball', 'ajuda', 'clear', 'dado', 'doom', 'enquete', 'jogo-da-velha', 'leave', 'moeda', 'nes',
-  'nowplaying', 'pause', 'ping', 'play', 'queue', 'remove', 'resume', 'skip', 'stop'];
+const COMMANDS = ['8ball', 'ajuda', 'clear', 'dado', 'doom', 'jogo-da-velha', 'leave', 'lembrete', 'moeda', 'nes',
+  'nowplaying', 'pause', 'ping', 'play', 'queue', 'remove', 'resume', 'skip', 'sorteio', 'stop'];
 
 function waitForManifest(child, logs) {
   return new Promise((resolve, reject) => {
@@ -214,7 +214,7 @@ async function smokePack(tarball) {
     assert.deepEqual(manifest.commands.map((command) => command.name).sort(),
       COMMANDS);
     assert.deepEqual(manifest.requestedCapabilities, [
-      'commands', 'send_messages', 'publish_voice', 'local_execution', 'selectors', 'miniapps',
+      'commands', 'send_messages', 'publish_voice', 'local_execution', 'miniapps', 'live_actions',
     ]);
     assert.equal(child.exitCode, null, 'Packaged runtime must still be running.');
 

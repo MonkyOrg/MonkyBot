@@ -4,7 +4,7 @@ const { BotClient } = require('@monky/bot-sdk');
 const { commands, registerAllCommands, requestedCapabilities } = require('../dist/commands');
 const { diceCommand } = require('../dist/commands/dice');
 const { eightBallCommand } = require('../dist/commands/eightball');
-const { pollCommand } = require('../dist/commands/poll');
+const { giveawayCommand, reminderCommand } = require('../dist/commands/scheduled');
 const { coinCommand } = require('../dist/commands/coin');
 const { pingCommand } = require('../dist/commands/ping');
 const { helpCommand } = require('../dist/commands/help');
@@ -15,7 +15,8 @@ const { botMessageText } = require('./helpers/bot-message');
 
 const presentations = [
   ['ping', 'ping', 'ping'], ['dado', 'dado', 'dice'], ['moeda', 'moeda', 'coin'],
-  ['8ball', 'bola-magica', '8ball'], ['enquete', 'enquete', 'poll'], ['ajuda', 'ajuda', 'help'],
+  ['8ball', 'bola-magica', '8ball'], ['lembrete', 'lembrete', 'reminder'],
+  ['sorteio', 'sorteio', 'giveaway'], ['ajuda', 'ajuda', 'help'],
   ['play', 'tocar', 'play'], ['queue', 'fila', 'queue'], ['nowplaying', 'tocando', 'nowplaying'],
   ['pause', 'pausar', 'pause'], ['resume', 'retomar', 'resume'], ['skip', 'pular', 'skip'],
   ['stop', 'parar', 'stop'], ['leave', 'sair', 'leave'], ['remove', 'remover', 'remove'],
@@ -24,12 +25,12 @@ const presentations = [
 
 test('production declares only the capabilities its commands use', () => {
   assert.deepEqual(requestedCapabilities, [
-    'commands', 'send_messages', 'publish_voice', 'local_execution', 'selectors', 'miniapps',
+    'commands', 'send_messages', 'publish_voice', 'local_execution', 'miniapps', 'live_actions',
   ]);
 });
 
-test('all 19 official definitions declare the expected presentation names and retain translated option text', () => {
-  assert.equal(commands.length, 19);
+test('all 20 official definitions declare the expected presentation names and retain translated option text', () => {
+  assert.equal(commands.length, 20);
   assert.deepEqual(commands.map(command => command.name), presentations.map(([canonical]) => canonical));
   for (const command of commands) {
     const text = command.localizations.en;
@@ -114,13 +115,14 @@ test('all public command names register with the current SDK and dispose listene
   const bot = new BotClient({ publicKey: 'test-public-key', requestedCapabilities });
   const dispose = registerAllCommands(bot);
   try {
-    assert.deepEqual(commands.map((command) => command.name), ['ping', 'dado', 'moeda', '8ball', 'enquete', 'ajuda',
+    assert.deepEqual(commands.map((command) => command.name), ['ping', 'dado', 'moeda', '8ball', 'lembrete', 'sorteio', 'ajuda',
       'play', 'queue', 'nowplaying', 'pause', 'resume', 'skip', 'stop', 'leave', 'remove', 'clear', 'jogo-da-velha', 'doom', 'nes']);
     assert.equal(commands.find(command => command.name === 'play').options[0].autocomplete, true);
     assert.equal(commands.find(command => command.name === 'jogo-da-velha').voiceRequirement, 'joined');
-    assert.equal(pollCommand.options, undefined);
+    assert.equal(reminderCommand.options, undefined);
+    assert.equal(giveawayCommand.options, undefined);
     assert.equal(eightBallCommand.options[0].required, true);
-    assert.equal(bot.listenerCount('selectorUpdate'), 1);
+    assert.equal(bot.listenerCount('selectorUpdate'), 0);
     assert.deepEqual(diceCommand.options[0], {
       name: 'lados', description: 'Número de lados do dado (padrão: 6)',
       type: 'integer', required: false, min: 2, max: 100,
@@ -128,6 +130,7 @@ test('all public command names register with the current SDK and dispose listene
   } finally {
     await dispose();
     assert.equal(bot.listenerCount('selectorUpdate'), 0);
+    assert.equal(bot.listenerCount('liveActionSubmission'), 0);
     assert.equal(bot.listenerCount('voiceDisconnected'), 0);
     assert.equal(bot.listenerCount('voiceParticipantsChanged'), 0);
     assert.equal(bot.listenerCount('screenAction'), 0);
@@ -166,12 +169,12 @@ for (const locale of ['pt-BR', 'en']) {
       if (command === pingCommand) assert.match(state.replies[0], locale === 'en' ? /is online/ : /está online/);
       if (command === helpCommand) {
         assert.match(state.replies[0], locale === 'en' ? /Queries and errors are private/ : /Consultas e erros são privados/);
-        assert.ok(state.replies[0].includes(`**/${sdk.getCommandPresentation(pollCommand, locale).displayName}**`));
+        assert.ok(state.replies[0].includes(`**/${sdk.getCommandPresentation(reminderCommand, locale).displayName}**`));
         assert.match(state.replies[0], locale === 'en' ? /\/8ball <question>/ : /\/bola-magica <pergunta>/);
         assert.match(state.replies[0], locale === 'en' ? /\/dice \[sides\]/ : /\/dado \[lados\]/);
         assert.match(state.replies[0], locale === 'en' ? /\/play <search>/ : /\/tocar <busca>/);
         assert.match(state.replies[0], locale === 'en' ? /\/remove <position>/ : /\/remover <posição>/);
-        assert.match(state.replies[0], locale === 'en' ? /Polls, results and music playback changes/ : /Enquetes, resultados e mudanças/);
+        assert.match(state.replies[0], locale === 'en' ? /Reminders, giveaways, results/ : /Lembretes, sorteios, resultados/);
         assert.match(state.replies[0], locale === 'en' ? /Music requires membership/ : /Música exige estar na mesma sala/);
         assert.match(state.replies[0], locale === 'en' ? /invitation on the stage/ : /convite no palco/);
         assert.ok(state.replies[0].length <= 2000);
@@ -198,7 +201,7 @@ for (const locale of ['pt-BR', 'en']) {
 }
 
 test('already-aborted invocations are ignored by basic commands', async () => {
-  for (const command of [pingCommand, diceCommand, coinCommand, eightBallCommand, pollCommand, helpCommand]) {
+  for (const command of [pingCommand, diceCommand, coinCommand, eightBallCommand, helpCommand]) {
     const controller = new AbortController();
     controller.abort();
     const state = context({ controller });
