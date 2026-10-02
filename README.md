@@ -68,24 +68,27 @@ com `MONKY_GAMES_ELECTRON` apontando para o executável Electron do checkout Mon
 
 ## Compatibilidade
 
-Esta beta usa **protocolo Monky 27**, com o SDK oficial **30.0.7-beta**.
-Use o aplicativo e o servidor Monky **v30.0.7-beta** para o conjunto atualizado.
-A compatibilidade é negociada, com piso de protocolo **24**; servidores no
-protocolo 22 ou anterior não são compatíveis.
-O SDK incluído no pacote é verificado no build e não precisa ser instalado à parte.
+Esta beta usa **protocolo Monky 34** com o SDK oficial **34.0.7-beta**.
+Use cliente e servidor Monky **v34.0.7-beta** para os novos recursos de
+comunidade. O SDK incluído é verificado no build e não precisa ser instalado
+à parte.
 Perfis, identidades, vínculos, idiomas e capacidades solicitadas são preservados;
 a atualização não habilita recepção de microfones.
 
-O SDK oficial inclui a negociação de compatibilidade e as correções atuais
-de mensagens e transporte. Os bytes distribuídos vêm da release beta
-[Monky v30.0.7-beta](https://github.com/MonkyOrg/Monky/releases/tag/v30.0.7-beta),
-sem pacotes locais de QA nem modificações no SDK vendorizado.
+O SDK oficial inclui envio persistente fora de invocações, live actions nativas
+e os contratos de voz, miniapps e execução local exigidos
+pelo bot. A origem do pacote e seu SHA-256 estão documentados em `vendor/README.md`.
 
 Esta beta inclui a correção das dependências empacotadas para atualizações
 offline com cache do npm vazio. Para atualizar, use `monkybot update --beta`.
 Instalações que ainda não registraram o consentimento do host precisam confirmá-lo
 uma vez com `monkybot setup`, mantendo o diretório e os vínculos existentes.
 Não gere outra identidade.
+
+O comando `/enquete` foi removido: crie enquetes pelo menu **+** do compositor
+do Monky. `/lembrete` e `/sorteio` passam a integrar o bot. Após atualizar,
+revise a capacidade **live actions** no servidor para permitir os sorteios;
+as aprovações existentes não concedem novos acessos automaticamente.
 
 O SDK compatível está incluído em `vendor/` e fixado no `package-lock.json`.
 Esta versão remove
@@ -96,7 +99,8 @@ servidores. Origem e SHA-256 estão documentados em
 
 Na instalação, um administrador com permissão de gerenciar bots revisa os
 acessos solicitados: comandos, mensagens públicas, publicação de voz, execução
-local, enquetes e miniapps. O MonkyBot não solicita leitura geral do chat nem
+local, miniapps e live actions. Lembretes usam mensagens públicas
+fora da invocação; sorteios usam mensagens públicas e live actions. O MonkyBot não solicita leitura geral do chat nem
 recepção da voz dos participantes. Vínculos manuais e bots migrados ficam sem
 acessos até essa revisão; negar um acesso impede a funcionalidade correspondente.
 A autorização do servidor para solicitar execução local não substitui o
@@ -466,7 +470,8 @@ Nome e avatar vêm do bot; não há criação ou edição de perfil no cliente.
 | `/dado [lados]` | Rola um dado (padrão: 6, máx: 100) |
 | `/moeda` | Cara ou coroa |
 | `/bola-magica <pergunta>` | Responde à pergunta completa obrigatória, em privado |
-| `/enquete` | Formulário privado que publica uma votação com encerramento automático |
+| `/lembrete` | Agenda uma mensagem persistente no canal atual |
+| `/sorteio` | Publica uma live action persistente para inscrições e sorteio automático |
 | `/tocar <busca>` | Busca por nome ou link do YouTube, prévia privada e seleção para adicionar à fila |
 | `/fila` | Faixa atual e fila numerada de próximas faixas |
 | `/tocando` | Faixa atual, pausa/carregamento e posição |
@@ -492,46 +497,39 @@ Por padrão, acompanham o idioma selecionado no cliente. Nas preferências pesso
 do bot, **Idioma do bot** permite manter **Seguir o Monky** ou escolher um idioma
 somente para aquele bot. Não é uma configuração compartilhada do servidor.
 Mensagens do bot incluem variantes PT-BR/EN e aparecem no **idioma do aplicativo
-de cada leitor**, inclusive resultados de enquetes, avisos da fila, histórico,
+de cada leitor**, inclusive lembretes, resultados de sorteios, avisos da fila, histórico,
 referências de resposta e cópia. A preferência do bot continua controlando
 comandos, formulários e prévias. Títulos, perguntas e opções escritos por pessoas
 não são traduzidos automaticamente; dados e moedas mantêm o mesmo resultado nos
 dois idiomas. Mensagens antigas sem variantes preservam seu texto original.
 
-### Conversas privadas e enquete guiada
+### Lembretes e sorteios persistentes
 
-As respostas comuns aparecem **somente no chat de quem chamou o comando**, sem
-interromper o canal. O formulário de enquete é privado, mas seu envio publica a
-pergunta e os botões de votação para os participantes do canal.
+`/lembrete` abre um formulário privado para **mensagem**, **prazo inteiro** e
+**unidade**. O prazo pode variar de 1 minuto a 365 dias. O lembrete pode ser
+enviado uma vez ou repetido diariamente/semanalmente, com até 30 envios. Quando
+vencer, o bot publica no canal de origem e escreve `@apelido` para mencionar o
+criador. Cada pessoa pode manter até 20 lembretes pendentes por servidor.
 
-1. Execute `/enquete`, sem parâmetros separados por vírgula.
-2. Escreva a pergunta (até 200 caracteres) e de **2 a 10 opções diferentes**.
-   Cada opção tem seu próprio campo, com até 80 caracteres; vírgulas podem fazer
-   parte do texto de uma opção.
-3. Informe uma **duração inteira** em minutos, horas ou dias (de 1 minuto a
-   30 dias), um **limite de 1 a 10.000 votantes**, ou ambos. Pelo menos um limite
-   é obrigatório.
-4. Clique em **Publicar enquete**. Não há prévia nem segunda confirmação.
-   Se faltar um limite ou a duração ultrapassar 30 dias, o bot explica o erro
-   e reabre o formulário com os dados preenchidos para você corrigir.
-   Cancelar o formulário antes de enviar não cria uma enquete.
-   Isso também funciona em canais privados: o servidor vincula a enquete à
-   invocação autorizada e revalida o acesso de quem a criou nas operações futuras.
-   Se essa pessoa perder acesso ou as permissões necessárias, o bot deixa de
-   receber as respostas e de publicar resultados até a autorização ser restaurada.
-5. Cada pessoa vota pelos botões e pode **trocar seu único voto enquanto a
-   enquete estiver aberta**. O limite conta pessoas diferentes, não cliques.
-6. A votação encerra no primeiro limite atingido: prazo ou quantidade de
-   votantes. O resultado público mostra contagens, percentuais, opção vencedora,
-   empate ou ausência de votos, no idioma do aplicativo de cada leitor.
+`/sorteio` recebe **prêmio/título**, regras opcionais, até cinco imagens em
+carrossel, duração de 1 minuto a 30 dias e de 1 a 10 vencedores. O comando
+publica uma live action com uma confirmação simples de inscrição. Reenvios da mesma conta são idempotentes:
+somente o primeiro registro de cada `userId` participa. No prazo, a live action
+é fechada, os vencedores únicos são escolhidos com `crypto.randomInt` e o
+resultado público inclui o total de inscrições válidas. Há no máximo 20 sorteios
+ativos ou em publicação por servidor.
 
-O servidor Monky persiste a pergunta, os votos e o encerramento; continua
-controlando o prazo e recusando votos tardios mesmo com o bot desligado. O bot
-recupera enquetes ao conectar e verifica pendências a cada 30 segundos. Falhas
-de consulta ou publicação aparecem nos logs e são tentadas novamente, sem
-duplicar o resultado já publicado. Se o bot estiver offline no encerramento, o
-resultado será publicado depois que ele se reconectar. Uma enquete apenas com
-limite de votantes permanece aberta até atingir esse limite.
+Lembretes, configurações de sorteio, inscrições e vencedores já escolhidos ficam
+em `.keys/scheduled-actions.json`, gravado por substituição atômica. Preserve
+esse arquivo junto de `private.pem`, `public.hex` e `registrations.json` em
+backups da identidade. Ao reiniciar, o bot recupera os prazos; se estiver
+desconectado no vencimento, publica quando a conexão voltar. O servidor mantém
+a live action, mas as inscrições do sorteio pertencem ao estado local do bot.
+
+Em uma perda ambígua de confirmação, o bot tenta novamente para não perder o
+lembrete ou resultado. Como `sendMessage` não aceita `clientMessageId`, o servidor
+pode já ter aceitado a primeira cópia; por isso, uma duplicata rara é possível
+se a conexão falhar exatamente nesse ponto.
 
 ### Música: pré-requisitos, limites e uso responsável
 
@@ -826,7 +824,7 @@ oficial em `vendor/`, fixado pelo lockfile; não troca a dependência por uma
 versão mais recente durante o build. O disparo manual exige `promote_tag` e
 autorização explícita para promover uma beta existente, sem recompilar.
 O build falha se o SDK não corresponder ao protocolo declarado em `package.json` ou não
-oferecer seletores duráveis, voz, telas, execução local concreta e nomes de
+oferecer live actions nativas, voz, telas, execução local concreta e nomes de
 comandos localizados. O pacote preserva a localização e a identidade das
 dependências transitivas do SDK (incluindo WebRTC/werift), sem clonar uma
 dependência compartilhada para cada consumidor. Instâncias ou versões
@@ -872,8 +870,10 @@ MonkyBot/
 │   │   ├── dice.ts
 │   │   ├── coin.ts
 │   │   ├── eightball.ts
-│   │   ├── poll.ts
+│   │   ├── scheduled.ts # Lembretes e sorteios persistentes
 │   │   └── help.ts
+│   ├── scheduled/
+│   │   └── store.ts     # Estado tipado e gravação atômica
 │   └── utils/
 │       └── keys.ts       # Auto-geração de chaves Ed25519
 ├── assets/
@@ -883,7 +883,8 @@ MonkyBot/
 ├── .env.example
 ├── .keys/                # Gerado automaticamente (não commitado)
 │   ├── private.pem
-│   └── public.hex
+│   ├── public.hex
+│   └── scheduled-actions.json
 └── package.json
 ```
 

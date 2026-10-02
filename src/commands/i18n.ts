@@ -1,4 +1,6 @@
-import type { BotLocalizedMessage, CommandContext, CommandDefinition, CommandLocalizations } from '@monky/bot-sdk';
+import type {
+  BotPublishedMessageContent, CommandContext, CommandDefinition, CommandLocalizations,
+} from '@monky/bot-sdk';
 import { normalizeCliLocale } from '../cli/i18n';
 
 /** Presentation names are localized; registered command and argument IDs stay canonical. */
@@ -13,6 +15,6 @@ export function translate(locale: CommandContext['locale'], ptBR: string, en: st
   return normalizeCliLocale(locale) === 'en' ? en : ptBR;
 }
 
-export function message(locale: CommandContext['locale'], ptBR: string, en: string): BotLocalizedMessage {
+export function message(locale: CommandContext['locale'], ptBR: string, en: string): BotPublishedMessageContent {
   return { content: translate(locale, ptBR, en), localizations: { 'pt-BR': ptBR, en } };
 }

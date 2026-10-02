@@ -68,24 +68,28 @@ with `MONKY_GAMES_ELECTRON` pointing to the Monky checkout's Electron executable
 
 ## Compatibility
 
-This beta uses **Monky protocol 27**, with official SDK **30.0.7-beta**.
-Use the Monky app and server **v30.0.7-beta** for the updated combination.
-Compatibility is negotiated with a minimum protocol of **24**; servers on
-protocol 22 or earlier are not compatible.
-The bundled SDK is checked during the build and needs no separate installation.
+This beta uses **Monky protocol 34** with official SDK **34.0.7-beta**.
+Use the Monky app and server **v34.0.7-beta** for the new community features.
+The bundled SDK is checked during the build and needs no separate
+installation.
 Profiles, identities, registrations, languages and requested capabilities are
 preserved; this update does not enable microphone reception.
 
-The official SDK includes compatibility negotiation and current messaging
-and transport fixes. Distributed bytes come from beta
-[Monky v30.0.7-beta](https://github.com/MonkyOrg/Monky/releases/tag/v30.0.7-beta),
-without local QA archives or modifications to the vendored SDK.
+The official SDK includes persistent out-of-invocation messaging, native live
+actions, and the voice, miniapp, and local-execution
+contracts required by the bot. Package provenance and SHA-256 are documented
+in `vendor/README.md`.
 
 This beta includes the bundled dependency metadata fix for offline updates
 with an empty npm cache. Upgrade with `monkybot update --beta`.
 Installations without recorded host consent must confirm it once using
 `monkybot setup`, keeping the existing directory and registrations.
 Do not generate a new identity.
+
+The `/poll` command has been removed: create polls through the **+** menu in
+Monky's composer. `/reminder` and `/giveaway` are now included in the bot.
+After upgrading, review the **live actions** capability on the server to
+allow giveaways; existing approvals do not automatically grant new access.
 
 The compatible SDK is included in `vendor/` and pinned in `package-lock.json`.
 This version removes
@@ -96,7 +100,8 @@ other servers. Its provenance and SHA-256 are documented in
 
 During installation, an administrator with permission to manage bots reviews
 the requested access: commands, public messages, voice publication, local
-execution, polls and miniapps. MonkyBot does not request general chat reading
+execution, miniapps, and live actions. Reminders use public messages
+outside an invocation; giveaways use public messages and live actions. MonkyBot does not request general chat reading
 or participant voice reception. Manual links and migrated bots have no access
 until that review; denying access prevents the corresponding feature.
 Server permission to request local execution never replaces each person's
@@ -464,7 +469,8 @@ come from the bot; the client does not create or edit its profile.
 | `/dice [sides]` | Roll a die (default: 6, max: 100) |
 | `/coin` | Coin flip |
 | `/8ball <question>` | Answer the required complete question privately |
-| `/poll` | Private form that publishes voting with automatic closing |
+| `/reminder` | Schedule a persistent message in the current channel |
+| `/giveaway` | Publish a persistent live action for entries and an automatic draw |
 | `/play <search>` | Search by YouTube name or URL, preview privately, and select to add to queue |
 | `/queue` | Current track and numbered upcoming queue |
 | `/nowplaying` | Current track, pause/loading state and position |
@@ -489,46 +495,39 @@ language, including those used in the examples below. Presentation follows the
 client's selected language by default. In personal bot preferences, **Bot language**
 offers **Follow Monky** or a language override for that bot. This is not a shared
 server setting. Bot messages include PT-BR/EN variants and appear in **each
-reader's app language**, including poll results, queue notices, history, reply
+reader's app language**, including reminders, giveaway results, queue notices, history, reply
 references and copying. The bot preference still controls commands, forms and
 previews. Human-authored titles, questions and options are not automatically
 translated; dice and coins keep the same result in both languages. Older
 messages without variants retain their original text.
 
-### Private conversations and guided polls
+### Persistent reminders and giveaways
 
-Ordinary replies appear **only in the invoking user's chat**, without
-interrupting the channel. The poll form is private, but submitting it publishes
-the question and voting buttons for channel participants.
+`/reminder` (canonical `/lembrete`) opens a private form for a **message**,
+**whole-number duration**, and **unit**. Durations range from 1 minute to 365
+days. It can run once or repeat daily/weekly for up to 30 deliveries. When due,
+the bot posts in the originating channel and writes `@nickname` to mention the
+creator. Each person may keep up to 20 pending reminders per server.
 
-1. Run `/poll` (canonical `/enquete`), without comma-separated parameters.
-2. Enter a question (up to 200 characters) and **2–10 different options**.
-   Each option has its own field, up to 80 characters; commas can be part of an
-   option's text.
-3. Set a **whole-number duration** in minutes, hours, or days (1 minute to
-   30 days), a **limit of 1–10,000 voters**, or both. At least one limit is
-   required.
-4. Click **Publish poll**. There is no preview or second confirmation.
-   If a limit is missing or the duration exceeds 30 days, the bot explains the
-   error and reopens the form with your entries preserved for correction.
-   Cancelling the form before submitting does not create a poll.
-   Private channels are supported: the server binds the poll to its authorized
-   invocation and rechecks the creator's access for future operations.
-   If that person loses access or the required permissions, the bot stops
-   receiving responses and publishing results until authorization is restored.
-5. Each person votes using the buttons and may **change their single vote while
-   voting is open**. The limit counts distinct people, not clicks.
-6. Voting closes at the first limit reached: duration or voter count.
-   The public result shows counts, percentages, the winning option, a tie, or no
-   votes, using each reader's app language.
+`/giveaway` (canonical `/sorteio`) accepts a **prize/title**, optional rules,
+up to five carousel images, a duration from 1 minute to 30 days, and 1–10 winners. It publishes a live
+action with a simple entry confirmation. Repeated submissions by the same
+account are idempotent: only the first record for each `userId` is eligible.
+At the deadline, the live action is closed, distinct winners are selected with
+`crypto.randomInt`, and the public result includes the number of valid entries.
+Each server may have up to 20 active or publishing giveaways.
 
-The Monky server persists the question, votes, and closure; it continues enforcing
-expiry and rejecting late votes even when the bot is offline. The bot recovers
-polls on connection and checks for pending results every 30 seconds. List and
-publication failures are logged and retried without duplicating an already
-published result. If the bot is offline when voting closes, results are published
-after it reconnects. A poll with only a voter limit stays open until that limit
-is reached.
+Reminders, giveaway configuration, entries, and already selected winners are
+stored in `.keys/scheduled-actions.json` using atomic replacement. Back it up
+with the identity's `private.pem`, `public.hex`, and `registrations.json`.
+On restart, the bot recovers deadlines; if disconnected when one expires, it
+publishes after reconnecting. The server retains the live action, while giveaway
+entries belong to the bot's local state.
+
+After an ambiguous acknowledgement loss, the bot retries rather than losing a
+reminder or result. Because `sendMessage` does not accept `clientMessageId`, the
+server may already have accepted the first copy, so an uncommon duplicate is
+possible after a connection failure at exactly that point.
 
 ### Music: prerequisites, limits and responsible use
 
@@ -823,7 +822,7 @@ dependency with a newer release during the build. Manual dispatch requires
 `promote_tag` and explicit approval to promote an existing beta without rebuilding.
 The build fails
 unless the SDK matches the protocol declared in `package.json` and supports
-durable selectors, voice, screens, concrete local execution, and localized
+native live actions, voice, screens, concrete local execution, and localized
 command names. Packaging preserves the location and identity of transitive SDK
 dependencies (including WebRTC/werift), without cloning a shared dependency for
 each consumer. Distinct instances or versions remain separate; a resolution
@@ -868,8 +867,10 @@ MonkyBot/
 │   │   ├── dice.ts
 │   │   ├── coin.ts
 │   │   ├── eightball.ts
-│   │   ├── poll.ts
+│   │   ├── scheduled.ts # Persistent reminders and giveaways
 │   │   └── help.ts
+│   ├── scheduled/
+│   │   └── store.ts     # Typed state and atomic writes
 │   └── utils/
 │       └── keys.ts       # Ed25519 key auto-generation
 ├── assets/
@@ -879,7 +880,8 @@ MonkyBot/
 ├── .env.example
 ├── .keys/                # Auto-generated (not committed)
 │   ├── private.pem
-│   └── public.hex
+│   ├── public.hex
+│   └── scheduled-actions.json
 └── package.json
 ```
 

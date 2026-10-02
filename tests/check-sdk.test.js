@@ -7,8 +7,8 @@ const { checkSdk } = require('../scripts/check-sdk');
 const protocolVersion = require('../package.json').monky.protocolVersion;
 
 test('the installed SDK matches the bot protocol and required runtime APIs', () => {
-  assert.equal(protocolVersion, 27);
-  assert.equal(require('@monky/bot-sdk/package.json').version, '30.0.7-beta');
+  assert.equal(protocolVersion, 34);
+  assert.equal(require('@monky/bot-sdk/package.json').version, '34.0.7-beta');
   assert.equal(checkSdk(), protocolVersion);
 });
 
@@ -19,7 +19,9 @@ function sdkFixture(t, { version = protocolVersion, missing } = {}) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ monky: { protocolVersion } }));
   fs.writeFileSync(path.join(sdk, 'package.json'), JSON.stringify({ main: 'index.js' }));
-  const methods = ['close', 'createSelector', 'listSelectors', 'updateSelector', 'closeSelector', 'finalizeSelector',
+  const methods = ['close',
+    'createLiveAction', 'listLiveActions', 'updateLiveAction', 'closeLiveAction', 'onLiveActionSubmission',
+    'sendMessage',
     'joinVoice', 'getVoiceConnection', 'leaveVoice', 'createScreen', 'updateScreen', 'closeScreen', 'listScreens', 'localExecution']
     .filter((name) => name !== missing).map((name) => `${name}() {}`).join('\n');
   const registrations = missing === 'registeredServerCount' ? '' : 'get registeredServerCount() { return 0; }';
@@ -31,12 +33,14 @@ function sdkFixture(t, { version = protocolVersion, missing } = {}) {
   return root;
 }
 
-test('SDK compatibility requires matching protocol, selectors, voice, local execution, screens and command localization', (t) => {
+test('SDK compatibility requires matching protocol, persistent messages, live actions, voice, local execution, screens and command localization', (t) => {
   assert.equal(checkSdk(sdkFixture(t)), protocolVersion);
   assert.throws(() => checkSdk(sdkFixture(t, { version: protocolVersion - 1 })), /requires the bot-sdk/);
-  for (const missing of ['close', 'registeredServerCount', 'createSelector', 'listSelectors', 'updateSelector', 'closeSelector', 'finalizeSelector',
+  for (const missing of ['close', 'registeredServerCount',
+    'createLiveAction', 'listLiveActions', 'updateLiveAction', 'closeLiveAction', 'onLiveActionSubmission',
+    'sendMessage',
     'joinVoice', 'getVoiceConnection', 'leaveVoice', 'createScreen', 'updateScreen', 'closeScreen', 'listScreens',
     'getCommandPresentation', 'localExecution', 'LocalExecutionError', 'LocalExecutionRpcError']) {
-    assert.throws(() => checkSdk(sdkFixture(t, { missing })), /durable selectors/, missing);
+    assert.throws(() => checkSdk(sdkFixture(t, { missing })), /native live actions/, missing);
   }
 });

@@ -1,8 +1,23 @@
 # SDK compativel
 
-## SDK oficial ativo
+## SDK oficial atual (protocolo 34)
 
-A dependencia ativa e `monky-bot-sdk-30.0.7-beta.tgz`, da
+A dependencia ativa e `monky-bot-sdk-34.0.7-beta.tgz`, da
+[release Monky v34.0.7-beta](https://github.com/MonkyOrg/Monky/releases/tag/v34.0.7-beta).
+Inclui protocolo **34**, mensagens persistentes fora de invocacoes, formularios
+e live actions nativas. Use cliente e servidor Monky v34.0.7-beta.
+
+Origem: commit `6da39205b7b6b586bb8453357703d6de049d0dbe`, workflow
+[Release 36972716958](https://github.com/MonkyOrg/Monky/actions/runs/36972716958).
+Bytes oficiais sem modificacoes, conferidos contra o digest SHA-256 publicado:
+`18c75e7bea37551c065072550264e1b855799430ee916c795d6e3b2d7923ee06`.
+Tamanho: 6.118.410 bytes. Dependencia e lockfile fixam os mesmos bytes.
+O pacote local de QA foi substituido e nao acompanha a publicacao.
+Perfis, identidades, vinculos e aprovacoes existentes permanecem preservados.
+
+## SDK oficial anterior (protocolo 27)
+
+A dependencia anterior era `monky-bot-sdk-30.0.7-beta.tgz`, da
 [release Monky v30.0.7-beta](https://github.com/MonkyOrg/Monky/releases/tag/v30.0.7-beta).
 Inclui protocolo **27** e a correcao de metadados das dependencias incluidas
 no pacote para atualizacoes offline com cache vazio. Use cliente e servidor
