@@ -1,24 +1,20 @@
 /**
- * Build a self-contained npm tarball, preserving the dependency tree actually
- * resolved by each requesting package, including workspace symlinks.
+ * Build the self-contained MonkyBot release with the SDK packager, which
+ * generates the `monkybot` command (the SDK's reusable runtime CLI) and bundles
+ * the production dependency tree. This script only adds MonkyBot's own checks.
  *
  * Usage: node scripts/pack.js [version] [--out <dir>]
  */
 const fs = require('node:fs');
 const path = require('node:path');
 const { createRequire } = require('node:module');
-const { runNpm } = require('./npm');
-const { checkSdk } = require('./check-sdk');
 const { createHash } = require('node:crypto');
+const { checkSdk } = require('./check-sdk');
 
 const ROOT = path.resolve(__dirname, '..');
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
-}
-
-function writeJson(file, value) {
-  fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
 }
 
 function parseArgs(argv) {
@@ -43,148 +39,7 @@ function requiredFile(file) {
   }
 }
 
-function productionDependencies(pkg) {
-  const dependencies = new Map();
-  for (const name of Object.keys(pkg.peerDependencies || {})) {
-    dependencies.set(name, pkg.peerDependenciesMeta?.[name]?.optional === true);
-  }
-  for (const name of Object.keys(pkg.dependencies || {})) dependencies.set(name, false);
-  for (const name of Object.keys(pkg.optionalDependencies || {})) dependencies.set(name, true);
-  return dependencies;
-}
-
-function lookupPaths(requester, name) {
-  // Packages such as werift declare the npm "buffer" polyfill. Looking up the
-  // bare name returns null for Node builtins, hiding the real installed package.
-  return createRequire(path.join(requester, 'package.json')).resolve.paths(`${name}/package.json`) || [];
-}
-
-function resolvePackage(requester, name) {
-  // resolve.paths follows Node's lookup order without requiring packages to
-  // export their package.json. realpath makes workspace dependencies resolve
-  // from their own workspace, not from the bot's node_modules.
-  for (const directory of lookupPaths(requester, name)) {
-    const candidate = path.join(directory, name);
-    if (fs.existsSync(path.join(candidate, 'package.json'))) {
-      return { source: fs.realpathSync(candidate), modules: fs.realpathSync(directory) };
-    }
-  }
-  return null;
-}
-
-function bundleDependencies(sourceRoot, destinationRoot) {
-  const placed = new Map();
-  const locations = new Map([[fs.realpathSync(sourceRoot), destinationRoot]]);
-  const moduleDirectories = new Map();
-  const edges = [];
-  let packageCount = 0;
-
-  function copyDependency(name, requesterSource, requesterDestination, optional) {
-    const resolved = resolvePackage(requesterSource, name);
-    if (!resolved) {
-      if (optional) return null;
-      throw new Error(`Missing required dependency "${name}", requested by ${requesterSource}`);
-    }
-    const { source, modules } = resolved;
-    const pkg = readJson(path.join(source, 'package.json'));
-    if (typeof pkg.name !== 'string' || typeof pkg.version !== 'string' || !pkg.version) {
-      throw new Error(`Invalid package metadata: ${path.join(source, 'package.json')}`);
-    }
-    const spec = name === pkg.name ? pkg.version : `npm:${pkg.name}@${pkg.version}`;
-
-    // Preserve the original node_modules owner: cloning one shared dependency
-    // beneath each consumer splits module identity and ASN.1 schema registries.
-    let destinationModules = moduleDirectories.get(modules);
-    if (!destinationModules) {
-      const owner = locations.get(fs.realpathSync(path.dirname(modules)));
-      destinationModules = path.join(owner ?? requesterDestination, 'node_modules');
-      moduleDirectories.set(modules, destinationModules);
-    }
-    const destination = path.join(destinationModules, name);
-    const existing = placed.get(destination);
-    if (existing !== undefined && existing !== source) {
-      throw new Error(`Conflicting dependency locations for "${name}" at ${destination}`);
-    }
-    const location = locations.get(source);
-    if (location !== undefined && location !== destination) {
-      throw new Error(`Cannot preserve the shared identity of "${name}" at ${source}`);
-    }
-    edges.push({ name, requesterDestination, destination });
-    if (existing === source) return spec;
-
-    locations.set(source, destination);
-    placed.set(destination, source);
-    fs.mkdirSync(destination, { recursive: true });
-    if (pkg.name.startsWith('@monky/')) {
-      requiredFile(path.join(source, 'dist', 'index.js'));
-      fs.cpSync(path.join(source, 'dist'), path.join(destination, 'dist'), { recursive: true });
-      for (const filename of ['LICENSE', 'LICENSE.md', 'LICENSE-MIT', 'README.md']) {
-        const file = path.join(source, filename);
-        if (fs.existsSync(file)) fs.copyFileSync(file, path.join(destination, filename));
-      }
-    } else {
-      fs.cpSync(source, destination, {
-        recursive: true,
-        filter: (file) => {
-          const parts = path.relative(source, file).split(path.sep);
-          // Only the package-root dependency tree is rebuilt below. Some
-          // packages ship source-local module aliases (e.g. src/node_modules).
-          return parts[0] !== 'node_modules' && !parts.includes('.git');
-        },
-      });
-      if (pkg.name.startsWith('@types/') && !pkg.main && !pkg.exports) {
-        const declarations = typeof pkg.types === 'string' ? pkg.types
-          : typeof pkg.typings === 'string' ? pkg.typings : 'index.d.ts';
-        requiredFile(path.join(source, declarations));
-      } else if (!pkg.exports) {
-        try {
-          createRequire(path.join(requesterSource, 'package.json')).resolve(source);
-        } catch {
-          throw new Error(`Missing runtime entry for "${name}" at ${source}`);
-        }
-      }
-    }
-
-    packageCount++;
-    const dependencies = {};
-    for (const [dependency, isOptional] of productionDependencies(pkg)) {
-      const childSpec = copyDependency(dependency, source, destination, isOptional);
-      if (childSpec !== null) dependencies[dependency] = childSpec;
-    }
-    // The release has already resolved all peers/optional modules. Do not let
-    // npm fetch a different tree (or follow file: workspace paths) on install.
-    const bundled = { ...pkg, dependencies, bundleDependencies: Object.keys(dependencies) };
-    delete bundled.bundledDependencies;
-    delete bundled.devDependencies;
-    delete bundled.peerDependencies;
-    delete bundled.peerDependenciesMeta;
-    delete bundled.optionalDependencies;
-    writeJson(path.join(destination, 'package.json'), bundled);
-    return spec;
-  }
-
-  const dependencies = {};
-  const rootPackage = readJson(path.join(sourceRoot, 'package.json'));
-  for (const [name, optional] of productionDependencies(rootPackage)) {
-    const spec = copyDependency(name, fs.realpathSync(sourceRoot), destinationRoot, optional);
-    if (spec !== null) dependencies[name] = spec;
-  }
-  for (const { name, requesterDestination, destination } of edges) {
-    if (resolvePackage(requesterDestination, name)?.source !== fs.realpathSync(destination)) {
-      throw new Error(`Bundled dependency "${name}" resolves to the wrong instance from ${requesterDestination}`);
-    }
-  }
-  return { dependencies, packageCount };
-}
-
-function pack({ version, out = path.join(ROOT, 'release'), root = ROOT } = {}) {
-  const pkg = readJson(path.join(root, 'package.json'));
-  version = version || process.env.MONKY_BOT_VERSION || pkg.version;
-  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
-    throw new Error(`Invalid release version: ${version}`);
-  }
-  checkSdk(root);
-  for (const filename of ['index.js', 'cli.js']) requiredFile(path.join(root, 'dist', filename));
+function verifyAssets(root) {
   requiredFile(path.join(root, 'assets', 'monky-logo.png'));
   requiredFile(path.join(root, 'assets', 'games', 'app.js'));
   const doom = path.join(root, 'assets', 'games', 'doom');
@@ -200,50 +55,29 @@ function pack({ version, out = path.join(ROOT, 'release'), root = ROOT } = {}) {
     if (createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== expected) throw new Error(`Game artifact changed: ${filename}`);
   }
   for (const filename of ['freedoom1.wad', 'COPYING-engine.txt', 'COPYING-freedoom.txt', 'CREDITS-freedoom.txt']) requiredFile(path.join(doom, filename));
+}
 
-  const staging = path.join(root, 'release', 'bot-pack');
-  fs.rmSync(staging, { recursive: true, force: true });
-  fs.mkdirSync(staging, { recursive: true });
-
-  try {
-    fs.cpSync(path.join(root, 'dist'), path.join(staging, 'dist'), { recursive: true });
-    fs.cpSync(path.join(root, 'assets'), path.join(staging, 'assets'), { recursive: true });
-    for (const filename of ['.env.example', 'README.md', 'README.en.md']) {
-      const source = path.join(root, filename);
-      if (fs.existsSync(source)) fs.copyFileSync(source, path.join(staging, filename));
-    }
-
-    const { dependencies, packageCount } = bundleDependencies(root, staging);
-    const publishPkg = {
-      name: pkg.name,
-      version,
-      description: pkg.description,
-      license: pkg.license,
-      repository: { type: 'git', url: 'https://github.com/MonkyOrg/MonkyBot.git' },
-      homepage: 'https://github.com/MonkyOrg/MonkyBot#readme',
-      main: 'dist/index.js',
-      bin: { monkybot: './dist/cli.js' },
-      engines: { node: '>=18' },
-      monky: pkg.monky,
-      dependencies,
-      bundleDependencies: Object.keys(dependencies),
-    };
-    writeJson(path.join(staging, 'package.json'), publishPkg);
-
-    fs.mkdirSync(out, { recursive: true });
-    // --json lists every bundled file and exceeds child_process's output limit
-    // for the WebRTC SDK. Only the tarball filename is needed here.
-    const packed = runNpm(['pack', '--silent', '--ignore-scripts'], { cwd: staging }).trim();
-    if (!packed.endsWith('.tgz') || path.basename(packed) !== packed || /[\r\n]/.test(packed)) {
-      throw new Error('npm pack did not return a tarball filename.');
-    }
-    const finalPath = path.join(out, `monky-bot-${version}.tgz`);
-    fs.copyFileSync(path.join(staging, packed), finalPath);
-    console.log(`[pack] ${packageCount} bundled packages; ${finalPath}`);
-    return finalPath;
-  } finally {
-    fs.rmSync(staging, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+function pack({ version, out = path.join(ROOT, 'release'), root = ROOT } = {}) {
+  const pkg = readJson(path.join(root, 'package.json'));
+  version = version || process.env.MONKY_BOT_VERSION || pkg.version;
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new Error(`Invalid release version: ${version}`);
   }
+  checkSdk(root);
+  verifyAssets(root);
+  if (pkg.monkyBot?.cliName !== 'monkybot' || pkg.monkyBot?.releases?.assetName !== 'monky-bot-{version}.tgz') {
+    throw new Error('package.json must keep the monkybot command and the monky-bot-{version}.tgz release asset.');
+  }
+
+  // Compile from scratch so outputs of removed modules (such as the former CLI) never ship.
+  fs.rmSync(path.join(root, 'dist'), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  const { buildBotPackage } = createRequire(path.join(root, 'package.json'))('@monky/bot-sdk');
+  const result = buildBotPackage({ root, version, out });
+  if (result.cliName !== 'monkybot' || path.basename(result.file) !== `monky-bot-${version}.tgz`) {
+    throw new Error(`Unexpected package output: ${result.file}`);
+  }
+  console.log(`[pack] CLI ${result.cliName}; protocol ${result.protocolVersion}; ${result.packageCount} bundled packages; ${result.file}`);
+  return result.file;
 }
 
 if (require.main === module) {
@@ -255,4 +89,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { bundleDependencies, pack, parseArgs };
+module.exports = { pack, parseArgs };

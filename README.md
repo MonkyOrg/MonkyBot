@@ -62,28 +62,38 @@ O listener é iniciado sob demanda, valida arquivos e porta antes de criar o
 miniapp; cada cliente verifica acesso HTTP e autenticação WebSocket antes de
 habilitar o jogo. Bind local não comprova acesso externo: firewall, DNS e proxy
 precisam permitir a conexão dos jogadores. Falhas aparecem no miniapp.
-No CLI, os overrides são copiados para o ecosystem no start/restart.
+
+A porta `games` é declarada ao CLI: `monkybot requirements` a lista para liberar
+no firewall e `monkybot config env set MONKY_GAMES_PUBLIC_URL https://jogos.exemplo.com`
+salva a URL no perfil, fora do pacote (o ambiente do processo prevalece; reinicie
+o bot depois de mudar). No modo Marketplace, sem URL explícita, o bot e o
+`monkybot doctor` usam `http://<host público>:<porta>`. **No modo manual**, o host
+público não é conhecido: sem `MONKY_GAMES_PUBLIC_URL`, os jogos usam `localhost` e
+o `doctor` não testa a porta de fora. Enquanto aberto, o listener responde ao
+desafio de alcance assinado do `doctor` e do servidor Monky, que confirma que a
+porta chega **a este bot**; com o listener fechado, o próprio `doctor` abre um
+respondedor temporário para testar o firewall.
 Para validar as engines em um checkout, execute `npm run test:games:browser`
 com `MONKY_GAMES_ELECTRON` apontando para o executável Electron do checkout Monky.
 
 ## Compatibilidade
 
-Esta beta usa **protocolo Monky 34** com o SDK oficial **34.0.7-beta**.
-Use cliente e servidor Monky **v34.0.7-beta** para os novos recursos de
-comunidade. O SDK incluído é verificado no build e não precisa ser instalado
-à parte.
+Esta beta usa **protocolo Monky 37** com o SDK oficial **37.0.0-beta**.
+Use cliente e servidor Monky **v37.0.0-beta**; o teste externo de portas do
+`monkybot doctor` exige um servidor no protocolo 37. O SDK incluído é
+verificado no build e não precisa ser instalado à parte.
 Perfis, identidades, vínculos, idiomas e capacidades solicitadas são preservados;
 a atualização não habilita recepção de microfones.
+
+O comando `monkybot` agora é o **CLI de bots do SDK do Monky**, o mesmo usado
+pelos demais bots (como o Myinstants): os comandos, o consentimento, o
+`doctor` e o `requirements` são iguais. Instalações do CLI próprio anterior
+(até `v17.0.0-beta`) precisam de alguns passos únicos, descritos em
+[Migrar do CLI próprio anterior](#migrar-do-cli-próprio-anterior).
 
 O SDK oficial inclui envio persistente fora de invocações, live actions nativas
 e os contratos de voz, miniapps e execução local exigidos
 pelo bot. A origem do pacote e seu SHA-256 estão documentados em `vendor/README.md`.
-
-Esta beta inclui a correção das dependências empacotadas para atualizações
-offline com cache do npm vazio. Para atualizar, use `monkybot update --beta`.
-Instalações que ainda não registraram o consentimento do host precisam confirmá-lo
-uma vez com `monkybot setup`, mantendo o diretório e os vínculos existentes.
-Não gere outra identidade.
 
 O comando `/enquete` foi removido: crie enquetes pelo menu **+** do compositor
 do Monky. `/lembrete` e `/sorteio` passam a integrar o bot. Após atualizar,
@@ -129,27 +139,38 @@ administrador no cliente.
 
 ## Consentimento de quem hospeda
 
-Antes de salvar/iniciar, `monkybot setup` descreve os acessos do host e pede
-confirmação, com **Não** como padrão. O bot lê seu programa/assets, grava identidade
-e vínculos em `<botDir>/.keys`, conecta-se a servidores e serviços externos e
-abre portas para manifest e jogos. O CLI grava configuração e gerencia o PM2.
-Cancelar preserva a configuração e não inicia/reinicia o processo.
+Antes de iniciar, quem hospeda confirma os acessos do bot nesta máquina.
+`monkybot setup` mostra o aviso e pergunta, com **Não** como padrão;
+`monkybot consent` mostra o aviso e o estado a qualquer momento. O MonkyBot roda
+com as permissões da conta do sistema (não é uma sandbox), lê seu programa e
+assets, grava identidade, vínculos, lembretes e sorteios em `<botDir>/.keys`,
+conecta-se a servidores Monky, abre as portas declaradas (manifest e `games`) e é
+gerenciado pelo PM2 do próprio perfil (`~/.monkybot/.pm2`). Para música, buscas e
+áudio do YouTube são obtidos no computador de quem pede, pelo cliente Monky; o
+host não acessa o YouTube nem precisa de yt-dlp ou FFmpeg.
 
-A confirmação fica em `hostConsent` no `config.json`, vinculada ao diretório
-de trabalho e à versão da política. Start/restart e o runtime não iniciam sem
-confirmação válida. Alterar o diretório ou a versão dos acessos exige nova revisão;
-`update --yes` e auto-update não a aprovam automaticamente.
-Isso é consentimento para executar um programa confiável com os direitos da conta
-do sistema, não uma sandbox. Docker/WSL não são exigidos por esta política.
+A confirmação fica em `~/.monkybot/host-consent.json`, vinculada ao `botDir` e a
+uma **impressão digital** de 12 caracteres calculada a partir dos modos, portas,
+configurações e aviso declarados no pacote (`monkyBot.requirements`). `start`,
+`start --foreground`, `restart` e o runner recusam iniciar sem ela. Mudar o
+`botDir` exige nova confirmação. Uma versão que mude os acessos declarados também:
+`update` mostra o aviso novo e pergunta antes de instalar; `update --yes` e o
+auto-update pulam essa versão e mantêm a atual rodando até a aprovação.
 
-Em execução direta/automatizada, após revisar os acessos acima, o operador pode
-declarar a aprovação da política atual com `MONKY_HOST_CONSENT=1`. O valor é
-versionado, não um aceite automático de futuras políticas. Sem essa variável,
-o runtime procura a confirmação salva para o seu diretório atual.
-Para deixar de hospedar, pare o bot com `monkybot stop` (ou encerre seu processo
-direto); retire o campo `hostConsent` e a variável, inclusive de configurações
-de serviço/PM2 onde tenha sido salva, para impedir novos inícios.
-Esse consentimento nunca concede capacidades nos servidores onde o bot é instalado.
+```bash
+monkybot consent                  # Acessos, estado e impressão digital
+monkybot consent --accept <fp>    # Aprova sem terminal interativo
+monkybot consent --revoke         # Retira a aprovação; o próximo start é recusado
+```
+
+Em automação, leia os acessos e defina `MONKY_HOST_CONSENT=<impressão digital>`
+no ambiente do serviço (ao mudar a variável, aplique com `monkybot restart --fresh`,
+que recria o processo do PM2 com o ambiente atual). **O antigo
+`MONKY_HOST_CONSENT=1` não vale mais** e faz o start ser recusado. Perfis do CLI anterior (com `hostConsent` no `config.json`)
+herdam os acessos atuais no primeiro `start`; `status` e `doctor` lembram de
+revisá-los com `monkybot consent`. Executar `node dist/index.js` diretamente,
+em desenvolvimento, não passa por essa verificação. Esse consentimento nunca
+concede capacidades nos servidores onde o bot é instalado.
 
 ## Início rápido
 
@@ -162,7 +183,9 @@ curl -fsSL https://monkyorg.github.io/install-monkybot.sh | bash
 Isso instala o comando `monkybot` globalmente. Depois:
 
 ```bash
-monkybot setup      # Configura por URL (recomendado) ou token e inicia/reinicia automaticamente
+monkybot setup      # Configura por URL (recomendado) ou token e confirma os acessos
+monkybot start      # Inicia em background e confirma o manifest
+monkybot doctor     # Verifica se o bot pode operar e o que falta
 ```
 
 ### Opção B: Clone para desenvolvimento/customização
@@ -185,32 +208,40 @@ Veja [vendor/README.md](vendor/README.md) para consultar sua origem e atualizar 
 npm ci
 npm run check:sdk
 npm run build
-npm run cli -- setup      # Configura o checkout e inicia/reinicia automaticamente via pm2
+npm run cli -- setup      # Mesmo CLI do pacote, aplicado a este checkout
+npm run cli -- start      # Ou: npm run cli -- start --foreground (sem PM2)
 ```
 
-O `setup` guia você pelo processo: oferece primeiro **Instalação por URL —
-recomendado** e, como opção avançada, **Conexão manual por token**. No modo
-manual ele pede a URL do servidor e o token; nos dois modos ele preserva o
-`botDir` e o nome atuais por padrão ao reconfigurar. Depois de salvar, o setup
-aplica automaticamente um **reinício limpo** do processo pm2, ou um início se o
-bot estiver parado ou ainda não registrado. Não é necessário executar um restart separado.
-Isso não apaga `.keys`, vínculos nem os dados do diretório escolhido.
-Na instalação global, use `monkybot setup`; `monkybot start` continua disponível
-para iniciar um bot parado ou verificar o manifest de um bot já online.
+`npm run cli` executa `monky-bot-sdk cli`, o mesmo CLI que o pacote instala como
+`monkybot`. O `setup` oferece primeiro **Instalação por URL — recomendado** e, como
+opção avançada, **Conexão manual por token**. No modo manual ele pede a URL do
+servidor e o token (entrada oculta, salvo só no perfil); nos dois modos preserva
+o `botDir`, a identidade e o nome atuais ao reconfigurar. No fim, mostra o aviso
+de acessos, pede a confirmação e lista as portas e configurações. O setup **não
+inicia o bot**: execute `start`, que só anuncia sucesso quando o PM2 confirma o
+processo online e, no modo URL, quando o `/manifest` responde nesta máquina com a
+chave pública deste bot. Nada disso apaga `.keys`, vínculos nem dados.
 
-Se a configuração for salva, mas o início/reinício falhar, o CLI informa as duas
-etapas separadamente e retorna erro. Consulte `monkybot logs`, corrija a causa e
+Para automação, sem perguntas:
+
+```bash
+monkybot setup --non-interactive --mode marketplace --public-host bot.exemplo.com --serve-port 7780
+monkybot setup --non-interactive --mode manual --server-url wss://monky.exemplo.com --token-env MONKY_BOT_TOKEN
+monkybot consent --accept <impressão digital mostrada>
+```
+
+Se o início falhar, consulte `monkybot logs` e `monkybot doctor`, corrija a causa e
 execute `monkybot restart --fresh`; não apague as chaves nem refaça os vínculos.
 
 O setup do bot não instala ferramentas de mídia. Quando uma pessoa usa música,
 o próprio cliente Monky solicita consentimento e prepara suas ferramentas locais;
-o host do bot permanece somente com o runtime geral Node.js 18+.
+o host do bot permanece somente com o runtime geral Node.js.
 
 ### Vincule ao servidor
 
-**Por URL (recomendado):** conclua o setup, copie a URL do manifest mostrada pelo
-CLI e cole-a em **Configurações do Servidor → Bots** no Monky. `start` e `restart`
-também verificam o manifest e exibem essa URL. O servidor
+**Por URL (recomendado):** depois do `start`, copie a URL do manifest mostrada pelo
+CLI e cole-a em **Configurações do Servidor → Bots** no Monky. `start`, `restart` e
+`status` também exibem essa URL. O servidor
 obtém a identidade do bot e troca as credenciais automaticamente. A URL deve
 estar acessível a partir do servidor Monky.
 
@@ -221,167 +252,168 @@ Copie o token, exibido uma única vez, e escolha a opção manual
 no `setup`. O vínculo aguarda a conexão do bot para receber seu nome e avatar.
 Não é necessário definir esses campos no cliente.
 
-> 💡 A chave de segurança (Ed25519) é **gerada automaticamente** na primeira execução. Não precisa configurar nada.
+> 💡 A chave de segurança (Ed25519) é **gerada automaticamente** no primeiro `start`, em `<botDir>/.keys`. Não precisa configurar nada.
+
+### Portas, configurações e verificação
+
+`monkybot requirements` mostra, mesmo antes do setup, **o que abrir e configurar**
+nesta máquina. O mesmo resumo aparece no fim do `setup` e no `status`.
+
+| Porta | Protocolo e padrão | Quando | Quem precisa acessar | Ajuste |
+|---|---|---|---|---|
+| `manifest` | TCP 7780 | Sempre, só na instalação por URL | Servidores Monky que instalam o bot | Porta e host público no `setup` |
+| `games` | TCP 7781 | Sob demanda (`/doom`, `/nes`) | Todos os jogadores | `MONKY_GAMES_PORT`, `MONKY_GAMES_HOST`, `MONKY_GAMES_PUBLIC_URL` |
+
+O modo manual não abre a porta do manifest; só faz conexões de saída ao servidor.
+A única configuração extra é opcional: `MONKY_MUSIC_GRACE_SECONDS` (1 a 600,
+padrão 60) define o tempo para sair de uma sala vazia ou de uma fila ociosa.
+
+```bash
+monkybot requirements                                     # O que liberar e configurar
+monkybot config env                                       # Valores efetivos e origem
+monkybot config env set MONKY_GAMES_PUBLIC_URL https://jogos.exemplo.com
+monkybot config env set MONKY_GAMES_PORT 7781
+monkybot config env unset MONKY_GAMES_PUBLIC_URL
+monkybot restart                                          # Aplica a mudança
+```
+
+Os valores ficam em `~/.monkybot/environment.json`, fora do pacote, e são validados
+pelo tipo (porta, endereço de escuta ou URL `http(s)://host[:porta]` sem caminho).
+**O ambiente do processo prevalece**: o valor salvo só é usado quando a variável
+não existe no ambiente, o que mantém Docker, systemd e compose funcionando.
+
+`monkybot doctor` diz se o bot pode operar e o que falta, com `[OK]`, `[AVISO]`,
+`[FALHA]` ou `[PULADO]`, e termina com erro se houver falha. Ele confere Node.js,
+a entrada compilada, o perfil, a identidade em `.keys` e o consentimento; o
+processo no PM2 do perfil e um processo `monkybot` esquecido no PM2 padrão (do CLI
+anterior), que pode ocupar as portas; o token no modo manual; cada porta, livre ou
+em uso **por este bot** (desafio assinado com a chave Ed25519) e a validade do
+manifest; e a URL pública vista desta máquina. Com o servidor Monky, verifica
+alcance, token, vínculo da chave, protocolo e faz um **teste externo** das portas
+públicas TCP pela rede do servidor (exige servidor no protocolo 37). No modo URL,
+usa até três servidores de `.keys/registrations.json`; sem vínculo, o teste
+externo é pulado. Portas livres recebem um respondedor temporário durante o teste,
+então dá para testar o firewall com o bot parado ou antes de alguém abrir um jogo.
+`monkybot doctor --local` pula toda comunicação com servidores.
+
+**Mais de um bot na mesma máquina:** cada porta precisa ser exclusiva, inclusive a
+de jogos. `7781` é o padrão da porta `games` e também a escolha comum para o
+manifest de um segundo bot (por exemplo, o Myinstants). Nesse caso, mova os jogos
+para outra porta livre, libere-a no firewall e reinicie:
+
+```bash
+monkybot config env set MONKY_GAMES_PORT 7782
+monkybot config env set MONKY_GAMES_PUBLIC_URL https://jogos.exemplo.com   # com proxy ou no modo manual
+monkybot restart
+```
+
+No modo URL, sem `MONKY_GAMES_PUBLIC_URL`, a URL pública passa a usar a porta nova.
+O `doctor` aponta a porta `games` ocupada por outro processo, e o bot registra no
+log como trocá-la quando um jogo não consegue abrir o listener.
 
 ### CLI — Gerenciamento de processo
 
-O Monky Bot vem com um CLI integrado que usa **pm2** para rodar em background, assim como o Monky CLI do servidor:
+O `monkybot` usa um **PM2 próprio do perfil**, em `~/.monkybot/.pm2`, separado do
+PM2 padrão da conta. Por isso `pm2 list` sem `PM2_HOME` não mostra o bot; use os
+comandos abaixo. Executar `monkybot` sem comando, em um terminal, abre o menu por setas.
 
 ```bash
-monkybot setup               # Configura e aplica início/reinício limpo automaticamente
-monkybot start               # Inicia via pm2 ou verifica o manifest se já estiver online
+monkybot setup               # Configura o modo, o diretório, a conexão e o consentimento
+monkybot start               # Inicia via PM2 e confirma o manifest; já online, só verifica
+monkybot start --foreground  # Roda neste terminal, sem PM2
 monkybot stop                # Para o bot
-monkybot restart             # Reinicia aplicando a configuração atual
-monkybot restart --fresh     # Recria o processo pm2 do zero
-monkybot status              # Exibe estado (PID, uptime, memória, CPU)
-monkybot logs                # Exibe logs em tempo real (Ctrl+C para sair)
-monkybot logs --lines 100    # Últimas 100 linhas
-monkybot logs --no-follow    # Imprime logs recentes e sai
-monkybot config              # Abre Configurações em um terminal
-monkybot config show         # Exibe a configuração diretamente
-monkybot config set <k> <v>  # Altera uma configuração
-monkybot config language en-US # Salva o idioma do CLI (pt-BR ou en-US)
+monkybot restart             # Reinicia com a configuração atual
+monkybot restart --fresh     # Recria o processo do zero, sem apagar o perfil
+monkybot status              # Estado do processo, configuração, portas e consentimento
+monkybot logs                # Logs em tempo real (Ctrl+C para sair)
+monkybot logs --lines 100 --no-follow  # Últimas 100 linhas e sai
+monkybot doctor [--local]    # Verifica se o bot pode operar
+monkybot requirements        # Portas a liberar e configurações
+monkybot consent             # Revisa a autorização de quem hospeda
+monkybot config              # Configuração (menu em terminal; texto em scripts)
+monkybot config show         # Exibe a configuração, com segredos ocultos
+monkybot config set <k> <v>  # mode, botName, botDir, serverUrl, botToken, tokenEnv, servePort, publicHost
+monkybot config env [set|unset] <NOME>  # Variáveis declaradas pelo bot
+monkybot config language en-US  # Idioma do CLI (pt-BR ou en-US)
 monkybot --version           # Versão instalada
-monkybot update              # Atualiza para a stable mais recente
-monkybot update --beta       # Inclui betas e stable; instala a versão mais nova
-monkybot update --beta --check # Consulta o canal beta sem instalar
-monkybot update --beta --yes # Atualiza sem confirmação
-monkybot autoupdate on 04:00 # Verifica stable, inclusive se a instalação atual for beta
-monkybot autoupdate on 04:00 --beta # Inclui betas por escolha explícita
-monkybot autoupdate off     # Desativa a atualização automática
+monkybot update [--check] [--beta] [--yes]
+monkybot autoupdate on [HH:MM] [--beta]
+monkybot autoupdate off | status
 ```
 
-A configuração fica salva em `~/.monkybot/config.json`. O pm2 garante que o bot reinicia automaticamente se cair.
+Configuração e identidade ficam em `~/.monkybot` (`config.json`, `preferences.json`,
+`host-consent.json`, `environment.json` e, por padrão, `.keys`), fora do pacote.
+`MONKY_BOT_CLI_HOME` troca a pasta-base, mantendo o subdiretório `.monkybot`.
+
+**Voltar após reiniciar a máquina.** O `start` salva a lista do PM2 do perfil, mas
+um serviço criado por `pm2 startup` comum só restaura o PM2 padrão. Registre uma vez
+um serviço para o PM2 do perfil (Linux, systemd):
+
+```bash
+sudo env PATH="$PATH:$(dirname "$(command -v node)")" "$(command -v pm2)" startup systemd \
+  -u "$USER" --hp "$HOME/.monkybot" --service-name pm2-monkybot
+```
+
+`--hp` aponta para a pasta do perfil (o serviço usa `~/.monkybot/.pm2`) e
+`--service-name` evita substituir o serviço `pm2-<usuário>` do PM2 padrão. Confira
+com `systemctl status pm2-monkybot`. Com `MONKY_BOT_CLI_HOME`, use a pasta
+`.monkybot` correspondente.
 
 ### Idioma do CLI e dos logs
 
-Na primeira utilização interativa de um comando, o CLI pergunta **Português
-(Brasil)** ou **English (US)** e salva apenas `~/.monkybot/preferences.json`.
-Isso não refaz o setup nem modifica `config.json`, vínculos, portas ou `.keys`.
-Para mudar depois, abra `monkybot config` e escolha **Idioma / Language**,
-ou use `monkybot config language pt-BR` / `monkybot config language en-US`.
-O menu seguinte já usa o novo idioma. Sem TTY ou em CI, `config` mantém a
-consulta direta da configuração. `language` continua funcionando como alias.
+Na primeira utilização interativa, o CLI pergunta **Português (Brasil)** ou
+**English (US)** e salva apenas `~/.monkybot/preferences.json` — o mesmo arquivo do
+CLI anterior, que continua valendo. Isso não refaz o setup nem modifica
+`config.json`, vínculos, portas ou `.keys`. Para mudar depois, abra
+`monkybot config` → **Idioma / Language** ou use `monkybot config language pt-BR` /
+`monkybot config language en-US`.
 
-`--help`, `--version`, consultas `update --check`, execução com `--yes`, CI e
-entrada/saída não interativas não abrem essa pergunta. Sem preferência salva,
-o CLI usa um idioma do sistema reconhecido ou `pt-BR`. Para uma automação, defina
-`MONKY_BOT_LOCALE=pt-BR` ou `MONKY_BOT_LOCALE=en` no ambiente, sem alterar a
-preferência salva. Os aliases `pt` e `en-US` usam a normalização do Monky.
-`MONKY_LANG` também é aceito, com prioridade menor que `MONKY_BOT_LOCALE`.
-Uma preferência ilegível ou inválida gera um aviso sem expor seu conteúdo nem
-reescrever o arquivo; `language` permite salvar uma escolha explícita.
-
-O idioma do operador também acompanha os próximos reinícios pelo CLI e os
-cabeçalhos de log do runtime. Diagnósticos técnicos dos executáveis podem
-permanecer no idioma original. Essa escolha é **independente** do idioma pessoal
-de cada usuário no cliente.
+`--help`, `--version`, `--non-interactive`, `--yes`, `--check`, CI e entrada/saída
+não interativas não abrem essa pergunta. `--locale pt-BR|en-US` vale só para aquela
+execução. Em automação, `MONKY_BOT_LOCALE=pt-BR` ou `en` (ou, com prioridade menor,
+`MONKY_LANG`) define o idioma sem alterar a preferência salva. O CLI repassa o
+idioma ao processo do bot, que o usa nos logs. Essa escolha é **independente** do
+idioma pessoal de cada usuário no cliente.
 
 ### Porta exclusiva do manifest
 
 Cada bot na mesma máquina precisa de uma **porta livre exclusiva** para instalar
-por URL. `7780` é apenas o padrão, não uma porta reservada. Por exemplo, se outro
-bot já usa `7780`, escolha outra porta livre para o MonkyBot no setup. `/manifest`
-é um endpoint do processo que escuta nessa porta, **não um arquivo compartilhado**:
+por URL. `7780` é apenas o padrão, não uma porta reservada. `/manifest` é um
+endpoint do processo que escuta nessa porta, **não um arquivo compartilhado**:
 usar a URL de outro processo vincula aquele bot, não este.
 
-O CLI testa um bind TCP local no endereço de escuta do runtime: `0.0.0.0` por
-padrão, ou `MONKY_SERVE_HOST` quando definido no ambiente do CLI. No start/restart
-(inclusive update), sem override no shell, o host anterior do próprio processo
-gerenciado no pm2 é preservado; só na ausência dele vale o padrão. Assim um bind
-em `127.0.0.1` não muda para `0.0.0.0` por falta da variável no shell.
-O probe e o ecosystem recebem o mesmo host resolvido e a porta testada. O socket
-de teste é fechado imediatamente. Após iniciar/reiniciar, o CLI também consulta
-`GET /manifest` no endereço de escuta local (`127.0.0.1` para `0.0.0.0`, `::1` para
-`::`), sem consultar o host público. Ele confere o JSON do SDK, o nome, a URL de
-registro atual e a identidade pública da **mesma resposta HTTP** contra
-`botDir/.keys/public.hex`. Como o JSON estrito do SDK não tem campo de identidade,
-o próprio runtime acrescenta apenas o header público `x-monky-bot-public-key`;
-não há um segundo servidor ou alteração do protocolo de registro.
+O `setup` testa a porta localmente antes de salvar e pede outra se ela estiver
+ocupada; o `setup` não interativo e o `config set servePort` falham sem alterar a
+configuração. `start` também testa a porta antes de iniciar um processo parado;
+`restart` libera somente o processo gerenciado deste perfil antes do teste. Se o
+próprio bot estiver usando a porta, execute `monkybot stop` antes de refazer o setup.
+O endereço de escuta é `0.0.0.0`, ou `MONKY_SERVE_HOST` quando definido no ambiente.
 
-A espera HTTP após iniciar é limitada a 10 segundos, com até 1,5 segundo por
-resposta e corpo de até 8 MiB. O probe não envia tokens, não chama `/register`
-e não gera nem apaga chaves. **Verificado localmente não significa acessível
-externamente:** firewall, DNS público e acesso a partir do servidor Monky ainda
-precisam ser conferidos pelo operador.
-
-- **Setup:** uma porta ocupada por outro serviço pede somente uma nova porta,
-  sem refazer as demais respostas. A porta é revalidada antes de salvar; a
-  configuração anterior e `.keys` permanecem intactas se não houver porta válida.
-  Depois de salvar, o próprio setup aplica um início/reinício limpo e aguarda o
-  manifest antes de mostrar sua URL.
-- **Reconfigurar o próprio bot:** a porta já configurada pode ser reutilizada
-  sem um `stop` manual quando o CLI identifica o processo deste bot no pm2,
-  incluindo seu diretório de trabalho. Após coletar as respostas, o setup para
-  somente esse ID e **confirma a liberação com um novo bind antes de salvar**.
-  Se outro serviço continuar ocupando a porta, nada é salvo e só a porta é
-  perguntada novamente. O nome ou a resposta de um manifest não autorizam parar
-  um serviço. Cancelar antes dessa etapa não para o bot; cancelar após a parada
-  pode deixá-lo parado, sem alterar a configuração ou a identidade.
-  `config set` continua sem parar serviços automaticamente.
-- **Configuração:** o teste ocorre somente ao habilitar Marketplace ou mudar sua
-  porta efetiva. Em caso de conflito, nada é salvo. Alterar `publicHost` ou
-  `botName`, repetir o mesmo `mode`/`servePort` e usar o modo manual não testa a
-  porta nem para o bot. O host e a porta continuam sendo validados nas chaves pertinentes.
-- **Start/restart:** o start de um bot parado ou não registrado testa a porta antes
-  de instalar pm2 ou gerar o ecosystem. Se já estiver online, verifica o manifest
-  real e mostra novamente a URL; um runtime saudável continua idempotente.
-  Se não estiver servindo o manifest correto, tenta **uma única recriação limpa**
-  do processo identificado, com a configuração atual, e verifica novamente.
-  O restart para somente o processo identificado deste bot, por ID do pm2,
-  confirma o sucesso dessa parada e testa o bind antes de iniciar.
-  Se a porta continuar ocupada, o bot fica parado e nenhum outro serviço é encerrado.
-  O reinício via update/auto-update usa o mesmo caminho.
-  Falhas ao consultar o inventário do pm2 interrompem a operação; não são tratadas
-  como ausência do bot e a resposta bruta de `jlist` não é exibida.
-
-Erros de permissão (`EACCES`) e outros erros de bind também interrompem a operação
-com o endereço e o motivo; não são tratados como porta livre. O teste é pontual,
-**não reserva a porta até o runtime iniciar**: outro processo ainda pode ocupá-la
-nesse intervalo. Por isso, pm2 online ou uma porta aberta não bastam para anunciar
-sucesso: o manifest também precisa passar na verificação. Se houver erro, consulte
-os logs. Libere o acesso de rede necessário se o servidor Monky estiver em outra máquina.
+Depois de iniciar, o CLI consulta `GET /manifest` nesta máquina e só anuncia
+sucesso quando a resposta é um manifest válido, com a URL de registro do host e da
+porta configurados e a chave pública deste bot (cabeçalho `X-Monky-Bot-Public-Key`,
+enviado pelo SDK). Se `start` encontrar o processo online com o manifest quebrado,
+recria apenas o processo deste perfil. **Verificado localmente não significa
+acessível externamente:** firewall, NAT e DNS só se comprovam de fora, com
+`monkybot doctor`.
 
 ### Atualizações beta e stable
 
-`update` consulta apenas a stable. `update --beta` inclui betas e versões stable,
-escolhendo pela versão semântica, não pela ordem de publicação no GitHub.
-Uma stable supera a beta do mesmo número (`3.0.1` > `3.0.1-beta`).
-Nenhum dos comandos reinstala uma versão igual ou mais antiga, nem com `--yes`.
-`--check` apenas consulta e não instala nem reinicia o bot.
+`update` consulta a stable em `https://github.com/MonkyOrg/MonkyBot/releases`.
+`update --beta` inclui betas, escolhendo pela versão semântica. Nenhum dos comandos
+reinstala uma versão igual ou mais antiga. `--check` apenas consulta, sem instalar
+nem reiniciar; `--yes` dispensa as confirmações em automação.
 
-O download mostra bytes recebidos e porcentagem quando o tamanho é conhecido:
-barra em terminais interativos e linhas limitadas em logs/pipes. Tamanho e
-SHA-256 publicados no asset são conferidos antes de instalar; releases antigas
-sem esses metadados continuam compatíveis. A instalação pelo npm aparece como
-uma etapa separada, sem porcentagem inventada.
+O pacote autocontido `monky-bot-<versão>.tgz` é instalado offline, sem scripts de
+instalação, e conferido (nome, versão e CLI) antes de reiniciar. Se o bot estava
+rodando, o reinício passa pelo **CLI recém-instalado**. Perfil, chaves,
+configurações salvas e agendamento são preservados. Por segurança, a atualização
+é bloqueada se o `botDir` ou `~/.monkybot` estiver dentro do pacote instalado:
+mova-os para fora antes (veja a migração abaixo).
 
-Após instalar, o CLI oferece reiniciar o bot se ele estiver rodando; `--yes`
-também confirma esse reinício. A configuração, o `botDir` e a pasta `.keys`
-continuam os mesmos. Atualize cliente e servidor para um protocolo compatível.
-O updater confere a versão e a entrada do CLI no prefixo global informado pelo
-npm e executa o **CLI recém-instalado em um novo processo Node**, preservando
-`PM2_HOME`, idioma e overrides de host/ferramentas. Um bot parado não é iniciado.
-Falha no reinício é informada separadamente da instalação concluída. O reinício
-não prepara ferramentas de música no host.
-
-Um atualizador antigo já carregado não recebe essa correção retroativamente.
-Na primeira atualização, se o pacote instalar mas o reinício antigo falhar,
-execute `monkybot restart` separadamente; não refaça o setup nem apague `.keys`.
-
-O auto-update usa stable por padrão, inclusive se a instalação atual for beta.
-Com `autoupdate on [HH:MM] --beta`, inclui betas e stable, escolhendo a versão
-mais nova; essa opção permanece habilitada após uma promoção para stable.
-Depois de atualizar um CLI antigo, execute novamente `autoupdate on` com o
-horário e canal desejados para substituir o daemon antigo.
-
-**Primeira entrada no canal beta com um CLI antigo:** versões até `3.0.0-beta`
-não reconhecem `update --beta`. Instale diretamente a URL do `.tgz` da beta
-desejada, disponível nas notas da [release](https://github.com/MonkyOrg/MonkyBot/releases),
-usando `npm install -g "<URL do pacote>"`, e execute `monkybot restart`.
-Se o auto-update antigo estiver ativo, desative-o antes com
-`monkybot autoupdate off`; reative depois usando o CLI atualizado.
-Não refaça o setup nem apague `.keys`.
+O auto-update usa stable por padrão, inclusive em uma instalação beta;
+`autoupdate on [HH:MM] --beta` inclui betas. `monkybot config update-source`
+permite trocar a origem por perfil (GitHub, HTTPS ou arquivo local).
 
 ### Publicação e promoção (mantenedores)
 
@@ -395,6 +427,76 @@ publicada que foi validada. A promoção mantém o número (`v3.0.1-beta` →
 pacote raiz; não inclui código posterior da `main` nem troca o SDK.
 Não é necessário promover o SDK Monky separadamente para preservar esse pacote.
 A promoção é explícita; nunca é disparada por um push comum.
+
+### Migrar do CLI próprio anterior
+
+Até `v17.0.0-beta`, o MonkyBot tinha um CLI próprio. O pacote atual usa o CLI do
+SDK, igual ao dos demais bots. O perfil `~/.monkybot` é reaproveitado: `config.json`
+(modo, servidor, token, porta, host público, `botDir` e nome), `preferences.json`
+(idioma) e `.keys` (identidade, vínculos, lembretes e sorteios). O que muda:
+
+- o PM2 passa a ser o do perfil (`~/.monkybot/.pm2`), não o PM2 padrão da conta,
+  e precisa do próprio serviço de inicialização para voltar após reiniciar a máquina;
+- o consentimento passa para `host-consent.json`, com impressão digital, e
+  `MONKY_HOST_CONSENT=1` deixa de valer; perfis antigos herdam os acessos no
+  primeiro `start`;
+- `setup` não inicia mais o bot: use `start` em seguida;
+- `MONKY_GAMES_*` não são mais copiadas do shell para o PM2: salve-as com
+  `monkybot config env set` ou defina-as no ambiente do serviço.
+
+**Se a atualização veio do CLI anterior** (`monkybot update --beta --yes`, por
+exemplo): ele baixa e instala o pacote novo e depois termina com erro ao verificar a
+entrada do CLI novo — isso é esperado. A partir daí, `monkybot --version` já mostra a
+versão nova; `config.json`, `preferences.json` e `.keys` continuam intactos; o processo
+`monkybot` antigo **continua online no PM2 padrão** com o código que já estava
+carregado (se o PM2 o reiniciar, ele executa o runtime novo diretamente, com o `.keys`
+do `botDir`, até ser removido); e o `monkybot-updater` antigo, se ativo, passa a
+falhar, porque os arquivos do CLI anterior não existem mais. Siga os passos abaixo;
+o passo 3 já está feito.
+
+Faça uma vez, antes do primeiro `start` pelo CLI novo (Linux/macOS). O bot fica
+fora do ar entre os passos 1 e 5:
+
+```bash
+# 1. Remova os processos do CLI anterior do PM2 padrão da conta
+pm2 delete monkybot-updater   # só se o auto-update antigo estava ativo
+pm2 delete monkybot
+pm2 save --force             # --force grava mesmo se a lista ficar vazia
+rm -f ~/.monkybot/.monkybot-updater.cjs ~/.monkybot/ecosystem.config.cjs  # opcional: arquivos antigos
+
+# 2. Confira onde está o botDir: ele não pode ficar dentro do pacote global
+grep botDir ~/.monkybot/config.json
+echo "$(npm root -g)/@monky/bot"
+
+# 3. Instale a versão nova, se o update antigo ainda não a instalou
+npm install -g "<URL do monky-bot-<versão>.tgz>"
+monkybot --version
+
+# 4. Com outro bot na máquina usando a 7781 (por exemplo, o manifest do Myinstants),
+#    mova a porta de jogos e libere-a no firewall
+monkybot config env set MONKY_GAMES_PORT 7782
+
+# 5. Revise os acessos, verifique e inicie no PM2 do perfil
+monkybot consent             # ou: monkybot consent --accept <impressão digital>
+monkybot doctor --local
+monkybot start
+monkybot doctor
+
+# 6. Faça o PM2 do perfil voltar após reiniciar a máquina (systemd)
+sudo env PATH="$PATH:$(dirname "$(command -v node)")" "$(command -v pm2)" startup systemd \
+  -u "$USER" --hp "$HOME/.monkybot" --service-name pm2-monkybot
+
+# 7. Só se usava auto-update
+monkybot autoupdate on 04:00 --beta
+```
+
+Se o `botDir` estiver dentro do pacote global (passo 2), copie a pasta `.keys`
+inteira para fora **antes de instalar** (por exemplo, para `~/.monkybot/.keys`) e
+ajuste `botDir` no `config.json`; caso contrário, a instalação substitui a pasta do
+pacote. Se o serviço definia `MONKY_HOST_CONSENT=1`, troque pelo valor mostrado em
+`monkybot consent` ou remova a variável. Enquanto o processo antigo existir no PM2
+padrão, o `start` novo encontra a porta ocupada e o `doctor` aponta o processo
+homônimo. Não gere outra identidade nem apague `.keys`.
 
 ### Reconexão após reiniciar ou atualizar
 
@@ -422,16 +524,16 @@ o vínculo. Uma falha ao atualizar a foto é informada, mas não remove os coman
 
 ### Modo alternativo (desenvolvimento)
 
-Para desenvolvimento local sem pm2, você pode rodar diretamente:
-
-Revise os acessos do host acima e defina `MONKY_HOST_CONSENT=1` no ambiente
-ou use a confirmação salva para este diretório pelo setup.
+Para desenvolvimento sem PM2, prefira `npm run cli -- start --foreground`, que
+aplica o perfil, o consentimento e as configurações salvas. Também é possível
+rodar a entrada diretamente:
 
 ```bash
 npm run dev
 ```
 
-As variáveis precisam estar no ambiente do processo; `.env` não é carregado
+Nesse modo não há CLI: o bot gera/reutiliza `.keys` no diretório atual, e as
+variáveis precisam estar no ambiente do processo; `.env` não é carregado
 automaticamente por `npm run dev` ou `npm start`. Com Node.js 20.6 ou superior,
 você também pode usar:
 
@@ -448,7 +550,8 @@ Se quiser que **qualquer servidor Monky** possa adicionar o bot pela URL:
 
 Via CLI:
 ```bash
-monkybot setup   # Opção 1 (URL — recomendado); inicia/reinicia e verifica o manifest automaticamente
+monkybot setup   # Opção 1 (URL — recomendado)
+monkybot start   # Inicia e verifica o manifest
 ```
 
 Ou defina estas variáveis no ambiente (ou carregue `.env` como mostrado acima):
@@ -810,13 +913,21 @@ npm run pack -- 2.0.0
 npm run smoke:pack -- release/monky-bot-2.0.0.tgz
 ```
 
+O `npm run pack` confere os assets dos jogos e gera o pacote com o empacotador do
+SDK (`buildBotPackage`, o mesmo do `monky-bot-sdk build`), a partir de uma
+compilação limpa. O pacote inclui `dist`, `assets`, o SDK e a árvore de dependências
+de produção, e declara `monkyBot` (CLI `monkybot`, modos, releases e
+requisitos); o comando `monkybot` é o `monky-cli.cjs` gerado pelo SDK.
+
 O teste do tarball instala **offline, com cache vazio e prefixo local isolado**,
-executa o CLI `--version`, negocia voz P2P com ICE/DTLS e recebe um pacote Opus
-sintético pelo caminho de voz do SDK incluído. Também inicia o bot empacotado
-para consultar `/manifest`, incluindo o logo oficial, e verifica os vínculos
-após reiniciar o processo. Resolução de módulos fora da instalação é rejeitada
-para impedir que dependências do checkout escondam falhas. Nenhum bot ou pm2
-global é instalado, parado ou reiniciado.
+executa `monkybot --version`, `requirements` e `config language`, negocia voz P2P
+com ICE/DTLS e recebe um pacote Opus sintético pelo caminho de voz do SDK incluído.
+Depois faz `setup` não interativo, confirma que o início é recusado sem
+consentimento, aprova a impressão digital e inicia o **runner empacotado do SDK**
+(o mesmo processo que o PM2 executa) para consultar `/manifest` com a identidade do
+perfil e o logo oficial, verificando os vínculos após reiniciar o processo.
+Resolução de módulos fora da instalação é rejeitada para impedir que dependências
+do checkout escondam falhas. Nenhum bot ou PM2 global é instalado, parado ou reiniciado.
 
 A CI executa esse teste **antes de publicar** e também nos PRs. Novas betas
 são publicadas somente após merge na `main`. O workflow usa `npm ci` com o SDK
@@ -824,12 +935,8 @@ oficial em `vendor/`, fixado pelo lockfile; não troca a dependência por uma
 versão mais recente durante o build. O disparo manual exige `promote_tag` e
 autorização explícita para promover uma beta existente, sem recompilar.
 O build falha se o SDK não corresponder ao protocolo declarado em `package.json` ou não
-oferecer live actions nativas, voz, telas, execução local concreta e nomes de
-comandos localizados. O pacote preserva a localização e a identidade das
-dependências transitivas do SDK (incluindo WebRTC/werift), sem clonar uma
-dependência compartilhada para cada consumidor. Instâncias ou versões
-distintas permanecem separadas; uma resolução que não possa ser preservada
-interrompe o empacotamento. Workspaces `file:` continuam suportados. Publique
+oferecer live actions nativas, voz, telas, execução local concreta, nomes de
+comandos localizados, o CLI reutilizável e o desafio de alcance. Publique
 a release compatível do Monky antes de publicar este bot.
 
 ## Como funciona
@@ -853,39 +960,31 @@ O bot é um **processo externo** — roda na sua máquina, VPS ou nuvem. Não te
 ```
 MonkyBot/
 ├── src/
-│   ├── index.ts          # Ponto de entrada (runtime)
+│   ├── index.ts          # Ponto de entrada (runtime iniciado pelo CLI do SDK)
+│   ├── i18n.ts           # Idioma do operador nos logs
 │   ├── profile.ts        # Nome padrão e avatar oficial incluído no pacote
-│   ├── cli.ts            # CLI — gerenciamento de processo (monkybot start/stop/...)
-│   ├── cli/
-│   │   ├── constants.ts  # Cores ANSI, paths de config
-│   │   ├── config.ts     # Leitura/escrita de ~/.monkybot/config.json
-│   │   ├── pm2.ts        # Helpers de pm2 (start, stop, ecosystem)
-│   │   ├── process.ts    # Spawn cross-platform
-│   │   └── commands/
-│   │       ├── setup.ts      # Setup interativo
-│   │       └── lifecycle.ts  # start, stop, restart, status, logs, config
 │   ├── commands/
 │   │   ├── index.ts      # Registro de todos os comandos
 │   │   ├── ping.ts
 │   │   ├── dice.ts
 │   │   ├── coin.ts
 │   │   ├── eightball.ts
-│   │   ├── scheduled.ts # Lembretes e sorteios persistentes
+│   │   ├── games.ts      # /doom e /nes
+│   │   ├── music.ts      # Música pela execução local no cliente
+│   │   ├── scheduled.ts  # Lembretes e sorteios persistentes
 │   │   └── help.ts
+│   ├── games/
+│   │   └── service.ts    # Listener da porta games (assets, multiplayer e desafio de alcance)
 │   ├── scheduled/
-│   │   └── store.ts     # Estado tipado e gravação atômica
+│   │   └── store.ts      # Estado tipado e gravação atômica
 │   └── utils/
-│       └── keys.ts       # Auto-geração de chaves Ed25519
+│       └── keys.ts       # Chaves Ed25519 na execução direta (o CLI usa <botDir>/.keys)
 ├── assets/
 │   └── monky-logo.png    # Logo oficial do Monky
-├── tests/               # Testes de comandos e empacotamento (node:test)
-├── scripts/             # Empacotamento e smoke offline do tarball
+├── tests/               # Testes de comandos, jogos, CLI e empacotamento (node:test)
+├── scripts/             # Empacotamento pelo SDK e smoke offline do tarball
 ├── .env.example
-├── .keys/                # Gerado automaticamente (não commitado)
-│   ├── private.pem
-│   ├── public.hex
-│   └── scheduled-actions.json
-└── package.json
+└── package.json          # monkyBot: CLI monkybot, modos, releases, portas e configurações
 ```
 
 ## Links

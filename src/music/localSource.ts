@@ -15,7 +15,7 @@ import {
 } from '@monky/bot-sdk';
 import { MusicError, SourceRecoveryError, aborted, type MusicErrorCode } from './errors';
 import { errorDiagnostic } from './process';
-import { cliText } from '../cli/i18n';
+import { cliText } from '../i18n';
 import type {
   MusicActor,
   QueueAudioStream,

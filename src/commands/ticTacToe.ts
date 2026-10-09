@@ -1,7 +1,7 @@
 import type { BotClient, BotScreenRef, BotScreenRemoved } from '@monky/bot-sdk';
 import { gameAction, newGame, ticTacToeHtml, type GameState } from '../screens/ticTacToe';
 import { message, translate, type LocalizedCommandDefinition } from './i18n';
-import { cliText } from '../cli/i18n';
+import { cliText } from '../i18n';
 import { errorDiagnostic } from '../music/process';
 
 export const ticTacToeDefinition: Omit<LocalizedCommandDefinition, 'handler'> = {

@@ -8,7 +8,7 @@ import { MusicError, aborted, musicError } from '../music/errors';
 import { IncompleteAudioError, MUSIC_PREVIEW_DURATION_MS, musicInput, videoUrl, type MusicSource, type Track } from '../music/source';
 import { bounded, errorDiagnostic } from '../music/process';
 import { message, translate, type LocalizedCommandDefinition } from './i18n';
-import { cliText } from '../cli/i18n';
+import { cliText } from '../i18n';
 import { defaultMusicIdleSeconds, musicIdleMilliseconds, musicSettingsDefinition } from '../music/settings';
 import { LocalMusicSourceFactory, localMusicAutocomplete, localMusicPreview } from '../music/localSource';
 

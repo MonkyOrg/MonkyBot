@@ -8,7 +8,7 @@ import { helpCommand } from './help';
 import { musicDefinitions, registerMusicCommands } from './music';
 import { ticTacToeDefinition, registerTicTacToe } from './ticTacToe';
 import { gameDefinitions, registerGames } from './games';
-import { cliText } from '../cli/i18n';
+import { cliText } from '../i18n';
 
 const basicCommands: readonly CommandDefinition[] = [
   pingCommand, diceCommand, coinCommand, eightBallCommand, reminderCommand, giveawayCommand, helpCommand,

@@ -8,8 +8,7 @@ const { giveawayCommand, reminderCommand } = require('../dist/commands/scheduled
 const { coinCommand } = require('../dist/commands/coin');
 const { pingCommand } = require('../dist/commands/ping');
 const { helpCommand } = require('../dist/commands/help');
-const { generateEcosystem } = require('../dist/cli/pm2');
-const { setCliLocale, normalizeCliLocale } = require('../dist/cli/i18n');
+const { setCliLocale, normalizeCliLocale } = require('../dist/i18n');
 const sdk = require('@monky/bot-sdk');
 const { botMessageText } = require('./helpers/bot-message');
 
@@ -273,34 +272,5 @@ test('private help matches every registered display name without changing anothe
     setCliLocale('pt-BR');
     await dispose();
     await bot.close();
-  }
-});
-
-test('PM2 passes the configured bot identity in both modes', () => {
-  for (const mode of ['manual', 'marketplace']) {
-    const ecosystem = generateEcosystem({ mode, botDir: process.cwd(), botName: 'My MonkyBot' });
-    assert.match(ecosystem, /MONKY_BOT_NAME: 'My MonkyBot'/);
-  }
-});
-
-test('PM2 preserves and safely quotes the game service environment in both modes', () => {
-  const values = {
-    MONKY_GAMES_HOST: '127.0.0.1',
-    MONKY_GAMES_PORT: '7781',
-    MONKY_GAMES_PUBLIC_URL: "https://games.example.test/quote'\\\r\n",
-  };
-  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
-  try {
-    Object.assign(process.env, values);
-    for (const mode of ['manual', 'marketplace']) {
-      const context = { module: {} };
-      require('node:vm').runInNewContext(generateEcosystem({ mode, botDir: process.cwd() }), context);
-      for (const [key, value] of Object.entries(values)) assert.equal(context.module.exports.apps[0].env[key], value);
-    }
-  } finally {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
   }
 });

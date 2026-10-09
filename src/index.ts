@@ -1,15 +1,15 @@
-import { BotClient, PROTOCOL_VERSION, ProtocolErrorCode } from '@monky/bot-sdk';
+import { createPublicKey } from 'node:crypto';
+import { BotClient, PROTOCOL_VERSION, ProtocolErrorCode, validateBotPublicHost } from '@monky/bot-sdk';
 import { registerAllCommands, requestedCapabilities } from './commands';
 import { DEFAULT_BOT_NAME, loadBotAvatar } from './profile';
 import { loadOrGenerateKeys, REGISTRATIONS_PATH } from './utils/keys';
-import { getManifestUrl, identifyManifest } from './utils/manifest';
+import { getManifestUrl } from './utils/manifest';
 import { errorDiagnostic, safeDiagnostic } from './music/process';
-import { cliText } from './cli/i18n';
-import { readConfig, validateCliPublicHost } from './cli/config';
-import { assertHostConsent } from './cli/hostConsent';
+import { cliText } from './i18n';
 
 // ── Configuration ────────────────────────────────────────────────────
-// Todas as variáveis de ambiente são opcionais — veja README.md para detalhes.
+// O CLI do SDK (monkybot) fornece estas variáveis ao processo. Em execução
+// direta (npm start/dev), todas são opcionais — veja README.md.
 
 const config = {
   // Modo manual: conectar a um servidor específico.
@@ -22,26 +22,51 @@ const config = {
   serveHost: process.env.MONKY_SERVE_HOST || '0.0.0.0',
   servePublicHost: process.env.MONKY_SERVE_PUBLIC_HOST || 'localhost',
   botName: process.env.MONKY_BOT_NAME || DEFAULT_BOT_NAME,
+  registrationFile: process.env.MONKY_BOT_REGISTRATION_FILE || REGISTRATIONS_PATH,
 };
+
+/**
+ * The SDK CLI runner owns the identity in `<botDir>/.keys` and passes only its
+ * public key. Direct runs keep generating/reusing `.keys` in the working directory.
+ */
+function botPublicKey(): string {
+  const provided = process.env.MONKY_BOT_PUBLIC_KEY;
+  if (provided === undefined || provided === '') return loadOrGenerateKeys().publicKeyHex;
+  const invalid = new Error(cliText('MONKY_BOT_PUBLIC_KEY deve ser uma chave pública Ed25519 em DER/SPKI (88 caracteres hex).',
+    'MONKY_BOT_PUBLIC_KEY must be a DER/SPKI Ed25519 public key (88 hex characters).'));
+  if (!/^[a-f0-9]{88}$/i.test(provided)) throw invalid;
+  try {
+    const key = createPublicKey({ key: Buffer.from(provided, 'hex'), format: 'der', type: 'spki' });
+    if (key.asymmetricKeyType !== 'ed25519') throw invalid;
+  } catch (error: unknown) {
+    throw error === invalid ? invalid : new Error(invalid.message, { cause: error });
+  }
+  return provided.toLowerCase();
+}
+
+function validatedPublicHost(value: string): string {
+  try { return validateBotPublicHost(value); }
+  catch (error: unknown) {
+    throw new Error(cliText('O host público deve ser um domínio ou IP, sem protocolo nem porta.',
+      'The public host must be a hostname or IP without a scheme or port.'), { cause: error });
+  }
+}
 
 // ── Bootstrap ────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  assertHostConsent(process.cwd(), process.env.MONKY_HOST_CONSENT === undefined ? readConfig()?.hostConsent : undefined);
   console.log(`🤖 ${config.botName}`);
   console.log('');
 
-  // Chaves Ed25519 são geradas automaticamente na primeira execução
-  // e reutilizadas nas seguintes. Salvas em .keys/
-  const keys = loadOrGenerateKeys();
+  const publicKey = botPublicKey();
 
   const avatarBase64 = loadBotAvatar();
   const bot = new BotClient({
-    publicKey: keys.publicKeyHex,
+    publicKey,
     requestedCapabilities,
     name: config.botName,
     avatarBase64,
-    registrationFile: config.serve ? REGISTRATIONS_PATH : undefined,
+    registrationFile: config.serve ? config.registrationFile : undefined,
   });
 
   // Registrar todos os comandos.
@@ -105,7 +130,7 @@ async function main(): Promise<void> {
         throw new Error(cliText('MONKY_SERVE_PORT deve ser um número inteiro entre 0 e 65535.',
           'MONKY_SERVE_PORT must be an integer between 0 and 65535.'));
       }
-      const host = validateCliPublicHost(config.servePublicHost);
+      const host = validatedPublicHost(config.servePublicHost);
       const server = await bot.serve({
         name: config.botName,
         icon: avatarBase64,
@@ -115,15 +140,14 @@ async function main(): Promise<void> {
         host: config.serveHost,
         publicHost: host,
       });
-      identifyManifest(server, keys.publicKeyHex);
 
       const addr = server.address();
       const port = typeof addr === 'object' && addr ? addr.port : config.servePort;
       const manifestUrl = getManifestUrl(host, port);
       console.log('');
       console.log(`🌐 Manifest: ${manifestUrl}`);
-      console.log(cliText(`💾 Cadastros salvos: ${bot.registeredServerCount} (${REGISTRATIONS_PATH})`,
-        `💾 Saved registrations: ${bot.registeredServerCount} (${REGISTRATIONS_PATH})`));
+      console.log(cliText(`💾 Cadastros salvos: ${bot.registeredServerCount} (${config.registrationFile})`,
+        `💾 Saved registrations: ${bot.registeredServerCount} (${config.registrationFile})`));
       if (bot.registeredServerCount > 0) {
         console.log(cliText('♻️  Reconectando aos servidores salvos. Aguarde a confirmação de conexão nos logs.',
           '♻️  Reconnecting to saved servers. Wait for connection confirmation in the logs.'));
@@ -147,6 +171,9 @@ async function main(): Promise<void> {
       console.log(cliText(`🔌 Conectando a ${config.serverUrl}...`, `🔌 Connecting to ${config.serverUrl}...`));
     } else {
       console.log(cliText('⚙️  Nenhuma configuração encontrada. Escolha um modo:', '⚙️  No configuration found. Choose a mode:'));
+      console.log('');
+      console.log(cliText('  🧰 Recomendado: monkybot setup (no checkout: npm run cli -- setup)',
+        '  🧰 Recommended: monkybot setup (in a checkout: npm run cli -- setup)'));
       console.log('');
       console.log(cliText('  🌐 Instalação por URL (recomendado):', '  🌐 URL installation (recommended):'));
       console.log(cliText('     Defina as variáveis de ambiente:', '     Set environment variables:'));

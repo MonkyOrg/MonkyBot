@@ -14,13 +14,17 @@ function checkSdk(root = path.resolve(__dirname, '..')) {
     .every((method) => typeof sdk.BotClient?.prototype[method] === 'function');
   const hasLocalExecution = typeof sdk.BotClient?.prototype.localExecution === 'function' &&
     typeof sdk.LocalExecutionError === 'function' && typeof sdk.LocalExecutionRpcError === 'function';
+  // The packaged `monkybot` command is the SDK's reusable CLI; the games listener answers its probes.
+  const hasRuntimeCli = ['runBotCli', 'buildBotPackage', 'handleReachabilityProbe']
+    .every((name) => typeof sdk[name] === 'function');
   if (sdk.PROTOCOL_VERSION !== expected || typeof sdk.BotClient?.prototype.close !== 'function' ||
       !hasPersistentRegistrations || !hasLiveActions || !hasPersistentMessages ||
-      !hasVoiceAndScreens || !hasLocalExecution ||
+      !hasVoiceAndScreens || !hasLocalExecution || !hasRuntimeCli ||
       typeof sdk.getCommandPresentation !== 'function') {
     throw new Error(
       `MonkyBot requires the bot-sdk for Monky protocol ${expected}; found ${sdk.PROTOCOL_VERSION ?? 'unknown'}. ` +
-      'The SDK must also support persistent marketplace registrations, native live actions, persistent channel messages, voice, screens, concrete local execution and localized command names. ' +
+      'The SDK must also support persistent marketplace registrations, native live actions, persistent channel messages, voice, screens, concrete local execution, localized command names, ' +
+      'the reusable runtime CLI with declared requirements and reachability probes. ' +
       'Use the matching Monky release (or build the matching local shared and bot-sdk workspaces).'
     );
   }

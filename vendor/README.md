@@ -1,8 +1,26 @@
 # SDK compativel
 
-## SDK oficial atual (protocolo 34)
+## SDK oficial atual (protocolo 37)
 
-A dependencia ativa e `monky-bot-sdk-34.0.7-beta.tgz`, da
+A dependencia ativa e `monky-bot-sdk-37.0.0-beta.tgz`, da
+[release Monky v37.0.0-beta](https://github.com/MonkyOrg/Monky/releases/tag/v37.0.0-beta)
+(MonkyOrg/Monky#771, MonkyOrg/Monky#769). Inclui protocolo **37** (piso de bots
+24) e o CLI reutilizavel de bots com `requirements`, `doctor`, `consent` com
+impressao digital, `config env` e `handleReachabilityProbe`. O MonkyBot passa a
+usar esse CLI no lugar do seu CLI proprio. Somente o teste externo de portas do
+`doctor` exige servidor Monky no protocolo 37.
+
+Origem: commit `c563ab8cf9b65044c245e6154372626e545a8ef3`, workflow
+[Release 37967403148](https://github.com/MonkyOrg/Monky/actions/runs/37967403148).
+Bytes oficiais sem modificacoes, conferidos contra o digest SHA-256 publicado:
+`f2022b38351c647115ccd3fd73054bdac001a9405bbb05bc8123e0758247a139`.
+Tamanho: 6.208.393 bytes. Dependencia e lockfile fixam os mesmos bytes.
+Perfis, identidades e vinculos existentes permanecem preservados; o
+consentimento salvo pelo CLI anterior e herdado no primeiro `start`.
+
+## SDK oficial anterior (protocolo 34)
+
+A dependencia anterior era `monky-bot-sdk-34.0.7-beta.tgz`, da
 [release Monky v34.0.7-beta](https://github.com/MonkyOrg/Monky/releases/tag/v34.0.7-beta).
 Inclui protocolo **34**, mensagens persistentes fora de invocacoes, formularios
 e live actions nativas. Use cliente e servidor Monky v34.0.7-beta.

@@ -4,7 +4,7 @@ import type {
   BotClient, BotForm, BotFormValues, BotPublishedMessageContent, CommandContext, LiveAction, LiveActionSubmission,
 } from '@monky/bot-sdk';
 import { message, translate, type LocalizedCommandDefinition } from './i18n';
-import { normalizeCliLocale, cliText } from '../cli/i18n';
+import { normalizeCliLocale, cliText } from '../i18n';
 import { errorDiagnostic, safeDiagnostic } from '../music/process';
 import {
   ScheduledActionsStore, type GiveawayEntrant, type GiveawayRecord, type ScheduledActionsState, type ScheduledLocale,

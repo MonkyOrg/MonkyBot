@@ -7,8 +7,8 @@ const { checkSdk } = require('../scripts/check-sdk');
 const protocolVersion = require('../package.json').monky.protocolVersion;
 
 test('the installed SDK matches the bot protocol and required runtime APIs', () => {
-  assert.equal(protocolVersion, 34);
-  assert.equal(require('@monky/bot-sdk/package.json').version, '34.0.7-beta');
+  assert.equal(protocolVersion, 37);
+  assert.equal(require('@monky/bot-sdk/package.json').version, '37.0.0-beta');
   assert.equal(checkSdk(), protocolVersion);
 });
 
@@ -28,19 +28,22 @@ function sdkFixture(t, { version = protocolVersion, missing } = {}) {
   const commandPresentation = missing === 'getCommandPresentation' ? '' : 'exports.getCommandPresentation = () => ({});';
   const localErrors = ['LocalExecutionError', 'LocalExecutionRpcError'].filter(name => name !== missing)
     .map(name => `exports.${name} = class extends Error {};`).join('\n');
+  const runtimeCli = ['runBotCli', 'buildBotPackage', 'handleReachabilityProbe'].filter(name => name !== missing)
+    .map(name => `exports.${name} = () => {};`).join('\n');
   fs.writeFileSync(path.join(sdk, 'index.js'),
-    `exports.PROTOCOL_VERSION = ${version}; exports.BotClient = class { ${methods}\n${registrations} }; ${commandPresentation}\n${localErrors}`);
+    `exports.PROTOCOL_VERSION = ${version}; exports.BotClient = class { ${methods}\n${registrations} }; ${commandPresentation}\n${localErrors}\n${runtimeCli}`);
   return root;
 }
 
-test('SDK compatibility requires matching protocol, persistent messages, live actions, voice, local execution, screens and command localization', (t) => {
+test('SDK compatibility requires matching protocol, persistent messages, live actions, voice, local execution, screens, command localization and the runtime CLI', (t) => {
   assert.equal(checkSdk(sdkFixture(t)), protocolVersion);
   assert.throws(() => checkSdk(sdkFixture(t, { version: protocolVersion - 1 })), /requires the bot-sdk/);
   for (const missing of ['close', 'registeredServerCount',
     'createLiveAction', 'listLiveActions', 'updateLiveAction', 'closeLiveAction', 'onLiveActionSubmission',
     'sendMessage',
     'joinVoice', 'getVoiceConnection', 'leaveVoice', 'createScreen', 'updateScreen', 'closeScreen', 'listScreens',
-    'getCommandPresentation', 'localExecution', 'LocalExecutionError', 'LocalExecutionRpcError']) {
+    'getCommandPresentation', 'localExecution', 'LocalExecutionError', 'LocalExecutionRpcError',
+    'runBotCli', 'buildBotPackage', 'handleReachabilityProbe']) {
     assert.throws(() => checkSdk(sdkFixture(t, { missing })), /native live actions/, missing);
   }
 });

@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { test, beforeEach } = require('node:test');
 const { botMessageText } = require('./helpers/bot-message');
-const { setCliLocale } = require('../dist/cli/i18n');
+const { setCliLocale } = require('../dist/i18n');
 
 beforeEach(() => setCliLocale('en'));
 const { BotClient } = require('@monky/bot-sdk');

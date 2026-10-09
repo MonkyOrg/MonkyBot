@@ -13,7 +13,7 @@ const { OggOpusParser } = require('../dist/music/ogg');
 const { capture, captureBytes, safeDiagnostic } = require('../dist/music/process');
 const { LIMITS } = require('@monky/bot-sdk');
 const { createMusicCommands, registerMusicCommands } = require('../dist/commands/music');
-const { setCliLocale } = require('../dist/cli/i18n');
+const { setCliLocale } = require('../dist/i18n');
 const { botMessageText } = require('./helpers/bot-message');
 
 beforeEach(() => setCliLocale('en'));

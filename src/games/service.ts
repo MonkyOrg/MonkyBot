@@ -3,7 +3,9 @@ import { createReadStream, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import path from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
+import { handleReachabilityProbe } from '@monky/bot-sdk';
 import { errorDiagnostic } from '../music/process';
+import { cliText } from '../i18n';
 
 export type GameId = 'doom' | 'nes';
 interface Identity { userId: string; nickname: string; expires: number }
@@ -79,6 +81,8 @@ export class GamesService {
         publicUrl.pathname !== '/' || publicUrl.search || publicUrl.hash) throw new Error('Invalid games public URL.');
     if (!Number.isInteger(this.config.port) || this.config.port < 0 || this.config.port > 65535) throw new Error('Invalid games port.');
     const server = createServer((request, response) => {
+      // Lets `monkybot doctor` and Monky servers prove this port reaches this bot.
+      if (handleReachabilityProbe(request, response)) return;
       response.setHeader('Access-Control-Allow-Origin', '*');
       response.setHeader('X-Content-Type-Options', 'nosniff');
       if (request.method !== 'GET' && request.method !== 'HEAD') { response.writeHead(405); response.end(); return; }
@@ -109,7 +113,17 @@ export class GamesService {
       sockets.handleUpgrade(request, socket, head, client => this.accept(room, client));
     });
     await new Promise<void>((resolve, reject) => {
-      const failed = (error: Error): void => { server.close(); sockets.close(); reject(error); };
+      const failed = (error: Error): void => {
+        server.close();
+        sockets.close();
+        // 7781 is also the natural manifest port of a second bot on the same host.
+        reject('code' in error && error.code === 'EADDRINUSE' ? new Error(cliText(
+          `A porta de jogos ${this.config.port} já está em uso (por exemplo, pelo manifest de outro bot). ` +
+          'Escolha outra com "monkybot config env set MONKY_GAMES_PORT <porta>" (e MONKY_GAMES_PUBLIC_URL, se usar) e "monkybot restart".',
+          `Games port ${this.config.port} is already in use (for example, by another bot's manifest). ` +
+          'Choose another with "monkybot config env set MONKY_GAMES_PORT <port>" (and MONKY_GAMES_PUBLIC_URL, if used) and "monkybot restart".'),
+        { cause: error }) : error);
+      };
       server.once('error', failed);
       server.listen(this.config.port, this.config.host, () => {
         server.off('error', failed);

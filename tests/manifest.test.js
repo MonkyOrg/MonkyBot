@@ -1,15 +1,11 @@
 const assert = require('node:assert/strict');
 const { test, beforeEach } = require('node:test');
-const { setCliLocale } = require('../dist/cli/i18n');
-const { hostConsentFor } = require('../dist/cli/hostConsent');
+const { setCliLocale } = require('../dist/i18n');
+const { getManifestUrl } = require('../dist/utils/manifest');
 
 beforeEach(() => setCliLocale('en'));
-const { getManifestUrl } = require('../dist/utils/manifest');
-const { startCommand } = require('../dist/cli/commands/lifecycle');
-const config = require('../dist/cli/config');
-const pm2 = require('../dist/cli/pm2');
 
-test('runtime and CLI share valid manifest URLs for hostnames, IPv4 and both IPv6 forms', () => {
+test('runtime manifest URLs are valid for hostnames, IPv4 and both IPv6 forms', () => {
   for (const [host, expectedHost] of [
     ['bot.example.test', 'bot.example.test'],
     ['192.0.2.15', '192.0.2.15'],
@@ -30,18 +26,4 @@ test('manifest URLs reject missing or malformed endpoints rather than inventing 
   for (const port of [undefined, 0, -1, 65536, 'not-a-port']) {
     assert.throws(() => getManifestUrl('bot.example.test', port), /serve port/i);
   }
-});
-
-test('marketplace startup validates the advertised endpoint before touching pm2', async (t) => {
-  t.mock.method(config, 'readConfig', () => ({
-    mode: 'marketplace',
-    botDir: process.cwd(),
-    hostConsent: hostConsentFor(process.cwd()),
-    servePort: 7780,
-  }));
-  const ensurePm2 = t.mock.method(pm2, 'ensurePm2', () => {
-    assert.fail('Invalid configuration must not start or install pm2.');
-  });
-  await assert.rejects(startCommand(), /public host/i);
-  assert.equal(ensurePm2.mock.calls.length, 0);
 });

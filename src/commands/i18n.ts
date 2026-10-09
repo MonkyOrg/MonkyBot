@@ -1,7 +1,7 @@
 import type {
   BotPublishedMessageContent, CommandContext, CommandDefinition, CommandLocalizations,
 } from '@monky/bot-sdk';
-import { normalizeCliLocale } from '../cli/i18n';
+import { normalizeCliLocale } from '../i18n';
 
 /** Presentation names are localized; registered command and argument IDs stay canonical. */
 export type LocalizedCommandDefinition = CommandDefinition & {
