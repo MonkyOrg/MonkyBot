@@ -1,12 +1,18 @@
 import { performance } from 'node:perf_hooks';
-import { MusicError, SourceRecoveryError, aborted } from './errors';
+import { MusicError, QueueFullError, SourceRecoveryError, aborted } from './errors';
 import { bounded, cancellable, errorDiagnostic, safeDiagnostic } from './process';
 import type { AudioStream, ResolvedTrack, Track } from './source';
+import { MUSIC_QUEUE_LIMIT_DEFAULT, MUSIC_QUEUE_LIMIT_MAX } from './settings';
 import { cliText } from '../i18n';
 
-export type QueueAudioStream = Omit<AudioStream, 'setPaused'> & {
+/** Source contexts retained at once for one playlist, leaving executor room for searches and streams. */
+const PLAYLIST_BIND_CONCURRENCY = 2;
+
+export type QueueAudioStream<T extends Track = Track> = Omit<AudioStream, 'setPaused'> & {
   readonly signal?: AbortSignal;
   readonly closed?: Promise<void>;
+  /** Metadata of the source actually opened; it replaces queued (for example, flat playlist) metadata. */
+  readonly track?: T;
   setPaused?(paused: boolean): void | Promise<void>;
 };
 export interface MusicVoice {
@@ -42,7 +48,7 @@ export interface QueueMusicSource<T extends Track> {
     track: T,
     signal: AbortSignal,
     options?: { mode: 'persistent'; progress: 'playback' },
-  ): Promise<QueueAudioStream>;
+  ): Promise<QueueAudioStream<T>>;
   release?(): Promise<void>;
 }
 export interface QueueMusicSourceFactory<T extends Track> {
@@ -65,7 +71,7 @@ interface Playback<T extends Track> {
   elapsedMs: number;
   started: boolean;
   wake?: () => void;
-  stream?: QueueAudioStream;
+  stream?: QueueAudioStream<T>;
   done?: Promise<void>;
 }
 interface Session<T extends Track> {
@@ -97,7 +103,23 @@ export interface MusicSnapshot {
   elapsedMs: number;
   upcoming: { title: string; pending: boolean; waitingForRequester: boolean }[];
 }
+/** What the requester asked for, as read before reserving queue slots. */
+export interface PlaylistInfo {
+  title: string | null;
+  album: boolean;
+  /** Entries left out by the track policy (over 1 hour, live, private or without a duration). */
+  skipped: number;
+  /** Entries after the read window; null when the provider did not report a total. */
+  beyond: number | null;
+}
+export interface PlaylistAddition {
+  added: number;
+  /** Tracks read but not reserved because the queue filled up meanwhile. */
+  unreserved: number;
+  limit: number;
+}
 export type MusicNotice = { type: 'queued'; actor: MusicActor; track: Track } |
+  { type: 'playlist-queued'; actor: MusicActor; playlist: PlaylistInfo } & PlaylistAddition |
   { type: 'loading'; actor: MusicActor; track: Track } |
   { type: 'started'; actor: MusicActor; track: Track } |
   { type: 'failed'; actor: MusicActor; error: unknown; track?: Track } |
@@ -117,6 +139,7 @@ export class MusicQueues<T extends Track = ResolvedTrack> {
     private readonly notify: (notice: MusicNotice, signal?: AbortSignal) => Promise<void>,
     private readonly graceMs = 60_000,
     private readonly configuredGrace?: (serverId: string) => number,
+    private readonly configuredLimit?: (serverId: string) => number,
   ) {
     if (!Number.isInteger(graceMs) || graceMs < 0 || graceMs > 600_000) throw new Error('Invalid music grace period');
   }
@@ -125,6 +148,20 @@ export class MusicQueues<T extends Track = ResolvedTrack> {
     const value = this.configuredGrace ? this.configuredGrace(serverId) : this.graceMs;
     if (!Number.isInteger(value) || value < 0 || value > 600_000) throw new MusicError('settings');
     return value;
+  }
+
+  /** Read on every addition: a lower limit blocks new entries but never evicts queued ones. */
+  private limitFor(serverId: string): number {
+    const value = this.configuredLimit ? this.configuredLimit(serverId) : MUSIC_QUEUE_LIMIT_DEFAULT;
+    if (!Number.isInteger(value) || value < 1 || value > MUSIC_QUEUE_LIMIT_MAX) throw new MusicError('settings');
+    return value;
+  }
+
+  /** The configured limit and the slots still free, counting pending loads. */
+  capacity(serverId: string): { limit: number; free: number } {
+    const limit = this.limitFor(serverId);
+    const session = this.sessions.get(serverId);
+    return { limit, free: Math.max(0, limit - (session && !session.closing ? session.queue.length : 0)) };
   }
 
   private serial<R>(session: Session<T>, action: () => R | Promise<R>): Promise<R> {
@@ -153,18 +190,8 @@ export class MusicQueues<T extends Track = ResolvedTrack> {
     if (this.disposed) throw new MusicError('cancelled');
     this.assertControl(actor);
     this.graceFor(actor.serverId);
-    let session = this.sessions.get(actor.serverId);
-    if (!session) {
-      if (this.sessions.size >= 128) throw new MusicError('busy');
-      session = {
-        serverId: actor.serverId, channelId: actor.voiceChannelId!, queue: [], tail: Promise.resolve(),
-        closing: false, lastActor: { ...actor }, endedNoticePending: false,
-        deferredSlots: new Set(),
-        availabilityRequested: false,
-      };
-      this.sessions.set(actor.serverId, session);
-    }
-    const state = session;
+    this.limitFor(actor.serverId);
+    const state = this.sessionFor(actor);
     const slot: Slot<T> = {
       token: new AbortController(), actor: { ...actor }, url,
       releaseRequested: false,
@@ -173,7 +200,8 @@ export class MusicQueues<T extends Track = ResolvedTrack> {
       await this.serial(state, () => {
         this.authorize(actor, state);
         if (state.closing || this.disposed) throw new MusicError('cancelled');
-        if (state.queue.length >= 50) throw new MusicError('full');
+        const limit = this.limitFor(state.serverId);
+        if (state.queue.length >= limit) throw new QueueFullError(limit);
         state.queue.push(slot);
         clearTimeout(state.idle);
         state.idle = undefined;
@@ -222,6 +250,137 @@ export class MusicQueues<T extends Track = ResolvedTrack> {
     } finally {
       invocationSignal?.removeEventListener('abort', cancel);
     }
+  }
+
+  private sessionFor(actor: MusicActor): Session<T> {
+    let session = this.sessions.get(actor.serverId);
+    if (!session) {
+      if (this.sessions.size >= 128) throw new MusicError('busy');
+      session = {
+        serverId: actor.serverId, channelId: actor.voiceChannelId!, queue: [], tail: Promise.resolve(),
+        closing: false, lastActor: { ...actor }, endedNoticePending: false,
+        deferredSlots: new Set(),
+        availabilityRequested: false,
+      };
+      this.sessions.set(actor.serverId, session);
+    }
+    return session;
+  }
+
+  /**
+   * Adds playlist tracks in order: reserves contiguous slots for as many as fit, retains each
+   * source, then accepts them together. Tracks keep their read metadata until playback opens
+   * (and re-resolves) each one, so nothing is resolved per track here. Cancellation or any
+   * failure before acceptance removes every reservation and releases its source.
+   */
+  async enqueuePlaylist(
+    actor: MusicActor,
+    tracks: readonly T[],
+    playlist: PlaylistInfo,
+    invocationSignal?: AbortSignal,
+    currentActor?: () => MusicActor | Promise<MusicActor>,
+  ): Promise<PlaylistAddition> {
+    if (this.disposed) throw new MusicError('cancelled');
+    if (!tracks.length) throw new MusicError('playlist_empty');
+    this.assertControl(actor);
+    this.graceFor(actor.serverId);
+    this.limitFor(actor.serverId);
+    const state = this.sessionFor(actor);
+    const slots: Slot<T>[] = [];
+    let limit = 0;
+    try {
+      await this.serial(state, () => {
+        this.authorize(actor, state);
+        if (state.closing || this.disposed) throw new MusicError('cancelled');
+        limit = this.limitFor(state.serverId);
+        const free = limit - state.queue.length;
+        if (free <= 0) throw new QueueFullError(limit);
+        for (const track of tracks.slice(0, free)) {
+          slots.push({ token: new AbortController(), actor: { ...actor }, url: track.url, releaseRequested: false });
+        }
+        state.queue.push(...slots);
+        clearTimeout(state.idle);
+        state.idle = undefined;
+        state.idleSince = undefined;
+      });
+    } catch (error: unknown) {
+      if (!state.active && !state.queue.length) this.armIdle(state);
+      throw error;
+    }
+    const unreserved = tracks.length - slots.length;
+    // Invocation expiry cancels the whole pending addition, never accepted playback.
+    const batch = new AbortController();
+    const cancel = (): void => batch.abort();
+    batch.signal.addEventListener('abort', () => { for (const slot of slots) slot.token.abort(); }, { once: true });
+    invocationSignal?.addEventListener('abort', cancel, { once: true });
+    if (invocationSignal?.aborted) cancel();
+    try {
+      await this.bindPlaylist(slots, batch);
+      const first = slots.find((slot) => !slot.token.signal.aborted);
+      if (!first) throw new MusicError('cancelled');
+      let current = currentActor ? await currentActor() : actor;
+      aborted(batch.signal);
+      this.authorize(current, state);
+      const joined = await this.admit(state, first);
+      aborted(batch.signal);
+      if (joined && currentActor) current = await currentActor();
+      let added = 0;
+      await this.serial(state, () => {
+        aborted(batch.signal);
+        if (state.closing) throw new MusicError('cancelled');
+        this.authorize(current, state);
+        const queued = new Set(state.queue);
+        slots.forEach((slot, index) => {
+          if (slot.token.signal.aborted || !queued.has(slot)) return;
+          slot.track = tracks[index];
+          added++;
+        });
+        if (!added) throw new MusicError('cancelled');
+        void this.report({ type: 'playlist-queued', actor: { ...actor }, playlist, added, unreserved, limit });
+        this.pump(state);
+        if (slots.some((slot) => state.deferredSlots.has(slot))) this.recheckDeferred(state);
+      });
+      return { added, unreserved, limit };
+    } catch (error: unknown) {
+      batch.abort();
+      await this.serial(state, () => {
+        const reserved = new Set(slots);
+        for (let index = state.queue.length - 1; index >= 0; index--) {
+          if (reserved.has(state.queue[index])) state.queue.splice(index, 1);
+        }
+        for (const slot of slots) state.deferredSlots.delete(slot);
+        this.pump(state);
+      });
+      await Promise.all(slots.map((slot) => this.releaseSlot(slot)));
+      throw error;
+    } finally {
+      invocationSignal?.removeEventListener('abort', cancel);
+    }
+  }
+
+  private async bindPlaylist(slots: Slot<T>[], batch: AbortController): Promise<void> {
+    let next = 0;
+    const outcome: { failed: boolean; error?: unknown } = { failed: false };
+    // Removed slots (a control during the load) are skipped; anything else fails the batch.
+    const removed = (slot: Slot<T>): boolean => slot.token.signal.aborted && !batch.signal.aborted;
+    const worker = async (): Promise<void> => {
+      while (!outcome.failed && next < slots.length) {
+        const slot = slots[next++];
+        if (removed(slot)) continue;
+        try {
+          aborted(batch.signal);
+          // The playlist read already ran on the same executor; check() would only repeat it.
+          await this.bindSource(slot);
+        } catch (error: unknown) {
+          if (removed(slot)) continue;
+          if (!outcome.failed) Object.assign(outcome, { failed: true, error });
+          batch.abort();
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(PLAYLIST_BIND_CONCURRENCY, slots.length) }, worker));
+    if (outcome.failed) throw outcome.error;
+    aborted(batch.signal);
   }
 
   private async bindSource(slot: Slot<T>): Promise<QueueMusicSource<T>> {
@@ -343,7 +502,7 @@ export class MusicQueues<T extends Track = ResolvedTrack> {
 
   private async play(session: Session<T>, active: Playback<T>): Promise<void> {
     const signal = active.token.signal;
-    const track = active.slot.track!;
+    let track = active.slot.track!;
     const source = active.slot.source!;
     let stage = 'resolve';
     let connection: MusicVoice | undefined;
@@ -363,6 +522,7 @@ export class MusicQueues<T extends Track = ResolvedTrack> {
       stage = 'open';
       active.stream = await source.open(fresh, signal, { mode: 'persistent', progress: 'playback' });
       aborted(signal);
+      if (active.stream.track) active.slot.track = track = active.stream.track;
       if (active.stream.signal) {
         const controller = new AbortController();
         const cancelPlayback = (): void => controller.abort(signal.reason);
@@ -509,6 +669,9 @@ export class MusicQueues<T extends Track = ResolvedTrack> {
       throw new MusicError('empty');
     }
     if (command === 'leave') { await this.disconnect(actor.serverId); return; }
+    // Removed slots are aborted under the lock, but their (throttled) releases finish
+    // outside it: clearing hundreds of sources must not hold playback or other controls.
+    const releasing: Promise<void>[] = [];
     await this.serial(session, async () => {
       this.authorize(actor, session);
       const active = session.active;
@@ -528,31 +691,32 @@ export class MusicQueues<T extends Track = ResolvedTrack> {
         } else if (session.queue.length) {
           const removed = session.queue.shift()!;
           session.deferredSlots.delete(removed);
-          await this.releaseSlot(removed);
+          releasing.push(this.releaseSlot(removed));
           this.pump(session);
         } else throw new MusicError('empty');
       } else if (command === 'remove') {
         if (!Number.isInteger(position) || position! < 1 || position! > session.queue.length) throw new MusicError('position');
         const removed = session.queue.splice(position! - 1, 1)[0];
         session.deferredSlots.delete(removed);
-        await this.releaseSlot(removed);
+        releasing.push(this.releaseSlot(removed));
         this.pump(session);
       } else {
         if (command === 'stop') {
           session.endedNoticePending = false;
           session.pendingFailure = undefined;
+          if (active) {
+            active.token.abort();
+            active.wake?.();
+            this.stopSpeaking(connection);
+          }
         }
         const removed = session.queue.splice(0);
         for (const slot of removed) session.deferredSlots.delete(slot);
-        await Promise.all(removed.map((slot) => this.releaseSlot(slot)));
-        if (command === 'stop' && active) {
-          active.token.abort();
-          active.wake?.();
-          this.stopSpeaking(connection);
-        }
+        releasing.push(...removed.map((slot) => this.releaseSlot(slot)));
         this.pump(session);
       }
     });
+    await Promise.all(releasing);
   }
 
   refreshGracePeriod(serverId: string): void {
@@ -629,25 +793,36 @@ export class MusicQueues<T extends Track = ResolvedTrack> {
     const recheck = async (): Promise<void> => {
       while (session.availabilityRequested && !session.closing && !this.disposed) {
         session.availabilityRequested = false;
-        for (const slot of [...session.deferredSlots]) {
+        // Sources retained by one invocation share its requester socket, channel and voice access,
+        // so one confirmation per invocation and pass covers a whole playlist.
+        const checked = new Set<string>();
+        for (const slot of session.queue.filter((entry) => session.deferredSlots.has(entry))) {
           if (session.closing || this.disposed || session.availabilityRequested) break;
+          const invocation = slot.actor.invocationId;
           const source = slot.source;
-          if (!source?.checkAvailability || slot.token.signal.aborted || !session.queue.includes(slot)) continue;
+          if (checked.has(invocation) || !source?.checkAvailability || slot.token.signal.aborted ||
+              !session.deferredSlots.has(slot) || !session.queue.includes(slot)) continue;
           try {
             await bounded(source.checkAvailability(slot.token.signal), slot.token.signal, 10_000);
           } catch (error: unknown) {
-            if (!slot.token.signal.aborted && !(error instanceof MusicError &&
+            // A slot removed during its check says nothing about the rest of its invocation.
+            if (slot.token.signal.aborted) continue;
+            checked.add(invocation);
+            if (!(error instanceof MusicError &&
                 ['requester_left_voice', 'requester_disconnected', 'cancelled'].includes(error.code))) {
               await this.reportRuntimeError(session.serverId, error);
             }
             continue;
           }
+          checked.add(invocation);
           // Membership changes during the RPC require a fresh check. Counts and
           // reused session IDs are never sufficient to authorize a retained source.
           await this.serial(session, () => {
-            if (session.availabilityRequested || session.closing || this.disposed ||
-                slot.token.signal.aborted || !session.queue.includes(slot)) return;
-            session.deferredSlots.delete(slot);
+            if (session.availabilityRequested || session.closing || this.disposed) return;
+            for (const entry of [...session.deferredSlots]) {
+              if (entry.actor.invocationId === invocation && !entry.token.signal.aborted &&
+                  session.queue.includes(entry)) session.deferredSlots.delete(entry);
+            }
             this.pump(session);
           });
         }

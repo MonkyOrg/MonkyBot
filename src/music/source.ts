@@ -4,8 +4,8 @@ import { musicToolPaths } from './toolPaths';
 
 export {
   MUSIC_PREVIEW_DURATION_MS, MAX_SOURCE_RECOVERIES, IncompleteAudioError,
-  musicInput, videoUrl, audioUrl, parseTrack,
-  type Track, type ResolvedTrack, type AudioStream, type MusicSource,
+  musicInput, videoUrl, playlistLink, playlistUrl, audioUrl, parseTrack,
+  type Track, type ResolvedTrack, type Playlist, type PlaylistLink, type AudioStream, type MusicSource,
   type SourceRecoveryNotice, type SourceRecoveryOptions, type PersistentSourceOptions, type SourceOpenOptions,
 } from '@monky/bot-sdk/dist/localRuntime';
 

@@ -347,7 +347,7 @@ test('production registration uses local execution and controls do not request c
   let connection;
   const bot = Object.assign(new EventEmitter(), f.provider, {
     settings: () => {},
-    getServerSettings: () => ({ schemaRevision: 1, revision: 1, values: { music_idle_seconds: 60 } }),
+    getServerSettings: () => ({ schemaRevision: 1, revision: 1, values: { music_idle_seconds: 60, music_queue_limit: 100 } }),
     onSettingsChanged: () => () => {},
     command: command => commands.set(command.name, command),
     sendMessage: async (_serverId, _channelId, content) => { chats.push(botMessageText(content)); },

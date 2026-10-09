@@ -6,6 +6,7 @@ import {
   type CommandAutocompleteContext,
   type LocalExecutionClient,
   type LocalExecutionProvider,
+  type LocalExecutor,
   type LocalMediaTrack,
   type LocalOpusStream,
   type LocalSourceContext,
@@ -22,7 +23,38 @@ import type {
   QueueMusicSource,
   QueueMusicSourceFactory,
 } from './queue';
-import { musicInput, videoUrl } from './source';
+import { musicSuggestions, type MusicSuggestion, type PlaylistRead } from './playlist';
+import { videoUrl } from './source';
+
+/**
+ * Source RPCs held at once by this bot. The server admits 16 pending local requests per bot,
+ * including searches and streams, and the SDK at most 100 pending source requests: clearing a
+ * 500-track queue must not turn into hundreds of simultaneous releases. Releases get their own
+ * lane so a large backlog never delays retaining new tracks or availability checks.
+ */
+const SOURCE_RPC_CONCURRENCY = 4;
+const SOURCE_RELEASE_CONCURRENCY = 2;
+
+type RpcLimiter = <R>(task: () => Promise<R>) => Promise<R>;
+
+function rpcLimiter(concurrency: number): RpcLimiter {
+  let active = 0;
+  const waiting: (() => void)[] = [];
+  return async (task) => {
+    if (active < concurrency) active++;
+    else await new Promise<void>((resolve) => waiting.push(resolve));
+    try {
+      return await task();
+    } finally {
+      // Hand the slot straight to the next waiter, or free it.
+      const next = waiting.shift();
+      if (next) next();
+      else active--;
+    }
+  };
+}
+
+const unlimited: RpcLimiter = (task) => task();
 
 const failureCodes: Readonly<Record<LocalTaskFailureReason, MusicErrorCode>> = {
   invalid_request: 'input',
@@ -55,6 +87,11 @@ const cancellationCodes: Readonly<Record<LocalTaskCancellationCause, MusicErrorC
 
 export function localMusicFailure(error: unknown): unknown {
   if (error instanceof LocalExecutionRpcError) {
+    // The SDK refuses before sending when the server lacks the operation; the server
+    // answers executor_unavailable when the requester's client lacks it.
+    if (error.code === ProtocolErrorCode.FEATURE_REQUIRES_UPDATE) {
+      return new MusicError(error.reason === 'executor_unavailable' ? 'client_outdated' : 'server_outdated');
+    }
     if (error.cancellationCause) return new MusicError(cancellationCodes[error.cancellationCause]);
     if (error.reason) return new MusicError(failureCodes[error.reason]);
     switch (error.code) {
@@ -104,26 +141,71 @@ export function localVideoUrl(resourceId: string): string {
   return videoUrl(`https://www.youtube.com/watch?v=${resourceId}`);
 }
 
+function checkedPlaylist(
+  result: { title: string | null; total: number | null; tracks: LocalMediaTrack[]; skipped: number },
+  limit: number,
+): PlaylistRead<LocalMediaTrack> {
+  if (!Array.isArray(result.tracks) || !Number.isSafeInteger(result.skipped) || result.skipped < 0 ||
+      result.tracks.length + result.skipped > limit ||
+      result.total !== null && (!Number.isSafeInteger(result.total) || result.total < 0) ||
+      result.title !== null && typeof result.title !== 'string') {
+    throw new MusicError('unavailable');
+  }
+  const title = result.title?.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 512);
+  return Object.freeze({
+    title: title || null, total: result.total, skipped: result.skipped,
+    tracks: result.tracks.map((track) => checkedTrack(track)),
+  });
+}
+
 export async function localMusicAutocomplete(
   provider: LocalExecutionProvider,
   ctx: CommandAutocompleteContext,
-): Promise<LocalMediaTrack[]> {
+): Promise<MusicSuggestion<LocalMediaTrack>[]> {
   try {
     aborted(ctx.signal);
-    const input = musicInput(ctx.query);
-    const executor = provider.localExecution(ctx.serverId)
-      .executor({ kind: 'autocomplete', requestId: ctx.requestId });
-    const tracks = input.kind === 'url'
-      ? [(await executor.execute(
-        { operation: 'youtube.resolve', url: input.value },
+    let client: LocalExecutionClient | undefined;
+    let executor: LocalExecutor | undefined;
+    const local = (): LocalExecutor => {
+      client ??= provider.localExecution(ctx.serverId);
+      return executor ??= client.executor({ kind: 'autocomplete', requestId: ctx.requestId });
+    };
+    const suggestions = await musicSuggestions(ctx.query, ctx.signal, {
+      search: async (query) => (await local().execute(
+        { operation: 'youtube.search', query },
         { signal: ctx.signal },
-      )).track]
-      : (await executor.execute(
-        { operation: 'youtube.search', query: input.value },
+      )).tracks.map((track) => checkedTrack(track)),
+      resolve: async (url) => checkedTrack((await local().execute(
+        { operation: 'youtube.resolve', url },
         { signal: ctx.signal },
-      )).tracks;
+      )).track),
+      playlist: async (url, limit) => checkedPlaylist(await local().execute(
+        { operation: 'youtube.playlist', url, limit },
+        { signal: ctx.signal },
+      ), limit),
+      supportsPlaylists: () => (client ??= provider.localExecution(ctx.serverId)).supports('youtube.playlist'),
+    });
     aborted(ctx.signal);
-    return tracks.map((track) => checkedTrack(track));
+    return suggestions;
+  } catch (error: unknown) {
+    throw localMusicFailure(error);
+  }
+}
+
+/** Reads a playlist on the requester's client, bound to the running /play invocation. */
+export async function localMusicPlaylist(
+  provider: LocalExecutionProvider,
+  ctx: { serverId: string; invocationId: string; signal: AbortSignal },
+  url: string,
+  limit: number,
+): Promise<PlaylistRead<LocalMediaTrack>> {
+  try {
+    aborted(ctx.signal);
+    const result = await provider.localExecution(ctx.serverId)
+      .executor({ kind: 'invocation', invocationId: ctx.invocationId })
+      .execute({ operation: 'youtube.playlist', url, limit }, { signal: ctx.signal });
+    aborted(ctx.signal);
+    return checkedPlaylist(result, limit);
   } catch (error: unknown) {
     throw localMusicFailure(error);
   }
@@ -148,7 +230,7 @@ export async function localMusicPreview(
   }
 }
 
-class LocalQueueAudioStream implements QueueAudioStream {
+class LocalQueueAudioStream implements QueueAudioStream<LocalMediaTrack> {
   readonly frames: AsyncIterable<Uint8Array>;
   readonly signal: AbortSignal;
   readonly closed: Promise<void>;
@@ -156,7 +238,7 @@ class LocalQueueAudioStream implements QueueAudioStream {
   private readonly controller = new AbortController();
   private readonly cancel: () => void;
 
-  constructor(private readonly stream: LocalOpusStream) {
+  constructor(private readonly stream: LocalOpusStream, readonly track: LocalMediaTrack) {
     this.signal = this.controller.signal;
     this.cancel = () => this.controller.abort(localMusicFailure(this.stream.signal.reason));
     this.stream.signal.addEventListener('abort', this.cancel, { once: true });
@@ -210,7 +292,14 @@ export class LocalMusicSource implements QueueMusicSource<LocalMediaTrack> {
     private readonly client: LocalExecutionClient,
     readonly reference: LocalSourceContext,
     private readonly voiceChannelId: string,
+    private readonly rpc: RpcLimiter = unlimited,
+    private readonly releases: RpcLimiter = rpc,
   ) {}
+
+  /** The server discards a retained source after its fixed lifetime (24 hours); it cannot be renewed. */
+  private assertCurrent(): void {
+    if (Date.now() >= this.reference.expiresAt) throw new MusicError('expired');
+  }
 
   async check(signal: AbortSignal): Promise<void> {
     aborted(signal);
@@ -218,8 +307,11 @@ export class LocalMusicSource implements QueueMusicSource<LocalMediaTrack> {
 
   async checkAvailability(signal: AbortSignal): Promise<void> {
     aborted(signal);
+    this.assertCurrent();
     try {
-      await this.client.checkSourceAvailability(this.reference.sourceContextId, this.voiceChannelId, { signal });
+      await this.rpc(() => this.client.checkSourceAvailability(
+        this.reference.sourceContextId, this.voiceChannelId, { signal },
+      ));
       aborted(signal);
     } catch (error: unknown) {
       throw localMusicFailure(error);
@@ -247,9 +339,10 @@ export class LocalMusicSource implements QueueMusicSource<LocalMediaTrack> {
   async open(
     track: LocalMediaTrack,
     signal: AbortSignal,
-  ): Promise<QueueAudioStream> {
+  ): Promise<QueueAudioStream<LocalMediaTrack>> {
     aborted(signal);
     checkedTrack(track, this.reference.url);
+    this.assertCurrent();
     try {
       const stream = await this.client.executor({
         kind: 'source',
@@ -260,8 +353,8 @@ export class LocalMusicSource implements QueueMusicSource<LocalMediaTrack> {
       );
       try {
         aborted(signal);
-        checkedTrack(stream.track, this.reference.url);
-        return new LocalQueueAudioStream(stream);
+        // Flat playlist metadata can differ from the stream's; only the video identity must match.
+        return new LocalQueueAudioStream(stream, checkedTrack(stream.track, this.reference.url));
       } catch (error: unknown) {
         try {
           await stream.close();
@@ -279,11 +372,17 @@ export class LocalMusicSource implements QueueMusicSource<LocalMediaTrack> {
   }
 
   release(): Promise<void> {
-    return this.releasePromise ??= this.client.releaseSource(this.reference.sourceContextId);
+    // An expired source is already gone from the server; releasing it would only fail.
+    return this.releasePromise ??= Date.now() >= this.reference.expiresAt
+      ? Promise.resolve()
+      : this.releases(() => this.client.releaseSource(this.reference.sourceContextId));
   }
 }
 
 export class LocalMusicSourceFactory implements QueueMusicSourceFactory<LocalMediaTrack> {
+  private readonly rpc = rpcLimiter(SOURCE_RPC_CONCURRENCY);
+  private readonly releases = rpcLimiter(SOURCE_RELEASE_CONCURRENCY);
+
   constructor(private readonly provider: LocalExecutionProvider) {}
 
   async bind(actor: MusicActor, url: string, signal: AbortSignal): Promise<LocalMusicSource> {
@@ -292,13 +391,18 @@ export class LocalMusicSourceFactory implements QueueMusicSourceFactory<LocalMed
     const canonical = videoUrl(url);
     const client = this.provider.localExecution(actor.serverId);
     try {
-      const retained = await client.retainSource(actor.invocationId, canonical, { signal });
+      const retained = await this.rpc(() => {
+        aborted(signal);
+        return client.retainSource(actor.invocationId, canonical, { signal });
+      });
       try {
         aborted(signal);
-        return new LocalMusicSource(client, checkedSource(retained, actor, canonical), actor.voiceChannelId);
+        return new LocalMusicSource(
+          client, checkedSource(retained, actor, canonical), actor.voiceChannelId, this.rpc, this.releases,
+        );
       } catch (error: unknown) {
         try {
-          await client.releaseSource(retained.sourceContextId);
+          await this.releases(() => client.releaseSource(retained.sourceContextId));
         } catch (releaseError: unknown) {
           console.error(`[music] ${cliText(
             'Não foi possível liberar um contexto local inválido.',

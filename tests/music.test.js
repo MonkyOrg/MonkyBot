@@ -73,7 +73,7 @@ function fixture(t, options = {}) {
   const queues = new MusicQueues(source, voice, async (event, signal) => {
     notices.push(event);
     await options.notify?.(event, signal);
-  }, options.grace, options.configuredGrace);
+  }, options.grace, options.configuredGrace, options.queueLimit);
   t.after(() => queues.dispose());
   return { queues, source, voice, writes, opens, notices, closed, connections };
 }
@@ -1546,7 +1546,7 @@ for (const [configured, grace] of [[undefined, 60000], ['1', 1000], ['600', 6000
       settings: definition => {
         assert.equal(definition.server.fields[0].name, 'music_idle_seconds');
         assert.equal(definition.server.fields[0].defaultValue, grace / 1000);
-        settings = { schemaRevision: 1, revision: 0, values: { music_idle_seconds: grace / 1000 } };
+        settings = { schemaRevision: 1, revision: 0, values: { music_idle_seconds: grace / 1000, music_queue_limit: 100 } };
       },
       getServerSettings: () => settings,
       onSettingsChanged: listener => {
@@ -1693,15 +1693,18 @@ test('missing voice at playback start reports one stop even without a connection
   assert.equal(f.notices.some(notice => notice.type === 'ended'), false);
 });
 
-test('idle grace disconnects and queue limit includes unresolved reservations', async t => {
+test('idle grace disconnects and the default queue limit includes unresolved reservations', async t => {
   const f = fixture(t, { frames: 1, grace: 20 });
   await f.queues.enqueue(actor(), 'one');
   await until(() => f.queues.snapshot('a').channelId === null);
   const gate = deferred();
   f.source.resolve = () => gate.promise;
-  const queued = Array.from({ length: 50 }, () => f.queues.enqueue(actor(), 'pending').catch(error => error));
+  const queued = Array.from({ length: 100 }, () => f.queues.enqueue(actor(), 'pending').catch(error => error));
   await tick();
-  await assert.rejects(f.queues.enqueue(actor(), 'overflow'), { code: 'full' });
+  const full = await f.queues.enqueue(actor(), 'overflow').catch(error => error);
+  assert.equal(full.code, 'full');
+  assert.equal(full.limit, 100);
+  assert.deepEqual(f.queues.capacity('a'), { limit: 100, free: 0 });
   await f.queues.control(actor(), 'stop');
   gate.resolve(track('pending'));
   const results = await Promise.all(queued);

@@ -120,7 +120,7 @@ function registeredSource(t, source) {
   t.mock.method(LocalMusicSourceFactory.prototype, 'bind', async () => source);
   const bot = Object.assign(new EventEmitter(), {
     settings: () => {},
-    getServerSettings: () => ({ schemaRevision: 1, revision: 1, values: { [MUSIC_IDLE_SETTING]: 60 } }),
+    getServerSettings: () => ({ schemaRevision: 1, revision: 1, values: { [MUSIC_IDLE_SETTING]: 60, music_queue_limit: 100 } }),
     onSettingsChanged: () => () => {},
     command: command => commands.set(command.name, command),
     sendMessage: async (_serverId, _channelId, content) => { chats.push(botMessageText(content)); },

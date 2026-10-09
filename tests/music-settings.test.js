@@ -11,7 +11,8 @@ const { IncompleteAudioError } = require('../dist/music/source');
 const { LocalMusicSourceFactory } = require('../dist/music/localSource');
 const { SourceRecoveryError } = require('../dist/music/errors');
 const {
-  MUSIC_IDLE_SETTING, defaultMusicIdleSeconds, musicSettingsDefinition, musicIdleMilliseconds,
+  MUSIC_IDLE_SETTING, MUSIC_QUEUE_LIMIT_SETTING, defaultMusicIdleSeconds, musicSettingsDefinition,
+  musicIdleMilliseconds, musicQueueLimit,
 } = require('../dist/music/settings');
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -63,8 +64,8 @@ function registered(t, { frames = 1, open } = {}) {
   });
   const dispose = registerMusicCommands(bot);
   t.after(dispose);
-  const configure = (serverId, seconds) => {
-    const snapshot = { schemaRevision: 1, revision: 1, values: { [MUSIC_IDLE_SETTING]: seconds } };
+  const configure = (serverId, seconds, queueLimit = 100) => {
+    const snapshot = { schemaRevision: 1, revision: 1, values: { [MUSIC_IDLE_SETTING]: seconds, [MUSIC_QUEUE_LIMIT_SETTING]: queueLimit } };
     settings.set(serverId, snapshot);
     bot.emit('settingsChanged', snapshot, { serverId });
   };
@@ -166,6 +167,45 @@ test('music idle is a valid shared bot setting with localized labels and bounded
   }
 });
 
+test('the queue limit is a per-server integer setting from 10 to 500, 100 by default', async () => {
+  const bot = new BotClient({ publicKey: 'fixture', requestedCapabilities: [] });
+  try {
+    const definition = musicSettingsDefinition(60);
+    assert.doesNotThrow(() => bot.settings(definition));
+    const field = definition.server.fields.find(candidate => candidate.name === MUSIC_QUEUE_LIMIT_SETTING);
+    assert.equal(MUSIC_QUEUE_LIMIT_SETTING, 'music_queue_limit');
+    assert.equal(field.type, 'integer');
+    assert.equal(field.defaultValue, 100);
+    assert.equal(field.min, 10);
+    assert.equal(field.max, 500);
+    assert.equal(definition.localizations['pt-BR'].server.fields[MUSIC_QUEUE_LIMIT_SETTING].label, 'Limite da fila (faixas)');
+  } finally {
+    await bot.close();
+  }
+  const snapshot = value => ({ schemaRevision: 1, revision: 2, values: { [MUSIC_IDLE_SETTING]: 60, [MUSIC_QUEUE_LIMIT_SETTING]: value } });
+  for (const limit of [10, 100, 500]) assert.equal(musicQueueLimit(snapshot(limit)), limit);
+  for (const value of [undefined, '100', 9, 501, 1.5, NaN, null]) {
+    assert.throws(() => musicQueueLimit(snapshot(value)), { code: 'settings' });
+  }
+  assert.throws(() => musicQueueLimit(undefined), { code: 'settings' });
+});
+
+test('registered music enforces the live per-server queue limit', async t => {
+  const f = registered(t, { frames: 1000 });
+  f.configure('a', 60, 10);
+  for (let index = 0; index < 11; index++) {
+    const { replies } = await f.play();
+    assert.doesNotMatch(replies.at(-1), /full/);
+  }
+  const full = await f.play();
+  assert.match(full.replies.at(-1), /The queue is full \(limit of 10 tracks, including pending loads\)/);
+  f.configure('a', 60, 11);
+  const raised = await f.play();
+  assert.doesNotMatch(raised.replies.at(-1), /full/);
+  f.configure('a', 60, 10);
+  const lowered = await f.play();
+  assert.match(lowered.replies.at(-1), /limit of 10 tracks/);
+});
 test('runtime idle uses validated server values instead of silently falling back to host defaults', () => {
   for (const seconds of [1, 60, 120, 600]) {
     assert.equal(musicIdleMilliseconds({

@@ -78,12 +78,18 @@ com `MONKY_GAMES_ELECTRON` apontando para o executável Electron do checkout Mon
 
 ## Compatibilidade
 
-Esta beta usa **protocolo Monky 37** com o SDK oficial **37.0.0-beta**.
-Use cliente e servidor Monky **v37.0.0-beta**; o teste externo de portas do
-`monkybot doctor` exige um servidor no protocolo 37. O SDK incluído é
+Esta beta usa **protocolo Monky 38** com o SDK oficial **38.0.0-beta**.
+Use cliente e servidor Monky **v38.0.0-beta**; o teste externo de portas do
+`monkybot doctor` exige um servidor no protocolo 37 ou mais novo. O SDK incluído é
 verificado no build e não precisa ser instalado à parte.
 Perfis, identidades, vínculos, idiomas e capacidades solicitadas são preservados;
-a atualização não habilita recepção de microfones.
+a atualização não habilita recepção de microfones nem muda os acessos declarados
+ao host: o consentimento já dado continua válido.
+
+Playlists do YouTube e álbuns do YouTube Music (veja
+[Playlists e álbuns](#playlists-e-álbuns)) exigem o servidor e o cliente de quem
+pede na **v38.0.0-beta** ou mais nova. Com um deles desatualizado, `/tocar`
+explica qual precisa ser atualizado e continua aceitando vídeos avulsos.
 
 O comando `monkybot` agora é o **CLI de bots do SDK do Monky**, o mesmo usado
 pelos demais bots (como o Myinstants): os comandos, o consentimento, o
@@ -290,7 +296,7 @@ anterior), que pode ocupar as portas; o token no modo manual; cada porta, livre 
 em uso **por este bot** (desafio assinado com a chave Ed25519) e a validade do
 manifest; e a URL pública vista desta máquina. Com o servidor Monky, verifica
 alcance, token, vínculo da chave, protocolo e faz um **teste externo** das portas
-públicas TCP pela rede do servidor (exige servidor no protocolo 37). No modo URL,
+públicas TCP pela rede do servidor (exige servidor no protocolo 37 ou mais novo). No modo URL,
 usa até três servidores de `.keys/registrations.json`; sem vínculo, o teste
 externo é pulado. Portas livres recebem um respondedor temporário durante o teste,
 então dá para testar o firewall com o bot parado ou antes de alguém abrir um jogo.
@@ -575,7 +581,7 @@ Nome e avatar vêm do bot; não há criação ou edição de perfil no cliente.
 | `/bola-magica <pergunta>` | Responde à pergunta completa obrigatória, em privado |
 | `/lembrete` | Agenda uma mensagem persistente no canal atual |
 | `/sorteio` | Publica uma live action persistente para inscrições e sorteio automático |
-| `/tocar <busca>` | Busca por nome ou link do YouTube, prévia privada e seleção para adicionar à fila |
+| `/tocar <busca>` | Busca por nome ou link do YouTube, prévia privada e seleção para adicionar à fila; aceita links de playlists e álbuns |
 | `/fila` | Faixa atual e fila numerada de próximas faixas |
 | `/tocando` | Faixa atual, pausa/carregamento e posição |
 | `/pausar` / `/retomar` | Pausa e retoma na mesma posição, sem reiniciar |
@@ -675,10 +681,12 @@ bloqueio de IP ou necessidade de autenticação.
 
 #### Reprodução e recuperação
 
-1. Entre numa sala de voz e execute `/play` com nome ou link individual
-   `https://www.youtube.com/watch?v=...` / `https://youtu.be/...`.
+1. Entre numa sala de voz e execute `/play` com nome, link de vídeo
+   `https://www.youtube.com/watch?v=...` / `https://youtu.be/...` ou link de
+   playlist (veja [Playlists e álbuns](#playlists-e-álbuns)).
 2. As sugestões aparecem durante a digitação, com até **8 resultados públicos
-   elegíveis**. Um link individual retorna a sugestão daquele vídeo. O cliente
+   elegíveis**. Um link de vídeo retorna a sugestão daquele vídeo; se ele também
+   tiver uma playlist, a sugestão da playlist vem logo depois. O cliente
    aplica debounce, limita a frequência e descarta buscas anteriores.
    O botão de ouvir gera uma **prévia privada de até 10 segundos**, somente
    quando clicado: ela toca no seu cliente e não adiciona nada à fila.
@@ -725,8 +733,12 @@ avançando em silêncio, e a fila passa à próxima faixa no término normal.
 Ao remover o bloqueio, o áudio volta na posição atual, sem reiniciar a faixa.
 Isso não altera `/pause`: uma pausa manual continua parada até `/resume`.
 
-Há uma fila/conexão independente por servidor, até **50 próximas faixas**
-(incluindo adições em resolução) e vídeos de no máximo **1 hora**. Adições
+Há uma fila/conexão independente por servidor, com até **100 próximas faixas** por
+padrão (incluindo adições em resolução) e vídeos de no máximo **1 hora**. O limite
+da fila é configurável de **10 a 500** em
+**botão direito no bot → Configurações do bot → Comportamento neste servidor → Música → Limite da fila (faixas)**;
+reduzi-lo não remove faixas já na fila, só impede novas entradas até a fila
+diminuir. `/remover` aceita posições até 500. Adições
 concorrentes mantêm a ordem de confirmação, mesmo com resoluções fora de ordem.
 O cliente prepara consentimento e ferramentas antes dos prazos de **15s para
 autocomplete** e **30s para prévia**. A prévia permanece no cliente de origem:
@@ -801,11 +813,37 @@ encerramento do bot e o prazo configurado de sala vazia cancelam a recuperação
 A pausa manual preserva a posição, e as prévias privadas continuam limitadas
 a dez segundos, sem adotar essa espera persistente.
 
-**Sem Spotify, playlists, álbuns, lives ou conteúdo com autenticação/paywall
-nesta versão.** Links de um vídeo individual podem conter `list`, `index` ou
-`start_radio`: esse contexto é descartado e somente o vídeo selecionado entra
-na fila. Links apenas de playlist, sem vídeo individual válido, são rejeitados;
-isso não adiciona reprodução de playlists ou rádios contínuas.
+#### Playlists e álbuns
+
+`/tocar` aceita playlists do YouTube e álbuns do YouTube Music
+(`https://www.youtube.com/playlist?list=...`, `https://music.youtube.com/playlist?list=OLAK5uy_...`).
+Ao colar um link de vídeo que também tem uma playlist (`watch?v=...&list=...`),
+as sugestões mostram **primeiro o vídeo e depois a playlist**, com o título e o
+número de vídeos. Um link só
+de playlist sugere apenas a playlist. A leitura roda no cliente de quem pede,
+como as buscas, e a playlist não tem prévia de áudio.
+
+Ao escolher a playlist, o bot lê no máximo as vagas livres da fila (até 500
+faixas, na ordem da playlist) e adiciona, de uma vez e em sequência, o que couber.
+Entradas com mais de 1 hora, ao vivo, privadas ou sem duração são puladas. Um
+aviso público informa quantas faixas entraram, quantas foram puladas e quantas
+ficaram de fora por falta de espaço; quando o YouTube não informa o total, o aviso
+diz que a playlist pode ter mais faixas. Cancelar o pedido antes desse aviso
+desfaz toda a adição. Cada faixa é validada novamente quando chega a vez dela:
+um vídeo que ficou privado ou tem restrição de idade é pulado e a fila continua.
+Cada pedido vale por até 24 horas: uma faixa que esperar mais que isso na fila
+expira e precisa ser adicionada de novo.
+
+Faixas de playlist seguem as mesmas regras das demais: pertencem a quem pediu,
+ficam **aguardando solicitante** se essa pessoa sair da voz e podem ser removidas
+com `/remover`, `/limpar` ou `/parar`. Mixes e rádios (`list=RD…`) não são
+suportados, porque são infinitos e personalizados por conta.
+
+**Sem Spotify, mixes/rádios do YouTube, lives ou conteúdo com autenticação/paywall
+nesta versão.** Links de um vídeo podem conter `list`, `index` ou `start_radio`:
+colado e enviado sem escolher uma sugestão, o link adiciona somente o vídeo.
+Mixes (`list=RD…`) nunca são lidos: a sugestão e a resposta avisam que só o
+vídeo será adicionado.
 URLs arbitrárias não são aceitas. A extração com yt-dlp **não é uma API oficial
 de áudio do YouTube**: pode deixar de funcionar e está sujeita aos termos da
 plataforma. Utilize somente mídia própria ou autorizada e respeite direitos

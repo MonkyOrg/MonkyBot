@@ -30,7 +30,7 @@
     "node": ">=18"
   },
   "monky": {
-    "protocolVersion": 37
+    "protocolVersion": 38
   },
   "monkyBot": {
     "cliName": "monkybot",
@@ -82,7 +82,7 @@
     }
   },
   "dependencies": {
-    "@monky/bot-sdk": "file:vendor/monky-bot-sdk-37.0.0-beta.tgz",
+    "@monky/bot-sdk": "file:vendor/monky-bot-sdk-38.0.0-beta.tgz",
     "jsnes": "2.1.0",
     "ws": "8.18.3"
   },

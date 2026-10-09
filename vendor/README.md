@@ -1,8 +1,27 @@
 # SDK compativel
 
-## SDK oficial atual (protocolo 37)
+## SDK oficial atual (protocolo 38)
 
-A dependencia ativa e `monky-bot-sdk-37.0.0-beta.tgz`, da
+A dependencia ativa e `monky-bot-sdk-38.0.0-beta.tgz`, da
+[release Monky v38.0.0-beta](https://github.com/MonkyOrg/Monky/releases/tag/v38.0.0-beta)
+(MonkyOrg/Monky#775, MonkyOrg/Monky#752). Inclui protocolo **38** (piso de bots
+24, piso de clientes 35) e a operacao local `youtube.playlist`, com
+`playlistLink`/`playlistUrl` no runtime de midia, usada pelo `/tocar` para
+playlists do YouTube e albuns do YouTube Music. Playlists exigem servidor e
+cliente de quem pede no protocolo 38; o SDK informa quando um deles esta
+desatualizado. O CLI reutilizavel e os `requirements` nao mudaram: a impressao
+digital do consentimento continua a mesma.
+
+Origem: commit `d18266ee57b91923d9caa5042dffde48447baec9`, workflow
+[Release 37990157956](https://github.com/MonkyOrg/Monky/actions/runs/37990157956).
+Bytes oficiais sem modificacoes, conferidos contra o digest SHA-256 publicado:
+`661e12f7e35badef3111e5efefd2710f93d5f4167e13ffcac1c2b4c15a2f52a8`.
+Tamanho: 6.221.912 bytes. Dependencia e lockfile fixam os mesmos bytes.
+Perfis, identidades, vinculos e consentimentos existentes permanecem preservados.
+
+## SDK oficial anterior (protocolo 37)
+
+A dependencia anterior era `monky-bot-sdk-37.0.0-beta.tgz`, da
 [release Monky v37.0.0-beta](https://github.com/MonkyOrg/Monky/releases/tag/v37.0.0-beta)
 (MonkyOrg/Monky#771, MonkyOrg/Monky#769). Inclui protocolo **37** (piso de bots
 24) e o CLI reutilizavel de bots com `requirements`, `doctor`, `consent` com

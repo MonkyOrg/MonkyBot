@@ -3,6 +3,11 @@ import { MusicError } from './errors';
 import { cliText } from '../i18n';
 
 export const MUSIC_IDLE_SETTING = 'music_idle_seconds';
+export const MUSIC_QUEUE_LIMIT_SETTING = 'music_queue_limit';
+export const MUSIC_QUEUE_LIMIT_DEFAULT = 100;
+export const MUSIC_QUEUE_LIMIT_MIN = 10;
+/** Also the most tracks one playlist read may return. */
+export const MUSIC_QUEUE_LIMIT_MAX = 500;
 
 export function defaultMusicIdleSeconds(configured = process.env.MONKY_MUSIC_GRACE_SECONDS): number {
   if (configured === undefined) return 60;
@@ -25,6 +30,12 @@ export function musicSettingsDefinition(defaultSeconds: number): BotSettingsDefi
         label: 'Idle timeout (seconds)',
         description: 'Leave voice after the queue ends or the room stays empty for this long.',
         required: true, min: 1, max: 600, defaultValue: defaultSeconds,
+      }, {
+        name: MUSIC_QUEUE_LIMIT_SETTING,
+        type: 'integer',
+        label: 'Queue limit (tracks)',
+        description: 'Most upcoming tracks, including pending loads. Lowering it never removes queued tracks.',
+        required: true, min: MUSIC_QUEUE_LIMIT_MIN, max: MUSIC_QUEUE_LIMIT_MAX, defaultValue: MUSIC_QUEUE_LIMIT_DEFAULT,
       }],
     },
     localizations: {
@@ -36,6 +47,10 @@ export function musicSettingsDefinition(defaultSeconds: number): BotSettingsDefi
             [MUSIC_IDLE_SETTING]: {
               label: 'Tempo de inatividade (segundos)',
               description: 'Sair da voz ap\u00f3s a fila acabar ou a sala ficar vazia por esse tempo.',
+            },
+            [MUSIC_QUEUE_LIMIT_SETTING]: {
+              label: 'Limite da fila (faixas)',
+              description: 'M\u00e1ximo de pr\u00f3ximas faixas, incluindo carregamentos. Reduzir o limite nunca remove faixas j\u00e1 na fila.',
             },
           },
         },
@@ -50,4 +65,13 @@ export function musicIdleMilliseconds(snapshot: BotServerSettingsSnapshot | unde
     throw new MusicError('settings');
   }
   return seconds * 1000;
+}
+
+export function musicQueueLimit(snapshot: BotServerSettingsSnapshot | undefined): number {
+  const limit = snapshot?.values[MUSIC_QUEUE_LIMIT_SETTING];
+  if (typeof limit !== 'number' || !Number.isInteger(limit) ||
+      limit < MUSIC_QUEUE_LIMIT_MIN || limit > MUSIC_QUEUE_LIMIT_MAX) {
+    throw new MusicError('settings');
+  }
+  return limit;
 }

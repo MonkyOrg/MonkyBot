@@ -4,25 +4,28 @@ import type {
 } from '@monky/bot-sdk';
 import { LIMITS } from '@monky/bot-sdk';
 import { MusicQueues, type MusicActor, type MusicNotice } from '../music/queue';
-import { MusicError, aborted, musicError } from '../music/errors';
-import { IncompleteAudioError, MUSIC_PREVIEW_DURATION_MS, musicInput, videoUrl, type MusicSource, type Track } from '../music/source';
+import { MusicError, QueueFullError, aborted, musicError } from '../music/errors';
+import { IncompleteAudioError, MUSIC_PREVIEW_DURATION_MS, videoUrl, type MusicSource, type ResolvedTrack, type Track } from '../music/source';
 import { bounded, errorDiagnostic } from '../music/process';
 import { message, translate, type LocalizedCommandDefinition } from './i18n';
 import { cliText } from '../i18n';
-import { defaultMusicIdleSeconds, musicIdleMilliseconds, musicSettingsDefinition } from '../music/settings';
-import { LocalMusicSourceFactory, localMusicAutocomplete, localMusicPreview } from '../music/localSource';
+import {
+  MUSIC_QUEUE_LIMIT_MAX, defaultMusicIdleSeconds, musicIdleMilliseconds, musicQueueLimit, musicSettingsDefinition,
+} from '../music/settings';
+import { LocalMusicSourceFactory, localMusicAutocomplete, localMusicPlaylist, localMusicPreview } from '../music/localSource';
+import { musicSuggestions, playRequest, type MusicSuggestion, type PlaylistRead } from '../music/playlist';
 
 export const musicDefinitions: Omit<LocalizedCommandDefinition, 'handler'>[] = [
-  { name: 'play', voiceRequirement: 'same-bot-channel', description: 'Busca pelo nome ou adiciona um vídeo individual do YouTube à fila.',
+  { name: 'play', voiceRequirement: 'same-bot-channel', description: 'Busca pelo nome ou adiciona um vídeo, uma playlist ou um álbum do YouTube à fila.',
     localizations: { 'pt-BR': { name: 'tocar' }, en: {
       name: 'play',
-      description: 'Search by name or add an individual YouTube video to the queue.',
+      description: 'Search by name or add a YouTube video, playlist or album to the queue.',
       options: { busca: {
-        label: 'Search', description: 'Name or individual YouTube video URL',
-        placeholder: 'Search for a public video or paste its URL',
+        label: 'Search', description: 'Name, or a YouTube video or playlist URL',
+        placeholder: 'Search for a public video or paste a video or playlist URL',
       } },
     } },
-    options: [{ name: 'busca', description: 'Nome ou link de vídeo individual do YouTube', type: 'string', required: true, autocomplete: true }] },
+    options: [{ name: 'busca', description: 'Nome ou link de vídeo ou de playlist do YouTube', type: 'string', required: true, autocomplete: true }] },
   { name: 'queue', voiceRequirement: 'same-bot-channel', description: 'Mostra a faixa atual e a fila de próximas faixas.',
     localizations: { 'pt-BR': { name: 'fila' }, en: { name: 'queue', description: 'Show the current track and upcoming queue.' } } },
   { name: 'nowplaying', voiceRequirement: 'same-bot-channel', description: 'Mostra a faixa atual e a posição da reprodução.',
@@ -43,7 +46,7 @@ export const musicDefinitions: Omit<LocalizedCommandDefinition, 'handler'>[] = [
       description: 'Remove a position from the upcoming queue.',
       options: { position: { label: 'Position', description: 'Position in the upcoming queue' } },
     } },
-    options: [{ name: 'position', description: 'Posição na fila de próximas faixas', type: 'integer', required: true, min: 1, max: 50 }] },
+    options: [{ name: 'position', description: 'Posição na fila de próximas faixas', type: 'integer', required: true, min: 1, max: MUSIC_QUEUE_LIMIT_MAX }] },
   { name: 'clear', voiceRequirement: 'same-bot-channel', description: 'Limpa apenas as próximas faixas; não interrompe a atual.',
     localizations: { 'pt-BR': { name: 'limpar' }, en: { name: 'clear', description: 'Clear only upcoming tracks without interrupting the current track.' } } },
 ];
@@ -82,32 +85,48 @@ function replyLines(ctx: CommandContext, ptBR: string, en: string): void {
   if (ptPart.trim()) ctx.reply(message(ctx.locale, ptPart, enPart));
 }
 
-interface MusicInteractions<T extends Track> {
-  tracks(ctx: CommandAutocompleteContext): Promise<T[]>;
+interface MusicInteractions<TQueue extends Track, TLookup extends Track> {
+  suggestions(ctx: CommandAutocompleteContext): Promise<MusicSuggestion<TLookup>[]>;
   preview(ctx: CommandAudioPreviewContext): Promise<CommandAudioPreviewResponse>;
-  resourceId(track: T): string;
+  /** Reads at most `limit` entries of a canonical playlist URL for this invocation. */
+  playlist(ctx: CommandContext, url: string, limit: number): Promise<PlaylistRead<TQueue>>;
+  resourceId(track: TLookup): string;
   local: boolean;
+}
+
+function playlistChoice(suggestion: Extract<MusicSuggestion<Track>, { kind: 'playlist' }>, locale: BotLocale) {
+  const kind = suggestion.album
+    ? translate(locale, 'Álbum do YouTube Music', 'YouTube Music album')
+    : translate(locale, 'Playlist do YouTube', 'YouTube playlist');
+  const total = suggestion.total;
+  const count = total === null ? '' : suggestion.album
+    ? translate(locale, ` · ${total} ${total === 1 ? 'faixa' : 'faixas'}`, ` · ${total} ${total === 1 ? 'track' : 'tracks'}`)
+    : translate(locale, ` · ${total} ${total === 1 ? 'vídeo' : 'vídeos'}`, ` · ${total} ${total === 1 ? 'video' : 'videos'}`);
+  return { value: suggestion.url, label: (suggestion.title ?? kind).slice(0, 100), description: `${kind}${count}` };
 }
 
 function createMusicCommandSet<TQueue extends Track, TLookup extends Track>(
   queues: MusicQueues<TQueue>,
-  interactions: MusicInteractions<TLookup>,
+  interactions: MusicInteractions<TQueue, TLookup>,
 ): CommandDefinition[] {
   const autocomplete = async (ctx: CommandAutocompleteContext) => {
     if (ctx.signal.aborted) return [];
     try {
       if (ctx.optionName !== 'busca') throw new MusicError('input');
-      const tracks = await interactions.tracks(ctx);
+      const suggestions = await interactions.suggestions(ctx);
       if (ctx.signal.aborted) return [];
-      return tracks.map((track) => ({
-        value: track.url,
-        label: label(track).slice(0, 100),
-        description: translate(ctx.locale, 'YouTube · Prévia privada de 10 segundos', 'YouTube · Private 10-second preview'),
+      return suggestions.map((suggestion) => suggestion.kind === 'playlist' ? playlistChoice(suggestion, ctx.locale) : {
+        value: suggestion.track.url,
+        label: label(suggestion.track).slice(0, 100),
+        description: suggestion.mix
+          ? translate(ctx.locale, 'Mixes do YouTube não são suportados; só este vídeo será adicionado.',
+            'YouTube mixes are not supported; only this video will be added.')
+          : translate(ctx.locale, 'YouTube · Prévia privada de 10 segundos', 'YouTube · Private 10-second preview'),
         audio: {
-          resourceId: interactions.resourceId(track), fileName: `youtube-${track.id}-preview.ogg`,
+          resourceId: interactions.resourceId(suggestion.track), fileName: `youtube-${suggestion.track.id}-preview.ogg`,
           durationMs: MUSIC_PREVIEW_DURATION_MS,
         },
-      }));
+      });
     } catch (error: unknown) {
       throw new Error(musicError(error, ctx.locale), { cause: error });
     }
@@ -153,12 +172,34 @@ function createMusicCommandSet<TQueue extends Track, TLookup extends Track>(
           return;
         }
         if (definition.name === 'play') {
-          const input = musicInput(ctx.args.busca);
-          if (input.kind !== 'url') throw new MusicError('selection');
+          const request = playRequest(ctx.args.busca);
+          if (request.kind === 'search') throw new MusicError('selection');
+          if (request.kind === 'playlist') {
+            ctx.reply(message(ctx.locale,
+              '⏳ Recebi a playlist. Estou lendo as faixas para adicioná-las à fila…',
+              '⏳ Playlist received. I am reading its tracks before adding them to the queue…'));
+            const { free, limit } = queues.capacity(caller.serverId);
+            if (!free) throw new QueueFullError(limit);
+            const window = Math.min(free, MUSIC_QUEUE_LIMIT_MAX);
+            const read = await interactions.playlist(ctx, request.url, window);
+            aborted(ctx.signal);
+            if (!read.tracks.length) throw new MusicError('playlist_empty');
+            const seen = read.tracks.length + read.skipped;
+            await queues.enqueuePlaylist(caller, read.tracks, {
+              title: read.title, album: request.album, skipped: read.skipped,
+              // A read that ended before the window is complete: the provider's total also counts
+              // videos it hides. Only a full window may leave entries out, known or not.
+              beyond: seen < window ? 0 : read.total !== null ? Math.max(0, read.total - seen) : null,
+            }, ctx.signal, () => actor(ctx));
+            return;
+          }
+          const mix = request.list?.kind === 'mix';
           ctx.reply(message(ctx.locale,
-            '⏳ Recebi a música. Estou validando os dados para adicioná-la à fila…',
-            '⏳ Track received. I am checking its details before adding it to the queue…'));
-          await queues.enqueue(caller, input.value, ctx.signal, () => actor(ctx));
+            `⏳ Recebi a música. Estou validando os dados para adicioná-la à fila…${mix
+              ? ' Mixes do YouTube não são suportados; só este vídeo será adicionado.' : ''}`,
+            `⏳ Track received. I am checking its details before adding it to the queue…${mix
+              ? ' YouTube mixes are not supported; only this video will be added.' : ''}`));
+          await queues.enqueue(caller, request.value, ctx.signal, () => actor(ctx));
         } else {
           const control = definition.name;
           if (control !== 'pause' && control !== 'resume' && control !== 'skip' && control !== 'stop' &&
@@ -196,13 +237,25 @@ export function createMusicCommands(queues: MusicQueues, source: MusicSource): C
   return createMusicCommandSet(queues, {
     local: false,
     resourceId: (track) => track.url,
-    tracks: async (ctx) => {
-      const input = musicInput(ctx.query);
+    suggestions: (ctx) => {
+      let checked: Promise<void> | undefined;
+      const ready = async (): Promise<void> => {
+        await (checked ??= source.check(ctx.signal));
+        aborted(ctx.signal);
+      };
+      return musicSuggestions(ctx.query, ctx.signal, {
+        search: async (query) => { await ready(); return source.search(query, ctx.signal); },
+        resolve: async (url) => { await ready(); return source.resolve(url, ctx.signal); },
+        playlist: async (url, limit) => { await ready(); return source.playlist(url, limit, ctx.signal); },
+        supportsPlaylists: () => true,
+      });
+    },
+    playlist: async (ctx, url, limit) => {
       await source.check(ctx.signal);
       aborted(ctx.signal);
-      return input.kind === 'url'
-        ? [await source.resolve(input.value, ctx.signal)]
-        : source.search(input.value, ctx.signal);
+      const read = await source.playlist(url, limit, ctx.signal);
+      // These queues use a shared source that resolves each track again right before opening it.
+      return { ...read, tracks: read.tracks as ResolvedTrack[] };
     },
     preview: async (ctx): Promise<CommandAudioPreviewData> => ({
       bytes: await source.preview(videoUrl(ctx.resourceId), ctx.signal),
@@ -218,7 +271,8 @@ export function createLocalMusicCommands(
   return createMusicCommandSet(queues, {
     local: true,
     resourceId: (track) => track.id,
-    tracks: (ctx) => localMusicAutocomplete(provider, ctx),
+    suggestions: (ctx) => localMusicAutocomplete(provider, ctx),
+    playlist: (ctx, url, limit) => localMusicPlaylist(provider, ctx, url, limit),
     preview: (ctx) => localMusicPreview(provider, ctx),
   });
 }
@@ -235,7 +289,9 @@ export function registerMusicCommands(bot: BotClient): () => Promise<void> {
     else await sending;
   };
   const queues = new MusicQueues(source, bot, notice, seconds * 1000,
-    (serverId) => musicIdleMilliseconds(bot.getServerSettings(serverId)));
+    (serverId) => musicIdleMilliseconds(bot.getServerSettings(serverId)),
+    (serverId) => musicQueueLimit(bot.getServerSettings(serverId)));
+  // The queue limit is read on every addition; only running idle timers need rescheduling.
   const detachSettings = bot.onSettingsChanged((_snapshot, { serverId }) => queues.refreshGracePeriod(serverId));
   for (const command of createLocalMusicCommands(queues, bot)) bot.command(command);
   const interrupted = new Map<string, { actor: MusicActor; sending: boolean }>();
@@ -318,11 +374,39 @@ export function registerMusicCommands(bot: BotClient): () => Promise<void> {
   return dispose;
 }
 
+function playlistNoticeText(event: Extract<MusicNotice, { type: 'playlist-queued' }>, locale: BotLocale): string {
+  const { playlist, added, unreserved, limit } = event;
+  const left = unreserved + (playlist.beyond ?? 0);
+  const title = playlist.title ? ` “${playlist.title}”` : '';
+  const ptKind = playlist.album ? 'o álbum' : 'a playlist';
+  const enKind = playlist.album ? 'album' : 'playlist';
+  const ptLeft = `${left} ${left === 1 ? 'ficou' : 'ficaram'} de fora`;
+  const pt = [
+    `${added} ${added === 1 ? 'faixa entrou' : 'faixas entraram'} na fila`,
+    `${playlist.skipped} ${playlist.skipped === 1 ? 'foi pulada' : 'foram puladas'} (mais de 1 hora, ao vivo, privadas ou restritas)`,
+    playlist.beyond === null
+      ? `${left ? `${ptLeft}; ${ptKind} pode ter mais faixas` : `${ptKind} pode ter mais faixas que não couberam`} (fila cheia: limite de ${limit})`
+      : left ? `${ptLeft} (fila cheia: limite de ${limit})` : 'nenhuma ficou de fora',
+  ];
+  const en = [
+    `${added} ${added === 1 ? 'track' : 'tracks'} queued`,
+    `${playlist.skipped} skipped (over 1 hour, live, private or restricted)`,
+    playlist.beyond === null
+      ? `${left ? `${left} left out; the ${enKind} may have more tracks` : `the ${enKind} may have more tracks that did not fit`} (queue full: ${limit}-track limit)`
+      : left ? `${left} left out (queue full: ${limit}-track limit)` : 'none left out',
+  ];
+  return translate(locale,
+    `📃 ${event.actor.invokerNickname} adicionou ${ptKind}${title}: ${pt[0]}, ${pt[1]} e ${pt[2]}.`,
+    `📃 ${event.actor.invokerNickname} added the ${enKind}${title}: ${en[0]}, ${en[1]} and ${en[2]}.`);
+}
+
 export function musicNoticeText(event: MusicNotice, locale = event.actor.locale): string {
   switch (event.type) {
     case 'queued':
       return translate(locale, `➕ Adicionado à fila por ${event.actor.invokerNickname}: ${label(event.track)}.`,
         `➕ Added to queue by ${event.actor.invokerNickname}: ${label(event.track)}.`);
+    case 'playlist-queued':
+      return playlistNoticeText(event, locale);
     case 'loading':
       return translate(locale,
         `⏳ Preparando para tocar: ${label(event.track)}. Aguarde o início do áudio…`,
