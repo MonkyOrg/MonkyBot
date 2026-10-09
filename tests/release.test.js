@@ -242,6 +242,9 @@ test('notes use the exact channel/version installation URL and treat source note
     assert.deepEqual([...positions].sort((a, b) => a - b), positions);
     assert.match(notes, /monkybot requirements/);
     assert.match(notes, /MONKY_HOST_CONSENT=1/);
+    assert.match(notes, /playlists do YouTube e álbuns do YouTube Music/);
+    assert.match(notes, /servidor Monky v38\.0\.0-beta ou mais novo \(protocolo 38\)/);
+    assert.match(notes, /de 10 a 500 \(padrão 100\)/);
   }
 });
 

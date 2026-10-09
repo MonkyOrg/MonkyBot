@@ -78,12 +78,18 @@ with `MONKY_GAMES_ELECTRON` pointing to the Monky checkout's Electron executable
 
 ## Compatibility
 
-This beta uses **Monky protocol 37** with official SDK **37.0.0-beta**.
-Use the Monky app and server **v37.0.0-beta**; the external port test of
-`monkybot doctor` requires a protocol 37 server. The bundled SDK is checked
+This beta uses **Monky protocol 38** with official SDK **38.0.0-beta**.
+Use the Monky app and server **v38.0.0-beta**; the external port test of
+`monkybot doctor` requires a protocol 37 or newer server. The bundled SDK is checked
 during the build and needs no separate installation.
 Profiles, identities, registrations, languages and requested capabilities are
-preserved; this update does not enable microphone reception.
+preserved; this update neither enables microphone reception nor changes the
+access declared to the host, so existing consent remains valid.
+
+YouTube playlists and YouTube Music albums (see
+[Playlists and albums](#playlists-and-albums)) require the server and the
+requester's app on **v38.0.0-beta** or newer. When either is outdated, `/play`
+says which one needs updating and still accepts single videos.
 
 The `monkybot` command is now the **Monky SDK bot CLI**, the same one used by the
 other bots (such as Myinstants): commands, consent, `doctor` and `requirements`
@@ -289,7 +295,7 @@ profile's PM2 process and a leftover `monkybot` process in the account's default
 free or in use **by this bot** (a challenge signed with the Ed25519 key), and the
 manifest's validity; and the public URL as seen from this machine. With the Monky
 server it checks reachability, token, key link and protocol, and runs an **external
-test** of public TCP ports from the server's network (requires a protocol 37
+test** of public TCP ports from the server's network (requires a protocol 37 or newer
 server). In URL mode it uses up to three servers from `.keys/registrations.json`;
 without a registration the external test is skipped. Free ports get a temporary
 responder during the test, so you can test the firewall with the bot stopped or
@@ -577,7 +583,7 @@ come from the bot; the client does not create or edit its profile.
 | `/8ball <question>` | Answer the required complete question privately |
 | `/reminder` | Schedule a persistent message in the current channel |
 | `/giveaway` | Publish a persistent live action for entries and an automatic draw |
-| `/play <search>` | Search by YouTube name or URL, preview privately, and select to add to queue |
+| `/play <search>` | Search by YouTube name or URL, preview privately, and select to add to queue; accepts playlist and album links |
 | `/queue` | Current track and numbered upcoming queue |
 | `/nowplaying` | Current track, pause/loading state and position |
 | `/pause` / `/resume` | Pause and resume at the same position, without restarting |
@@ -676,10 +682,12 @@ an IP block or an authentication requirement.
 
 #### Playback and recovery
 
-1. Join a voice room and run `/play` with a name or an individual
-   `https://www.youtube.com/watch?v=...` / `https://youtu.be/...` URL.
+1. Join a voice room and run `/play` with a name, a video URL
+   `https://www.youtube.com/watch?v=...` / `https://youtu.be/...` or a playlist
+   URL (see [Playlists and albums](#playlists-and-albums)).
 2. Suggestions appear while typing, with up to **8 eligible public results**.
-   An individual URL returns that video's suggestion. The client debounces,
+   A video URL returns that video's suggestion; when it also carries a playlist,
+   the playlist suggestion comes right after it. The client debounces,
    throttles, and discards superseded searches.
    The listen button generates a **private preview of up to 10 seconds** only
    when clicked: it plays in your client and adds nothing to the queue.
@@ -729,8 +737,12 @@ Removing the restriction restores audio at the current position without
 restarting the track. This does not change `/pause`: a manual pause stays
 paused until `/resume`.
 
-Each server has an independent queue/connection, up to **50 upcoming tracks**
-(including pending resolution), and videos up to **1 hour**. Concurrent accepted
+Each server has an independent queue/connection, with up to **100 upcoming tracks**
+by default (including pending resolution), and videos up to **1 hour**. The queue
+limit is configurable from **10 to 500** under
+**right-click bot → Bot settings → Behavior on this server → Music → Queue limit (tracks)**;
+lowering it never removes queued tracks, it only blocks new entries until the
+queue shrinks. `/remove` accepts positions up to 500. Concurrent accepted
 additions retain their order even when resolution completes out of order.
 The client prepares consent and tools before the **15s autocomplete** and **30s
 preview** deadlines. Preview audio remains on the originating client: only an
@@ -801,11 +813,36 @@ disconnecting voice, bot shutdown and the configured empty-room deadline cancel
 recovery. Manual pause preserves position, and private previews remain limited
 to ten seconds without adopting this persistent wait.
 
-**No Spotify, playlists, albums, live streams or authenticated/paywalled media
-in this version.** Individual video links may include `list`, `index` or
-`start_radio`: that context is discarded and only the selected video is queued.
-Playlist-only URLs without a valid individual video are rejected; this does not
-add playlist or continuous-radio playback.
+#### Playlists and albums
+
+`/play` accepts YouTube playlists and YouTube Music albums
+(`https://www.youtube.com/playlist?list=...`, `https://music.youtube.com/playlist?list=OLAK5uy_...`).
+When you paste a video URL that also carries a playlist (`watch?v=...&list=...`),
+the suggestions show **the video first, then the playlist**, with its title and
+number of videos. A playlist-only URL suggests just the playlist. The read runs on
+the requester's client, like searches, and playlists have no audio preview.
+
+When you choose the playlist, the bot reads at most the free queue slots (up to
+500 tracks, in playlist order) and adds whatever fits, at once and in sequence.
+Entries over 1 hour, live, private or without a duration are skipped. A public
+notice says how many tracks were queued, how many were skipped and how many were
+left out for lack of room; when YouTube does not report a total, it says the
+playlist may have more tracks. Cancelling the request before that notice undoes
+the whole addition. Each track is validated again when its turn comes: a video
+that became private or is age-restricted is skipped and the queue continues.
+Each request lasts up to 24 hours: a track that waits longer than that in the
+queue expires and must be added again.
+
+Playlist tracks follow the same rules as any other track: they belong to the
+requester, wait for the requester if that person leaves voice, and can be removed
+with `/remove`, `/clear` or `/stop`. Mixes and radios (`list=RD…`) are not
+supported because they are endless and personalized per account.
+
+**No Spotify, YouTube mixes/radios, live streams or authenticated/paywalled media
+in this version.** Video links may include `list`, `index` or `start_radio`:
+pasted and sent without choosing a suggestion, the link adds only the video.
+Mixes (`list=RD…`) are never read: the suggestion and the reply warn that only
+the video will be added.
 Arbitrary URLs are not accepted. yt-dlp extraction **is not an official YouTube
 audio API**: it can stop working and is subject to platform terms. Use only
 your own or authorized media and respect copyright. Local execution receives no

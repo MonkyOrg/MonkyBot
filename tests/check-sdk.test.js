@@ -7,8 +7,8 @@ const { checkSdk } = require('../scripts/check-sdk');
 const protocolVersion = require('../package.json').monky.protocolVersion;
 
 test('the installed SDK matches the bot protocol and required runtime APIs', () => {
-  assert.equal(protocolVersion, 37);
-  assert.equal(require('@monky/bot-sdk/package.json').version, '37.0.0-beta');
+  assert.equal(protocolVersion, 38);
+  assert.equal(require('@monky/bot-sdk/package.json').version, '38.0.0-beta');
   assert.equal(checkSdk(), protocolVersion);
 });
 
