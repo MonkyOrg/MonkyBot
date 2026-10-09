@@ -1,26 +1,18 @@
-import type { IncomingMessage, Server, ServerResponse } from 'http';
-import { validateCliPublicHost as validateBotPublicHost, validateCliServePort as validateBotServePort } from '../cli/config';
-import { cliText } from '../cli/i18n';
+import { validateBotPublicHost, validateBotServePort } from '@monky/bot-sdk';
+import { cliText } from '../i18n';
 
-export const MANIFEST_PUBLIC_KEY_HEADER = 'x-monky-bot-public-key';
-
-export function identifyManifest(server: Server, publicKey: string): void {
-  if (!/^[a-f0-9]{88}$/i.test(publicKey)) {
-    throw new Error(cliText('A identidade pública do manifest é inválida.', 'The manifest public identity is invalid.'));
-  }
-  // The SDK's strict JSON manifest has no identity field. Keep its contract unchanged.
-  const identify = (request: IncomingMessage, response: ServerResponse): void => {
-    if (request.method === 'GET' && request.url === '/manifest') {
-      response.setHeader(MANIFEST_PUBLIC_KEY_HEADER, publicKey);
-    }
-  };
-  server.prependListener('request', identify);
-  server.once('close', () => server.off('request', identify));
+function localized<T>(validate: () => T, portuguese: string, english: string): T {
+  try { return validate(); }
+  catch (error: unknown) { throw new Error(cliText(portuguese, english), { cause: error }); }
 }
 
 export function getManifestUrl(publicHost: unknown, servePort: unknown): string {
-  const host = validateBotPublicHost(publicHost);
-  const port = validateBotServePort(servePort);
+  const host = localized(() => validateBotPublicHost(publicHost),
+    'O host público deve ser um domínio ou IP, sem protocolo nem porta.',
+    'The public host must be a hostname or IP without a scheme or port.');
+  const port = localized(() => validateBotServePort(servePort),
+    'A porta do manifest deve ser um inteiro entre 1 e 65535.',
+    'The serve port must be an integer between 1 and 65535.');
   const urlHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
   return `http://${urlHost}:${port}/manifest`;
 }

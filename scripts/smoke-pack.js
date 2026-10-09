@@ -81,6 +81,15 @@ async function exercisePackagedVoice() {
   }
 }
 
+async function freePort() {
+  const server = require('node:net').createServer();
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const { port } = server.address();
+  await new Promise((resolve) => server.close(resolve));
+  return port;
+}
+
 async function smokePack(tarball) {
   const artifact = path.resolve(tarball);
   assert.ok(fs.statSync(artifact).isFile(), 'A packed tarball is required.');
@@ -101,6 +110,20 @@ async function smokePack(tarball) {
     const modules = path.join(install, 'node_modules');
     const bot = path.join(modules, '@monky', 'bot');
     const pkg = JSON.parse(fs.readFileSync(path.join(bot, 'package.json'), 'utf8'));
+    assert.deepEqual(pkg.bin, { monkybot: './monky-cli.cjs' }, 'monkybot must be the SDK-generated runtime CLI.');
+    assert.equal(pkg.monkyBot.cliName, 'monkybot');
+    assert.deepEqual(pkg.monkyBot.requirements.ports.map((port) => [port.id, port.protocol, port.defaultPort, port.when]),
+      [['games', 'tcp', 7781, 'on-demand']]);
+    for (const retired of ['cli.js', 'cli', path.join('cli', 'musicTools.js')]) {
+      assert.equal(fs.existsSync(path.join(bot, 'dist', retired)), false,
+        `The former standalone CLI must not remain in the installed package: dist/${retired}`);
+    }
+    const sdkRoot = path.join(bot, 'node_modules', '@monky', 'bot-sdk');
+    const runner = path.join(sdkRoot, 'dist', 'cli', 'runner.js');
+    assert.ok(fs.statSync(runner).isFile(), 'The packaged SDK runner is required by PM2.');
+
+    const cliHome = path.join(workspace, 'cli-home');
+    const profile = path.join(cliHome, '.monkybot');
     const env = {
       ...process.env,
       HOME: runtime,
@@ -108,72 +131,34 @@ async function smokePack(tarball) {
       NODE_OPTIONS: '',
       NODE_PATH: '',
       MONKYBOT_SMOKE_MODULES: modules,
-      MONKY_HOST_CONSENT: '1',
-      MONKY_SERVE: 'true',
-      MONKY_SERVE_HOST: '127.0.0.1',
-      MONKY_SERVE_PORT: '0',
-      MONKY_SERVE_PUBLIC_HOST: '127.0.0.1',
-      MONKY_BOT_NAME: 'MonkyBot',
-      MONKY_SERVER_URL: '',
-      MONKY_BOT_TOKEN: '',
+      MONKY_BOT_CLI_HOME: cliHome,
+      CI: '1',
     };
+    for (const name of ['MONKY_BOT_LOCALE', 'MONKY_LANG', 'MONKY_HOST_CONSENT', 'MONKY_SERVE', 'MONKY_SERVE_PORT',
+      'MONKY_SERVE_HOST', 'MONKY_SERVE_PUBLIC_HOST', 'MONKY_SERVER_URL', 'MONKY_BOT_TOKEN', 'MONKY_BOT_PUBLIC_KEY',
+      'MONKY_BOT_NAME', 'MONKY_BOT_REGISTRATION_FILE', 'MONKY_GAMES_PORT', 'MONKY_GAMES_HOST', 'MONKY_GAMES_PUBLIC_URL',
+      'LANG', 'LC_ALL', 'LC_MESSAGES', 'LANGUAGE']) delete env[name];
     const guard = ['--no-global-search-paths', '--require', path.join(__dirname, 'isolated-runtime.cjs')];
-    const cli = spawnSync(process.execPath, [...guard, path.join(bot, 'dist', 'cli.js'), '--version'], {
-      cwd: runtime, env, encoding: 'utf8', timeout: 15000,
-    });
-    if (cli.error) throw cli.error;
-    assert.equal(cli.status, 0, cli.stderr);
-    assert.equal(cli.stdout.trim(), `monkybot ${pkg.version}`);
-
-    for (const module of ['cli/musicTools', 'cli/musicToolDownload', 'cli/commands/musicDiagnose']) {
-      for (const extension of ['.js', '.js.map', '.d.ts']) {
-        assert.equal(fs.existsSync(path.join(bot, 'dist', `${module}${extension}`)), false,
-          'Retired host music tooling must not remain in the installed package.');
-      }
-    }
-    for (const command of ['music-check', 'music-setup', 'music-diagnose']) {
-      const retired = spawnSync(process.execPath, [...guard, path.join(bot, 'dist', 'cli.js'), command], {
-        cwd: runtime,
-        env: { ...env, HOME: runtime, USERPROFILE: runtime, MONKY_BOT_LOCALE: 'en' },
-        encoding: 'utf8', timeout: 15000,
-      });
-      if (retired.error) throw retired.error;
-      assert.equal(retired.status, 1, retired.stdout + retired.stderr);
-      assert.match(retired.stderr, /CLI music-tool commands were removed/);
-      assert.deepEqual(fs.readdirSync(runtime), [], 'Retired commands must not create runtime files.');
-    }
-
-    const cliHome = path.join(workspace, 'cli-home');
-    const cliEnvironment = {
-      ...env, HOME: cliHome, USERPROFILE: cliHome,
-      MONKY_BOT_LOCALE: undefined, MONKY_LANG: undefined, CI: '1',
-    };
-    const languageCli = (args) => {
-      const result = spawnSync(process.execPath, [...guard, path.join(bot, 'dist', 'cli.js'), ...args], {
-        cwd: runtime, env: cliEnvironment, encoding: 'utf8', timeout: 15000,
+    const cli = (args, expectedStatus = 0) => {
+      const result = spawnSync(process.execPath, [...guard, path.join(bot, 'monky-cli.cjs'), ...args], {
+        cwd: runtime, env, encoding: 'utf8', timeout: 30000,
       });
       if (result.error) throw result.error;
-      assert.equal(result.status, 0, result.stdout + result.stderr);
-      return result.stdout;
+      assert.equal(result.status, expectedStatus, result.stdout + result.stderr);
+      return result.stdout + result.stderr;
     };
-    const cliProfile = path.join(cliHome, '.monkybot');
-    for (const [tag, locale, message] of [
-      ['en-US', 'en', 'Current language: en-US.'],
-      ['pt-BR', 'pt-BR', 'Idioma atual: pt-BR.'],
-    ]) {
-      languageCli(['config', 'language', tag]);
-      assert.equal(languageCli(['config', 'language']).trim(), message);
-      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(cliProfile, 'preferences.json'), 'utf8')), { locale });
-      assert.deepEqual(fs.readdirSync(cliProfile), ['preferences.json'],
+
+    assert.equal(cli(['--version']).trim(), `monkybot ${pkg.version}`);
+    const requirements = cli(['requirements', '--locale', 'en-US']);
+    assert.match(requirements, /games: TCP 7781 \(allow through the firewall\/router; on demand\)/);
+    assert.match(requirements, /MONKY_GAMES_PUBLIC_URL/);
+    assert.equal(fs.existsSync(profile), false, 'requirements must not create a profile.');
+
+    for (const [tag, locale] of [['en-US', 'en'], ['pt-BR', 'pt-BR']]) {
+      cli(['config', 'language', tag]);
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(profile, 'preferences.json'), 'utf8')), { locale });
+      assert.deepEqual(fs.readdirSync(profile), ['preferences.json'],
         'Changing language before setup must not create a connection, identity or credentials.');
-    }
-    const cliConfiguration = path.join(cliProfile, 'config.json');
-    const preservedConfiguration = '{"existing":"preserve","botToken":"smoke-private-token"}\n';
-    fs.writeFileSync(cliConfiguration, preservedConfiguration);
-    for (const tag of ['en-US', 'pt-BR']) {
-      assert.doesNotMatch(languageCli(['config', 'language', tag]), /smoke-private-token/);
-      assert.equal(fs.readFileSync(cliConfiguration, 'utf8'), preservedConfiguration,
-        'Changing language must preserve the configured connection and token byte for byte.');
     }
 
     const forbidden = spawnSync(process.execPath, [
@@ -194,9 +179,30 @@ async function smokePack(tarball) {
     if (voice.error) throw voice.error;
     assert.equal(voice.status, 0, `Packaged P2P voice failed.\n${voice.stderr}`);
 
+    // Configure through the packaged CLI: the runtime only starts after the host consent.
+    const servePort = await freePort();
+    const setup = cli(['setup', '--non-interactive', '--mode', 'marketplace', '--public-host', '127.0.0.1',
+      '--serve-port', String(servePort), '--name', 'MonkyBot', '--locale', 'en-US']);
+    const fingerprint = /consent --accept ([a-f0-9]{12})/.exec(setup)?.[1];
+    assert.ok(fingerprint, setup);
+    assert.match(cli(['start', '--foreground', '--locale', 'en-US'], 1), /has not been confirmed yet/);
+    cli(['consent', '--accept', fingerprint, '--locale', 'en-US']);
+    const keysFile = spawnSync(process.execPath, [
+      ...guard, '-e', `console.log(require(${JSON.stringify(path.join(sdkRoot, 'dist', 'cli', 'keys.js'))}).loadOrCreateBotKeys(${JSON.stringify(profile)}).publicKeyHex)`,
+    ], { cwd: runtime, env, encoding: 'utf8', timeout: 15000 });
+    assert.equal(keysFile.status, 0, keysFile.stderr);
+    const profileKey = keysFile.stdout.trim();
+
+    // PM2 and start --foreground launch the packaged SDK runner with these variables.
     const start = async () => {
-      child = spawn(process.execPath, [...guard, path.join(bot, 'dist', 'index.js')], {
-        cwd: runtime, env, stdio: ['ignore', 'pipe', 'pipe'],
+      child = spawn(process.execPath, [...guard, runner], {
+        cwd: profile, stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          ...env, MONKY_BOT_LOCALE: 'en', MONKY_SERVE_HOST: '127.0.0.1',
+          MONKY_BOT_CLI_CONFIG_FILE: path.join(profile, 'config.json'),
+          MONKY_BOT_CLI_ENTRY: path.join(bot, 'dist', 'index.js'),
+          MONKY_BOT_CLI_PACKAGE_ROOT: bot,
+        },
       });
       const logs = { output: '' };
       child.stdout.on('data', (chunk) => { logs.output += chunk.toString(); });
@@ -204,8 +210,10 @@ async function smokePack(tarball) {
       return { url: await waitForManifest(child, logs), logs };
     };
     const { url, logs } = await start();
+    assert.equal(url, `http://127.0.0.1:${servePort}/manifest`);
     const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
     assert.equal(response.status, 200, logs.output);
+    assert.equal(response.headers.get('x-monky-bot-public-key'), profileKey);
     const manifest = await response.json();
     const expectedLogo = fs.readFileSync(path.join(ROOT, 'assets', 'monky-logo.png')).toString('base64');
     assert.equal(manifest.name, 'MonkyBot');
@@ -217,6 +225,7 @@ async function smokePack(tarball) {
       'commands', 'send_messages', 'publish_voice', 'local_execution', 'miniapps', 'live_actions',
     ]);
     assert.equal(child.exitCode, null, 'Packaged runtime must still be running.');
+    assert.equal(fs.existsSync(path.join(runtime, '.keys')), false, 'The runner must use the profile identity.');
 
     const fromBot = createRequire(path.join(bot, 'package.json'));
     const fromSdk = createRequire(fromBot.resolve('@monky/bot-sdk'));
@@ -224,7 +233,6 @@ async function smokePack(tarball) {
     const { MessageType } = fromBot('@monky/bot-sdk');
     const token = 'f'.repeat(64);
     const serverId = randomUUID();
-    let publicKey;
     let protocolError;
     const commandLists = [];
     server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
@@ -240,10 +248,9 @@ async function smokePack(tarball) {
           return;
         }
         if (message.type === MessageType.AUTH_CONNECT) {
-          publicKey ??= message.payload?.publicKey;
           if (message.payload?.protocolVersion !== pkg.monky.protocolVersion ||
-              message.payload?.botToken !== token || !publicKey || message.payload.publicKey !== publicKey) {
-            protocolError = new Error('The packaged bot did not restore the same protocol, token and identity.');
+              message.payload?.botToken !== token || message.payload?.publicKey !== profileKey) {
+            protocolError = new Error('The packaged bot did not restore the same protocol, token and profile identity.');
             ws.close();
             return;
           }
@@ -279,7 +286,7 @@ async function smokePack(tarball) {
       body: JSON.stringify(registration), signal: AbortSignal.timeout(10000),
     });
     assert.equal(registered.status, 200, logs.output);
-    const file = path.join(runtime, '.keys', 'registrations.json');
+    const file = path.join(profile, '.keys', 'registrations.json');
     const saved = fs.readFileSync(file, 'utf8');
     assert.deepEqual(JSON.parse(saved).registrations, [registration]);
     await waitForCommands(1);
@@ -287,7 +294,7 @@ async function smokePack(tarball) {
     await start();
     await waitForCommands(2);
     assert.equal(fs.readFileSync(file, 'utf8'), saved);
-    console.log(`[smoke] Offline install, isolated SDK protocol ${pkg.monky.protocolVersion}, P2P ICE/DTLS and Opus, CLI ${pkg.version}, official avatar, and persistent marketplace process restart passed.`);
+    console.log(`[smoke] Offline install, isolated SDK protocol ${pkg.monky.protocolVersion}, P2P ICE/DTLS and Opus, SDK CLI monkybot ${pkg.version} (requirements, consent), packaged runner with the profile identity, official avatar, and persistent marketplace process restart passed.`);
   } finally {
     await stopChild(child);
     if (server) {

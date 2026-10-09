@@ -229,8 +229,19 @@ test('notes use the exact channel/version installation URL and treat source note
     assert.ok(!notes.includes('install-monkybot.sh'));
     assert.match(notes, /confirmação do operador/);
     assert.match(notes, /mesmo diretório e os vínculos existentes/);
-    assert.match(notes, /--yes` não concedem esse consentimento/);
+    assert.match(notes, /--yes` e o auto-update não concedem esse consentimento/);
     assert.doesNotMatch(notes, /não refaça o setup/);
+    // Existing installs of the former standalone CLI need an explicit, ordered migration.
+    assert.match(notes, /CLI próprio anterior \(até v17\.0\.0-beta\)/);
+    const steps = ['`pm2 delete monkybot-updater`', '`pm2 delete monkybot`', '`pm2 save --force`', 'mova a pasta `.keys`',
+      'antes de instalar', `npm install -g "${'https://github.com/'}`, 'MONKY_GAMES_PORT 7782', 'MONKY_HOST_CONSENT=1',
+      'monkybot consent', 'monkybot doctor --local', 'monkybot start', '--service-name pm2-monkybot'];
+    const migration = notes.slice(notes.indexOf('CLI próprio anterior'));
+    const positions = steps.map(step => migration.indexOf(step));
+    assert.ok(positions.every(position => position >= 0), JSON.stringify(positions));
+    assert.deepEqual([...positions].sort((a, b) => a - b), positions);
+    assert.match(notes, /monkybot requirements/);
+    assert.match(notes, /MONKY_HOST_CONSENT=1/);
   }
 });
 

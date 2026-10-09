@@ -3,14 +3,11 @@
   "version": "1.0.0",
   "description": "Monky Bot — the official universal reference bot for Monky",
   "main": "dist/index.js",
-  "bin": {
-    "monkybot": "./dist/cli.js"
-  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "cli": "node dist/cli.js",
+    "cli": "monky-bot-sdk cli",
     "pack": "node scripts/pack.js",
     "check:sdk": "node scripts/check-sdk.js",
     "test": "npm run build && node --test",
@@ -24,14 +21,68 @@
   ],
   "author": "MonkyOrg",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MonkyOrg/MonkyBot.git"
+  },
+  "homepage": "https://github.com/MonkyOrg/MonkyBot#readme",
   "engines": {
     "node": ">=18"
   },
   "monky": {
-    "protocolVersion": 34
+    "protocolVersion": 37
+  },
+  "monkyBot": {
+    "cliName": "monkybot",
+    "displayName": "MonkyBot",
+    "entry": "dist/index.js",
+    "buildScript": "build",
+    "files": [
+      "dist",
+      "assets"
+    ],
+    "modes": [
+      "manual",
+      "marketplace"
+    ],
+    "releases": {
+      "url": "https://github.com/MonkyOrg/MonkyBot/releases",
+      "assetName": "monky-bot-{version}.tgz"
+    },
+    "requirements": {
+      "notice": {
+        "pt-BR": "Música: buscas e áudio do YouTube são obtidos no computador de quem pede, pelo cliente Monky (execução local autorizada pela própria pessoa); este host não acessa o YouTube nem precisa de yt-dlp ou FFmpeg. Ele recebe esse áudio e o publica nas salas de voz por WebRTC. Lembretes e sorteios ficam em .keys/scheduled-actions.json. /doom e /nes abrem sob demanda a porta games, que serve os arquivos dos jogos e o multiplayer a todos os jogadores; ROMs do NES ficam somente na memória.",
+        "en": "Music: YouTube searches and audio are fetched on the requester's computer by the Monky client (local execution authorized by that person); this host neither contacts YouTube nor needs yt-dlp or FFmpeg. It receives that audio and publishes it to voice rooms over WebRTC. Reminders and giveaways are stored in .keys/scheduled-actions.json. /doom and /nes open the games port on demand, serving game assets and multiplayer to every player; NES ROMs stay in memory only."
+      },
+      "ports": [
+        {
+          "id": "games",
+          "description": {
+            "pt-BR": "Jogos /doom e /nes: arquivos e multiplayer (HTTP e WebSocket); todos os jogadores precisam acessar",
+            "en": "/doom and /nes games: assets and multiplayer (HTTP and WebSocket); every player must reach it"
+          },
+          "protocol": "tcp",
+          "portEnv": "MONKY_GAMES_PORT",
+          "defaultPort": 7781,
+          "hostEnv": "MONKY_GAMES_HOST",
+          "publicUrlEnv": "MONKY_GAMES_PUBLIC_URL",
+          "exposure": "public",
+          "when": "on-demand"
+        }
+      ],
+      "settings": [
+        {
+          "env": "MONKY_MUSIC_GRACE_SECONDS",
+          "description": {
+            "pt-BR": "Padrão, em segundos (1 a 600, padrão 60), para sair de uma sala vazia ou de uma fila ociosa",
+            "en": "Default seconds (1 to 600, default 60) before leaving an empty voice room or an idle queue"
+          }
+        }
+      ]
+    }
   },
   "dependencies": {
-    "@monky/bot-sdk": "file:vendor/monky-bot-sdk-34.0.7-beta.tgz",
+    "@monky/bot-sdk": "file:vendor/monky-bot-sdk-37.0.0-beta.tgz",
     "jsnes": "2.1.0",
     "ws": "8.18.3"
   },

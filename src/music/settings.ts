@@ -1,6 +1,6 @@
 import type { BotServerSettingsSnapshot, BotSettingsDefinition } from '@monky/bot-sdk';
 import { MusicError } from './errors';
-import { cliText } from '../cli/i18n';
+import { cliText } from '../i18n';
 
 export const MUSIC_IDLE_SETTING = 'music_idle_seconds';
 

@@ -1,5 +1,5 @@
 import { MediaError, type MediaErrorCode } from '@monky/bot-sdk/dist/localRuntime';
-import { normalizeCliLocale } from '../cli/i18n';
+import { normalizeCliLocale } from '../i18n';
 
 export type MusicErrorCode = MediaErrorCode |
   'selection' | 'not_in_voice' | 'room' | 'voice' | 'voice_runtime' |

@@ -331,3 +331,50 @@ test('/doom and /nes register independently without arguments and release exact 
   assert.deepEqual(closed, []);
   for (const event of ['screenAction', 'screenRemoved', 'disconnected', 'closed']) assert.equal(bot.listenerCount(event), 0);
 });
+
+test('the games listener proves its identity to doctor and Monky servers without changing game routes', async t => {
+  const reachability = require('@monky/bot-sdk/dist/reachability');
+  const pair = (() => {
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519', {
+      publicKeyEncoding: { type: 'spki', format: 'der' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    });
+    return { publicKeyHex: Buffer.from(publicKey).toString('hex'), privateKeyPem: privateKey };
+  })();
+  const other = generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }).toString('hex');
+  t.after(() => reachability.setRuntimeBotIdentity(undefined));
+  const { base } = await setup(t);
+
+  // Outside the SDK runner no identity is registered: the probe is answered, but never verified.
+  assert.equal(await reachability.probeReachability(base, pair.publicKeyHex), 'unverified');
+  reachability.setRuntimeBotIdentity(reachability.createReachabilityIdentity(pair.publicKeyHex, pair.privateKeyPem));
+  assert.equal(await reachability.probeReachability(base, pair.publicKeyHex), 'verified');
+  assert.equal(await reachability.probeReachability(base, other), 'unverified');
+
+  const probe = await fetch(`${base}/.well-known/monky-bot-reachability`, { method: 'POST' });
+  assert.equal(probe.status, 405);
+  assert.equal(probe.headers.get('access-control-allow-origin'), null);
+  const health = await fetch(`${base}/games/health`);
+  assert.deepEqual(await health.json(), { application: 'monky-games', version: 1 });
+  assert.equal(health.headers.get('access-control-allow-origin'), '*');
+  assert.equal((await fetch(`${base}/.well-known/other`)).status, 404);
+});
+test('a busy games port explains how to move it instead of failing silently', async t => {
+  const { setCliLocale } = require('../dist/i18n');
+  const blocker = require('node:net').createServer();
+  blocker.listen(0, '127.0.0.1');
+  await once(blocker, 'listening');
+  t.after(() => new Promise(resolve => blocker.close(resolve)));
+  t.after(() => setCliLocale('pt-BR'));
+  const { port } = blocker.address();
+  for (const [locale, pattern] of [
+    ['en', new RegExp(`Games port ${port} is already in use.*MONKY_GAMES_PORT <port>.*monkybot restart`)],
+    ['pt-BR', new RegExp(`porta de jogos ${port} já está em uso.*MONKY_GAMES_PORT <porta>.*monkybot restart`)],
+  ]) {
+    setCliLocale(locale);
+    const service = new GamesService({ host: '127.0.0.1', port, publicUrl: 'http://127.0.0.1' });
+    t.after(() => service.close());
+    const error = await service.start().then(() => assert.fail('Expected EADDRINUSE.'), failure => failure);
+    assert.match(error.message, pattern);
+    assert.equal(error.cause.code, 'EADDRINUSE');
+  }
+});

@@ -2,7 +2,7 @@ import { performance } from 'node:perf_hooks';
 import { MusicError, SourceRecoveryError, aborted } from './errors';
 import { bounded, cancellable, errorDiagnostic, safeDiagnostic } from './process';
 import type { AudioStream, ResolvedTrack, Track } from './source';
-import { cliText } from '../cli/i18n';
+import { cliText } from '../i18n';
 
 export type QueueAudioStream = Omit<AudioStream, 'setPaused'> & {
   readonly signal?: AbortSignal;

@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { cliText } from '../cli/i18n';
+import { cliText } from '../i18n';
 
 const KEYS_DIR = path.resolve(process.cwd(), '.keys');
 const PRIVATE_KEY_PATH = path.join(KEYS_DIR, 'private.pem');
