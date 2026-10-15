@@ -12,7 +12,8 @@ Open the miniapp on the stage: its creator gets player 1, one friend joins as
 player 2, and everyone else can watch. DOOM files load automatically,
 then the creator starts once both players are ready. NES can also start solo.
 Closing a player's view interrupts play; spectators can join later.
-Sessions expire after 30 minutes.
+A game stays open while anyone has the miniapp open and ends 30 minutes after
+everyone leaves.
 
 In DOOM, click the canvas to capture the mouse: move to turn and use the left
 button or space to fire. `Esc` releases the cursor; click again to recapture.
@@ -44,8 +45,24 @@ pause the game. Only the host has **Restart ROM** and **Return to lobby**, with
 confirmation and synchronized effects for everyone. In NES, returning to the
 lobby preserves progress: **Resume game** restores it for players and spectators.
 **Start over** requires confirmation; choosing another valid ROM also discards
-the old progress. Resume works only in the current session with the same ROM;
-it is not a persistent save on disk.
+the old progress.
+
+**NES saves:** the **Saves** button (in the corner during play, in **Controls and
+options** or in the lobby) opens a dedicated menu with the **Automatic** slot,
+updated every 2 minutes of play, and three numbered slots. Each save shows a picture
+of the screen at the moment it was made. Both players save (saving to a used slot
+overwrites it). Only the host loads a save, with a confirmation that shows that
+picture: players and spectators continue together from it, including two-player
+games. In the lobby, the host can also choose a slot or a save file and then use
+**Resume game**; the resume point appears with its picture. Saves live only in the
+bot's memory until the session ends and remain
+available if a player leaves or the host reopens the miniapp with the same ROM.
+**Download** creates a `.monkynes` file to continue another day: in a new session,
+the host chooses the same ROM and loads the file. Saves from another ROM or another
+emulator version are refused. The file contains emulator memory and the screen
+picture, which may include parts of the ROM; share it only with people who may
+receive the ROM. The autosave is
+also a checkpoint: late arrivals synchronize from it instead of replaying the whole game.
 No commercial game is bundled with the emulator. Automated coverage uses an
 original homebrew fixture. Sources, credits and rebuild instructions are in `assets/games`.
 
@@ -594,7 +611,7 @@ come from the bot; the client does not create or edit its profile.
 | `/clear` | Clear only upcoming tracks, preserving the current track |
 | `/tic-tac-toe` | Shared screen for 2 players and spectators |
 | `/doom` | Co-op DOOM/Freedoom with bundled free game data |
-| `/nes` | NES emulator with a local ROM, for solo or two-player games |
+| `/nes` | NES emulator with a local ROM, for solo or two-player games, with saves |
 | `/help` | List all commands |
 
 Type `/`, select a command, and fill its named parameters. For example, `lados`

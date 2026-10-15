@@ -12,7 +12,8 @@ Abra o miniapp no palco: o criador ocupa a vaga 1, um amigo entra como jogador 2
 e os demais podem assistir. No DOOM, os arquivos carregam automaticamente e o criador
 inicia quando os dois estão prontos. O NES também permite iniciar sozinho.
 Sair da visualização de um jogador interrompe a partida; espectadores podem entrar
-depois. A sessão expira em 30 minutos.
+depois. A partida continua enquanto alguém estiver com o miniapp aberto e termina
+30 minutos depois que todos saírem.
 
 No DOOM, clique no canvas para capturar o mouse: mova para virar e use o botão
 esquerdo ou espaço para atirar. `Esc` libera o cursor; clicar novamente recaptura.
@@ -44,8 +45,23 @@ no lobby e no botão **Controles e opções**, acessível durante a partida ou c
 lobby**, com confirmação e efeito para todos. No NES, voltar ao lobby preserva
 o progresso: **Retomar partida** restaura a partida para jogadores e espectadores.
 **Iniciar do zero** exige confirmação; trocar por outra ROM válida também descarta
-o progresso anterior. A retomada vale apenas na sessão atual e com a mesma ROM,
-sem save persistente em disco.
+o progresso anterior.
+
+**Saves do NES:** o botão **Saves** (no canto da partida, em **Controles e opções**
+ou no lobby) abre um menu próprio com o slot **Automático**, atualizado a cada
+2 minutos de partida, e três slots numerados. Cada save mostra a imagem da tela no
+momento em que foi feito. Os dois jogadores salvam (salvar num slot ocupado o
+sobrescreve). Só o host carrega um save, com uma confirmação que mostra essa imagem:
+jogadores e espectadores continuam juntos a partir dele, inclusive em dupla. No lobby,
+o host também escolhe um slot ou um arquivo de save e depois usa **Retomar partida**;
+o ponto de retomada aparece com a imagem.
+Os saves ficam apenas na memória do bot até a sessão terminar e continuam disponíveis
+se um jogador sair ou se o host reabrir o miniapp com a mesma ROM. **Baixar** gera um
+arquivo `.monkynes` para continuar outro dia: numa nova sessão, o host escolhe a mesma
+ROM e carrega o arquivo. Saves de outra ROM ou de outra versão do emulador são
+recusados. O arquivo contém a memória do emulador e a imagem da tela, que podem incluir
+trechos da ROM; compartilhe-o só com quem pode receber a ROM. O save automático também é um checkpoint:
+quem entra depois sincroniza a partir dele, sem repetir a partida inteira.
 Nenhum jogo comercial acompanha o emulador. Os testes automatizados usam uma ROM
 homebrew própria. Fontes, créditos e instruções de rebuild estão em `assets/games`.
 
@@ -592,7 +608,7 @@ Nome e avatar vêm do bot; não há criação ou edição de perfil no cliente.
 | `/limpar` | Limpa somente as próximas faixas, preservando a atual |
 | `/jogo-da-velha` | Tela compartilhada para 2 jogadores, com espectadores |
 | `/doom` | DOOM/Freedoom cooperativo com conteúdo livre incluído |
-| `/nes` | Emulador NES com ROM local, para jogar sozinho ou em dupla |
+| `/nes` | Emulador NES com ROM local, para jogar sozinho ou em dupla, com saves |
 | `/ajuda` | Lista todos os comandos |
 
 Digite `/`, selecione o comando e preencha seus parâmetros nomeados. Por exemplo,

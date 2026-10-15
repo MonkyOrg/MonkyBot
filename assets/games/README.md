@@ -61,3 +61,19 @@ retired before restarting. DOOM lobby return discards progress. NES lobby return
 retains the committed input replay; resume reconstructs the same state on every
 client before the host emits new frames. Starting over or replacing the ROM
 clears that replay. The test does not download or test a commercial Contra ROM.
+
+NES save states use jsnes `toJSON`/`fromJSON`. The host emulator is the only
+snapshot producer (player 2 asks it to capture); the bot keeps gzip
+`monky-nes-save` envelopes for three slots plus the autosave in memory only,
+checks size, decompressed size, ROM hash and emulator version, and only the host
+loads one. A load recreates every emulator from the ROM plus the same state. Each
+autosave (every 2 minutes of play) is also a checkpoint: all viewers reload from
+their identical serialized state at the marked frame, and the bot drops the replay
+before it, so late viewers start from the checkpoint. Each save also carries a
+PNG screenshot of the host canvas at the saved frame (a data URL of at most 96 KiB;
+the bot keeps only png/webp/jpeg images and drops anything else without refusing
+the save). Players get it with the save notice or request it once per visible save,
+within a per-connection budget; spectators get none. A save file that fails the
+bot's checks is refused without disconnecting the host. The real-browser test covers
+two-player saves, screenshots, host-only load, checkpoint coherence, download and import. Games
+end 30 minutes after the last viewer disconnects instead of after a fixed lifetime. The test does not download or test a commercial Contra ROM.

@@ -52,10 +52,10 @@ interface Active {
   serverId: string;
   room: GameRoom;
   screen: BotScreen;
-  timer: ReturnType<typeof setTimeout>;
 }
 
-export function registerGames(bot: BotClient, service = defaultService(), lifetime = 30 * 60_000): () => Promise<void> {
+/** Games stay open while anyone is connected and end after `idle` ms without viewers. */
+export function registerGames(bot: BotClient, service = defaultService(), idle = 30 * 60_000): () => Promise<void> {
   const active = new Map<string, Active>();
   const creating = new Set<Promise<void>>();
   const pending = new Set<{ serverId: string; id: string; cancelled: boolean; overflow: boolean; removed: Set<string> }>();
@@ -65,7 +65,6 @@ export function registerGames(bot: BotClient, service = defaultService(), lifeti
   const release = (entry: Active): boolean => {
     if (active.get(key(entry.serverId, entry.screen.instanceId)) !== entry) return false;
     active.delete(key(entry.serverId, entry.screen.instanceId));
-    clearTimeout(entry.timer);
     service.remove(entry.room);
     return true;
   };
@@ -76,6 +75,10 @@ export function registerGames(bot: BotClient, service = defaultService(), lifeti
   const close = async (entry: Active): Promise<void> => {
     if (release(entry)) await closeScreen(entry.serverId, entry.screen);
   };
+  const sweep = setInterval(() => {
+    for (const entry of active.values()) if (service.idleFor(entry.room) >= idle) void close(entry);
+  }, Math.max(10, Math.min(60_000, Math.floor(idle / 4))));
+  sweep.unref();
   for (const game of ['doom', 'nes'] as const) bot.command({
     ...gameDefinitions[game],
     handler: async ctx => {
@@ -105,15 +108,15 @@ export function registerGames(bot: BotClient, service = defaultService(), lifeti
             await closeScreen(ctx.serverId, screen);
             return;
           }
-          const entry: Active = {
-            serverId: ctx.serverId, room, screen,
-            timer: setTimeout(() => { void close(entry); }, lifetime),
-          };
-          entry.timer.unref();
+          const entry: Active = { serverId: ctx.serverId, room, screen };
           active.set(key(ctx.serverId, screen.instanceId), entry);
           ctx.reply(message(ctx.locale,
-            'Abra o miniapp no palco de voz. Seu amigo pode entrar como jogador 2; os demais podem assistir. A sessão expira em 30 minutos.',
-            'Open the miniapp on the voice stage. Your friend can join as player 2; others can watch. The session expires in 30 minutes.'));
+            'Abra o miniapp no palco de voz. Seu amigo pode entrar como jogador 2; os demais podem assistir. ' +
+            'A partida continua enquanto alguém estiver com o miniapp aberto e termina 30 minutos depois que todos saírem.' +
+            (game === 'nes' ? ' No menu (Esc), salve o jogo e baixe o save para continuar outro dia.' : ''),
+            'Open the miniapp on the voice stage. Your friend can join as player 2; others can watch. ' +
+            'The game stays open while anyone has the miniapp open and ends 30 minutes after everyone leaves.' +
+            (game === 'nes' ? ' In the menu (Esc), save the game and download the save to continue another day.' : '')));
         } catch (error: unknown) {
           if (room) service.remove(room);
           console.error('[games] Could not create game.', errorDiagnostic(error));
@@ -153,6 +156,7 @@ export function registerGames(bot: BotClient, service = defaultService(), lifeti
   const dispose = (): Promise<void> => {
     if (disposal) return disposal;
     disposed = true;
+    clearInterval(sweep);
     bot.off('screenAction', action);
     bot.off('closed', closed);
     disposal = (async () => {
