@@ -33,10 +33,14 @@ if (!process.versions.electron) {
   } }]);
   app.setPath('userData', path.join(temporary, 'profile'));
   app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
-  const service = new GamesService({ host: '127.0.0.1', port: 0, publicUrl: 'http://127.0.0.1' });
+  // Short closing timeouts let the test watch a frozen game resume after an "end" that did not happen.
+  const service = new GamesService({ host: '127.0.0.1', port: 0, publicUrl: 'http://127.0.0.1', closingLeaveMs: 500 });
   const windows = [], errors = [], identities = new Map();
-  let timeout;
+  let timeout, step = '';
+  const began = Date.now();
   const waitFor = async (check, label, duration = 20000) => {
+    step = label;
+    if (process.env.MONKY_GAMES_TEST_TRACE) console.log(`[${((Date.now() - began) / 1000).toFixed(1)}s] ${label}`);
     const end = Date.now() + duration;
     while (Date.now() < end) {
       if (await check()) return;
@@ -44,7 +48,13 @@ if (!process.versions.electron) {
     }
     throw new Error(`Timed out: ${label}\n${errors.join('\n')}`);
   };
-  const run = (window, code) => window.webContents.executeJavaScript(code, true);
+  // A renderer stuck in a busy loop never answers: name it instead of waiting for the global timeout.
+  const run = (window, code) => {
+    let timer;
+    return Promise.race([window.webContents.executeJavaScript(code, true), new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(`Renderer ${identities.get(window.webContents.id)} did not answer: ${code.slice(0, 120)}`)), 15000);
+    })]).finally(() => clearTimeout(timer));
+  };
   // Optional visual review: MONKY_GAMES_TEST_SHOTS=<dir> keeps screenshots of the main screens.
   const shot = async (window, name) => {
     if (!process.env.MONKY_GAMES_TEST_SHOTS) return;
@@ -61,11 +71,11 @@ if (!process.versions.electron) {
     app.exit(code);
   };
   app.whenReady().then(async () => {
-    timeout = setTimeout(() => { console.error('Games smoke timeout\n' + errors.join('\n')); void finish(1); }, 180000);
+    timeout = setTimeout(() => { console.error(`Games smoke timeout at: ${step}\n` + errors.join('\n')); void finish(1); }, 180000);
     const base = await service.start();
     const game = process.env.MONKY_GAMES_TEST_GAME;
     assert.ok(['doom', 'nes'].includes(game));
-    const room = service.create(game, 'alice');
+    let room = service.create(game, 'alice');
     const preload = path.join(temporary, 'preload.cjs');
     fs.writeFileSync(preload, `const {contextBridge,ipcRenderer}=require('electron');
       contextBridge.exposeInMainWorld('gameTest',{authorize:key=>ipcRenderer.send('games-test:authorize',key)});`);
@@ -101,10 +111,32 @@ if (!process.versions.electron) {
         };
         window.addEventListener('error',event=>console.error(event.error?.stack||event.message));
         window.addEventListener('unhandledrejection',event=>console.error(event.reason?.stack||event.reason));
+        window.testHooks={beforeClose:[],close:[],visibility:[]};
+        const testStore=new Map(),statusListeners=new Set();let storageStatus='unavailable';
+        const denied=()=>Object.assign(new Error('Storage denied'),{name:'MonkyStorageError',reason:'denied'});
+        window.testStorage={store:testStore,writes:[],setStatus(next){storageStatus=next;for(const listener of statusListeners)listener(next);}};
         window.monkyScreen={
         viewer:{id:${JSON.stringify(id)},nickname:${JSON.stringify(id)},locale:'en'},
         onState: callback=>{callback({},0);return ()=>{}},
-        sendAction:(action,payload)=>{window.gameTest.authorize(payload.key);return true}
+        sendAction:(action,payload)=>{window.gameTest.authorize(payload.key);return true},
+        onBeforeClose:handler=>{testHooks.beforeClose.push(handler);return ()=>{}},
+        onClose:handler=>{testHooks.close.push(handler);return ()=>{}},
+        onVisibilityChange:handler=>{testHooks.visibility.push(handler);handler(true);return ()=>{}},
+        storage:{
+          get status(){return storageStatus},
+          onStatus(callback){statusListeners.add(callback);callback(storageStatus);return ()=>statusListeners.delete(callback)},
+          async get(key){if(storageStatus!=='granted')throw denied();const value=testStore.get(key);return value?value.slice(0):null},
+          async set(key,value,options){
+            if(storageStatus!=='granted'){if(options?.autosave)return false;throw denied();}
+            const bytes=value instanceof Blob?await value.arrayBuffer():ArrayBuffer.isView(value)
+              ?value.buffer.slice(value.byteOffset,value.byteOffset+value.byteLength):value.slice(0);
+            testStore.set(key,bytes);testStorage.writes.push([key,!!options?.autosave]);return true;
+          },
+          async delete(key){return testStore.delete(key)},
+          async list({prefix=''}={}){if(storageStatus!=='granted')throw denied();
+            return [...testStore.keys()].filter(key=>key.startsWith(prefix)).sort().map(key=>({key,size:testStore.get(key).byteLength,updatedAt:Date.now()}))},
+          async usage(){return null},
+        }
       };</script>`;
       window.webContents.session.protocol.handle('monky-miniapp', () => new Response(boot + gamesHtml(base, room), {
         headers: { 'Content-Type': 'text/html' },
@@ -131,9 +163,8 @@ if (!process.versions.electron) {
       await waitFor(() => run(host, 'document.querySelector("#status").classList.contains("game-error")'), 'invalid local ROM is reported');
       assert.equal(room.rom, undefined, 'Invalid files are not uploaded');
       await selectRom(nesFixture());
-      for (const window of windows) {
-        await waitFor(() => run(window, 'document.querySelector("#ready").textContent === "Ready"'), 'automatic host ROM synchronization');
-        await run(window, `(() => {
+      // Counts frames and loads of the viewer's live emulator; throwaway emulators (save checks) are ignored.
+      const instrument = window => run(window, `(() => {
           const Original=window.jsnes.NES;
           window.ReferenceNes=Original;
           window.jsnes={...window.jsnes,NES:class extends Original {
@@ -146,6 +177,9 @@ if (!process.versions.electron) {
               window.testLoads=(window.testLoads||0)+1;window.testLoaded=JSON.stringify(this.cpu.toJSON());}}
           }};
         })()`);
+      for (const window of windows) {
+        await waitFor(() => run(window, 'document.querySelector("#ready").textContent === "Ready"'), 'automatic host ROM synchronization');
+        await instrument(window);
       }
       assert.equal(await run(guest, 'document.querySelector("#rom").files.length'), 0, 'Guest never selects a local file');
       assert.equal(await run(viewer, 'document.querySelector("#rom").files.length'), 0, 'Spectator never selects a local file');
@@ -279,23 +313,26 @@ if (!process.versions.electron) {
         'The controls menu leads to the dedicated saves menu');
       assert.equal(await run(host, 'document.querySelectorAll("#menu-saves .save-card").length'), 4, 'Automatic plus three numbered slots');
       await slotButton(host, 1, 'save');
-      await waitFor(() => room.saves.get(1)?.nickname === 'alice', 'host saves slot 1');
-      assert.match(room.saves.get(1).thumbnail, /^data:image\/png;base64,/, 'The save carries a screenshot');
-      for (const window of [host, guest]) {
-        await waitFor(() => run(window, `document.querySelector('${card(1)} .save-meta').textContent.includes("alice")`), 'slot 1 listed');
-        assert.equal(await screenshotMatches(window, `${card(1)} .save-thumb img`), true, 'Both players see the saved moment');
-      }
-      await waitFor(() => run(guest, 'document.querySelector("#toast").textContent === "alice saved to Slot 1."'), 'player 2 is told about the save');
+      const own = (user, id) => room.saves.get(user)?.get(id);
+      await waitFor(() => own('alice', 1)?.nickname === 'alice', 'host saves slot 1');
+      assert.match(own('alice', 1).thumbnail, /^data:image\/png;base64,/, 'The save carries a screenshot');
+      await waitFor(() => run(host, `document.querySelector('${card(1)} .save-meta').textContent !== "Empty"`), 'slot 1 listed');
+      await waitFor(() => screenshotMatches(host, `${card(1)} .save-thumb img`), 'the host sees the saved moment');
+      await waitFor(() => run(host, 'document.querySelector("#toast").textContent === "Saved to Slot 1 for this session."'), 'without storage the save lasts the session');
       await shot(host, 'saves-host');
       await savesMenu(guest, true);
+      assert.equal(await run(guest, `document.querySelector('${card(1)} .save-meta').textContent`), 'Empty', 'Player 2 does not see the host slots');
       assert.equal(await run(guest, `[...document.querySelectorAll('#menu-saves [data-action="load"]')].every(button => button.hidden) &&
         document.querySelector('#menu-saves .file-field').hidden`), true, 'Player 2 saves and downloads but cannot load');
       assert.equal(await run(viewer, 'document.querySelector("#saves-toggle").hidden && document.querySelector("#saves-modal").hidden'), true, 'Spectators have no saves');
-      await slotButton(guest, 2, 'save');
-      await waitFor(() => room.saves.get(2)?.nickname === 'bob', 'player 2 saves slot 2 through the host emulator');
+      await slotButton(guest, 1, 'save');
+      await waitFor(() => own('bob', 1)?.nickname === 'bob', 'player 2 saves their own slot 1 from their own emulator');
+      assert.equal(own('alice', 1).nickname, 'alice', 'The host slot 1 is untouched');
       await shot(guest, 'saves-guest');
-      const slotOne = saveState(room.saves.get(1));
+      const slotOne = saveState(own('alice', 1));
       assert.deepEqual([slotOne.cpu.mem[0x22], slotOne.cpu.mem[0x23]], savedCounters, 'Slot 1 holds both players’ progress');
+      assert.deepEqual([saveState(own('bob', 1)).cpu.mem[0x22], saveState(own('bob', 1)).cpu.mem[0x23]], savedCounters,
+        'Player 2 saved the same synchronized console');
       await press(guest, 'Escape', 'keydown');
       assert.equal(await run(guest, 'document.querySelector("#saves-modal").hidden && document.querySelector("#game-menu").hidden'), true, 'Esc closes the saves menu first');
       await savesMenu(host, false);
@@ -322,16 +359,17 @@ if (!process.versions.electron) {
         await waitFor(() => run(window, `testNes !== previousNes && testLoaded === ${JSON.stringify(expectedCpu)}`), 'every viewer restores the exact slot');
       }
       assert.deepEqual(await settled('restored counters agree'), savedCounters, 'Both players returned to the saved progress');
-      assert.equal(room.base, room.saves.get(1));
+      assert.equal(room.base, own('alice', 1));
       await waitFor(() => run(guest, 'document.querySelector("#toast").textContent.startsWith("Save loaded for everyone: Slot 1 (alice")'), 'load announced');
 
       for (const window of windows) await run(window, 'window.loadsBeforeCheckpoint=testLoads; undefined');
       // One short autosave interval for exactly one checkpoint, then the default two minutes again.
       await run(host, `(() => { const before=window.testNes;
         Object.defineProperty(window.monkyGame,'autosaveFrames',{configurable:true,get:()=>window.testNes===before?90:undefined}); })()`);
-      await waitFor(() => room.saves.has(0) && room.base === room.saves.get(0), 'autosave becomes the checkpoint base');
+      await waitFor(() => own('alice', 0) && room.base === own('alice', 0), 'autosave becomes the checkpoint base');
+      assert.equal(own('bob', 0), own('alice', 0), 'The checkpoint is also player 2’s Automático');
       await run(host, 'delete window.monkyGame.autosaveFrames; undefined');
-      const checkpointCpu = JSON.stringify(saveState(room.saves.get(0)).cpu);
+      const checkpointCpu = JSON.stringify(saveState(own('alice', 0)).cpu);
       for (const window of windows) {
         await waitFor(() => run(window, `testLoads === loadsBeforeCheckpoint + 1 && testLoaded === ${JSON.stringify(checkpointCpu)}`), 'every viewer reloads at the checkpoint');
       }
@@ -340,7 +378,7 @@ if (!process.versions.electron) {
       await waitFor(() => run(host, `document.querySelector('${card(0)} .save-name').textContent === "Automatic" &&
         !document.querySelector('${card(0)} .save-meta').textContent.includes("Every 2 min") &&
         !document.querySelector('${card(0)} .save-thumb img').hidden`), 'autosave listed with its screenshot');
-      assert.match(room.saves.get(0).thumbnail, /^data:image\/png;base64,/, 'Autosaves carry a screenshot too');
+      assert.match(own('alice', 0).thumbnail, /^data:image\/png;base64,/, 'Autosaves carry a screenshot too');
 
       const downloads = [];
       host.webContents.session.once('will-download', (event, item) => {
@@ -352,7 +390,7 @@ if (!process.versions.electron) {
       assert.equal(downloads[0].state, 'completed');
       assert.match(downloads[0].name, /^homebrew-fixture - slot 1 - .+\.monkynes$/);
       const file = fs.readFileSync(path.join(temporary, 'slot-1.monkynes'));
-      assert.ok(file.equals(room.saves.get(1).data), 'The download is the save kept by the bot');
+      assert.ok(file.equals(own('alice', 1).data), 'The download is the save kept by the bot');
 
       await run(host, 'document.querySelector("#return-lobby").click(); document.querySelector("#confirm-yes").click()');
       for (const window of windows) await waitFor(() => run(window, '!document.querySelector("#game-root").classList.contains("playing")'), 'lobby before importing');
@@ -393,12 +431,142 @@ if (!process.versions.electron) {
       await waitFor(() => run(viewer, 'document.querySelector("#status")?.textContent === "Watching the game." && document.querySelector("#game-root").classList.contains("playing")'), 'late spectator receives ROM and replays automatically');
       assert.equal(await run(viewer, 'document.querySelector("#rom").files.length'), 0);
       assert.equal(await run(viewer, 'document.querySelector("#canvas").getContext("2d").getImageData(100,100,1,1).data[3]'), 255, 'Late spectator rendered the real emulator');
+      const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+      const storedKeys = window => run(window, '[...testStorage.store.keys()].sort()');
+      // Chunked base64 of a stored save, so large states do not overflow String.fromCharCode.
+      const storedSave = (window, key) => run(window, `(() => {
+        const bytes=new Uint8Array(testStorage.store.get(${JSON.stringify(key)}));let binary='';
+        for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));return btoa(binary);
+      })()`).then(value => Buffer.from(value, 'base64'));
+      const prefix = `nes/${room.romHash}/`;
+
+      // Storage allowed during the session: each player keeps their own saves of this view on their computer.
+      for (const window of [host, guest]) await run(window, 'testStorage.setStatus("granted")');
+      for (const [window, user] of [[host, 'alice'], [guest, 'bob']]) {
+        await waitFor(async () => JSON.stringify(await storedKeys(window)) === JSON.stringify([prefix + 'auto', prefix + 'slot-1']),
+          `${user} keeps their own saves once storage is allowed`);
+        assert.ok((await storedSave(window, prefix + 'slot-1')).equals(own(user, 1).data), `${user} kept their own slot 1`);
+      }
+      await savesMenu(guest, true);
+      assert.match(await run(guest, 'document.querySelector("#menu-saves .saves-notice").textContent'), /^Only you see your saves\. They are kept on this computer/);
+      await slotButton(guest, 2, 'save');
+      await waitFor(() => run(guest, 'document.querySelector("#toast").textContent === "Saved to Slot 2 on this computer."'), 'saves go to this computer');
+      assert.deepEqual(await run(guest, 'testStorage.writes.at(-1)'), [prefix + 'slot-2', false], 'A requested save is not an autosave');
+      assert.deepEqual(await storedKeys(host), [prefix + 'auto', prefix + 'slot-1'], 'Nothing reaches the other player’s computer');
+      await savesMenu(guest, false);
+
+      // The host emulator produces every frame: out of view, the game pauses for everyone.
+      await run(host, 'testHooks.visibility.forEach(handler => handler(false))');
+      await waitFor(() => room.paused, 'a hidden host pauses the room');
+      await waitFor(() => run(guest, `!document.querySelector("#pause-notice").hidden &&
+        document.querySelector("#pause-notice").textContent === "Paused: alice can’t see the game."`), 'player 2 learns why the game paused');
+      await shot(guest, 'paused');
+      const pausedAt = await run(host, 'testFrames');
+      await sleep(250);
+      assert.ok(await run(host, 'testFrames') <= pausedAt + 1, 'No frames while the host cannot see the game');
+      await run(host, 'testHooks.visibility.forEach(handler => handler(true))');
+      await waitFor(async () => !room.paused && await run(guest, 'document.querySelector("#pause-notice").hidden') &&
+        await run(host, `testFrames > ${pausedAt + 10}`), 'the game resumes when the host looks again');
+
+      // Player 2 leaves: the game freezes and both players are asked whether to save.
+      await run(guest, 'window.closeResult=undefined; Promise.resolve(testHooks.beforeClose[0]({reason:"leave"})).then(value=>{window.closeResult=value ?? "close";}); undefined');
+      for (const window of [host, guest]) await waitFor(() => run(window, '!document.querySelector("#save-question").hidden'), 'both players are asked whether to save');
+      assert.equal(await run(host, 'document.querySelector("#save-question-context").textContent'), 'bob is leaving the NES; the game will stop.');
+      assert.equal(await run(guest, 'document.querySelector("#save-question-title").textContent'), 'Save the game state?');
+      await waitFor(() => run(viewer, `!document.querySelector("#pause-notice").hidden &&
+        document.querySelector("#pause-notice").textContent === "Game stopped: bob is leaving."`), 'spectators see why the game stopped');
+      await shot(guest, 'question');
+      const frozenAt = await run(host, 'testFrames');
+      await sleep(250);
+      assert.ok(await run(host, 'testFrames') <= frozenAt + 1, 'The game is frozen while players answer');
+      assert.equal(await run(guest, 'window.closeResult'), undefined, 'The view stays open until player 2 answers');
+      await run(guest, 'document.querySelector("#save-question-yes").click()');
+      assert.equal(await run(guest, `!document.querySelector("#save-question-slots").hidden &&
+        [...document.querySelectorAll("#save-question-slots .save-name")].map(name => name.textContent).join() === "Slot 1,Slot 2,Slot 3"`), true,
+      'Saving means choosing one of the player’s slots');
+      await shot(guest, 'question-slots');
+      await run(guest, `document.querySelector('#save-question-slots [data-slot="3"] button').click()`);
+      await waitFor(() => run(guest, 'window.closeResult === "close"'), 'answering lets player 2 leave');
+      assert.ok((await storedKeys(guest)).includes(prefix + 'slot-3'), 'Player 2 kept the closing state on their computer');
+      await waitFor(() => own('bob', 3), 'and in the session');
+      const closingState = saveState({ data: await storedSave(guest, prefix + 'slot-3') });
+      assert.deepEqual([closingState.cpu.mem[0x22], closingState.cpu.mem[0x23]], await counters(host), 'The frozen moment was saved');
+      const hostKeys = await storedKeys(host);
+      await run(host, 'document.querySelector("#save-question-no").click()');
+      await waitFor(() => run(host, 'document.querySelector("#save-question").hidden'), 'the host chose not to save');
+      assert.deepEqual(await storedKeys(host), hostKeys, 'Not saving writes nothing');
+      // Monky closes player 2's view: onClose disconnects at once and the game stops for the host.
       const ticks = await run(host, 'testFrames');
-      guest.destroy();
+      await run(guest, 'Promise.all(testHooks.close.map(handler => handler({reason:"leave"})))');
       await waitFor(() => run(host, 'document.querySelector("#status").textContent.includes("player left")'), 'NES disconnect teardown');
-      await new Promise(resolve => setTimeout(resolve, 100));
+      assert.equal(await run(host, 'document.querySelector("#save-question").hidden'), true, 'Players who already answered are not asked again');
+      await sleep(100);
       assert.ok(await run(host, 'testFrames') <= ticks + 3, 'Emulation stopped with the departed player');
-      console.log('NES: host-only ROM, controls, restart/lobby, exact-state resume for all viewers, invalid replacement recovery, ROM replacement, two-player save slots with screenshots, host-only load, autosave checkpoint, save download/import, late spectator and teardown passed.');
+
+      // A new session: the host brings its saves back from this computer and chooses one to load.
+      const kept = Object.fromEntries(await Promise.all(hostKeys.map(async key => [key, (await storedSave(host, key)).toString('base64')])));
+      room = service.create('nes', 'alice');
+      for (const window of [host, guest]) {
+        await new Promise(resolve => { window.webContents.once('did-finish-load', resolve); window.reload(); });
+        await waitFor(() => run(window, 'document.querySelector("#room-players")?.textContent.includes("alice")'), 'reopened session');
+      }
+      await waitFor(() => run(guest, 'document.querySelector("#room-players").textContent.includes("bob")'), 'player 2 in the new session');
+      await run(host, `(() => { for (const [key, data] of Object.entries(${JSON.stringify(kept)}))
+        testStorage.store.set(key, Uint8Array.from(atob(data), value => value.charCodeAt(0)).buffer); testStorage.setStatus("granted"); })()`);
+      await run(guest, 'document.querySelector("#join").click()');
+      await selectRom(replacement);
+      for (const window of [host, guest]) {
+        await waitFor(() => run(window, 'document.querySelector("#ready").textContent === "Ready"'), 'ROM in the new session');
+        await instrument(window);
+      }
+      await waitFor(() => own('alice', 1) && own('alice', 0), 'kept saves come back to the host slots');
+      assert.ok(own('alice', 1).data.equals(Buffer.from(kept[prefix + 'slot-1'], 'base64')));
+      assert.equal(room.base, undefined, 'Nothing loads by itself');
+      await waitFor(() => run(host, 'document.querySelector("#toast").textContent === "Your kept saves of this ROM are in Saves. Load one to resume."'), 'the host is told');
+      assert.equal(room.saves.has('bob'), false, 'Player 2 kept nothing without permission');
+      await waitFor(() => run(host, '!document.querySelector("#saves-lobby").hidden'), 'saves in the new lobby');
+      await run(host, 'document.querySelector("#saves-lobby").click()');
+      await waitFor(() => run(host, `!document.querySelector('${card(1)} [data-action="load"]').hidden`), 'kept slot listed');
+      await slotButton(host, 1, 'load');
+      await waitFor(() => room.base === own('alice', 1), 'the host loads a kept save');
+      await waitFor(() => run(host, '!document.querySelector("#resume").hidden && !document.querySelector("#resume").disabled'), 'resume from the kept save');
+      await run(host, 'document.querySelector("#resume").click()');
+      for (const window of [host, guest]) {
+        await waitFor(() => run(window, `window.testLoaded === ${JSON.stringify(expectedCpu)} && window.testFrames > 10`), 'the kept save restores both players');
+      }
+
+      // Ending for everyone waits until player 2 answers too; nobody really ending lets the game go on.
+      await run(host, 'window.closeResult=undefined; Promise.resolve(testHooks.beforeClose[0]({reason:"end"})).then(value=>{window.closeResult=value ?? "close";}); undefined');
+      await waitFor(() => run(guest, `!document.querySelector("#save-question").hidden &&
+        document.querySelector("#save-question-context").textContent === "alice is ending the NES for everyone."`), 'player 2 is asked before the end');
+      await run(host, 'document.querySelector("#save-question-no").click()');
+      await waitFor(() => run(host, 'document.querySelector("#save-question-context").textContent === "Waiting for bob to decide whether to save."'), 'the host waits for player 2');
+      await shot(host, 'question-waiting');
+      assert.equal(await run(host, 'window.closeResult'), undefined, 'The end waits for every player');
+      await run(guest, 'document.querySelector("#save-question-no").click()');
+      await waitFor(() => run(host, 'window.closeResult === "close"'), 'the end proceeds once player 2 answered');
+      const resumedAt = await run(host, 'testFrames');
+      await waitFor(() => run(host, `testFrames > ${resumedAt + 10} && document.querySelector("#save-question").hidden`), 'the frozen game resumes when the end does not happen');
+
+      // Player 2 drops without asking: the host is asked; without storage the chosen save is downloaded.
+      await run(host, 'testStorage.setStatus("denied")');
+      guest.destroy();
+      await waitFor(() => run(host, `!document.querySelector("#save-question").hidden &&
+        document.querySelector("#save-question-context").textContent === "bob left the NES, and the game stopped."`), 'the remaining player is asked');
+      assert.match(await run(host, 'document.querySelector("#save-question-note").textContent'), /downloaded as a file/);
+      const closingDownload = new Promise(resolve => host.webContents.session.once('will-download', (event, item) => {
+        item.setSavePath(path.join(temporary, 'closing.monkynes'));
+        item.once('done', (doneEvent, state) => resolve({ state, name: item.getFilename() }));
+      }));
+      await run(host, 'document.querySelector("#save-question-yes").click()');
+      await run(host, `document.querySelector('#save-question-slots [data-slot="2"] button').click()`);
+      const downloaded = await closingDownload;
+      assert.equal(downloaded.state, 'completed');
+      assert.match(downloaded.name, /^homebrew-fixture - slot 2 - .+\.monkynes$/);
+      const envelope = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(temporary, 'closing.monkynes'))).toString('utf8'));
+      assert.equal(envelope.romHash, room.romHash, 'The downloaded closing save belongs to this ROM');
+      await waitFor(() => run(host, 'document.querySelector("#save-question").hidden'), 'the question closes after saving');
+      console.log('NES: host-only ROM, controls, restart/lobby, exact-state resume for all viewers, invalid replacement recovery, ROM replacement, per-player save slots with screenshots, host-only load, autosave checkpoint, save download/import, late spectator, saves kept on each computer and restored, host pause, save question on leave/end/drop with download fallback and teardown passed.');
       await finish(0);
       return;
     }
@@ -526,7 +694,7 @@ if (!process.versions.electron) {
     console.error(error);
     console.error(errors.slice(-60).join('\n'));
     for (const window of windows) if (!window.isDestroyed()) {
-      console.error(await run(window, 'document.body.innerText'));
+      console.error(await run(window, 'document.body.innerText').catch(failure => failure.message));
       if (process.env.MONKY_GAMES_TEST_GAME === 'doom') console.error(await run(window,
         '({tics:window.testEngine?._monky_tics(),players:window.testEngine?._monky_players(),player:window.testEngine?._monky_player(),fresh:window.testEngine!==window.previousEngine,queue:window._webxdcRecvQueue?.length})'));
     }

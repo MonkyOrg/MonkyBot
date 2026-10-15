@@ -42,9 +42,10 @@
     main:not(.playing) canvas.blank{display:none}
     main.playing{position:fixed;inset:0;display:block;width:100%;height:100%;max-width:none;margin:0;background:#000;overflow:hidden}
     main.playing canvas{width:100%;height:100%;max-height:none;border:0;border-radius:0}
-    main.playing> :not(canvas):not(#mouse-hint):not(.game-error):not(#game-toolbar):not(.modal-backdrop):not(#toast){display:none}
-    main.playing #mouse-hint,main.playing .game-error{position:absolute;left:50%;transform:translateX(-50%);max-width:90%;padding:6px 12px;border-radius:var(--radius-md);pointer-events:none}
+    main.playing> :not(canvas):not(#mouse-hint):not(#pause-notice):not(.game-error):not(#game-toolbar):not(.modal-backdrop):not(#toast){display:none}
+    main.playing #mouse-hint,main.playing .game-error,main.playing #pause-notice{position:absolute;left:50%;transform:translateX(-50%);max-width:90%;padding:6px 12px;border-radius:var(--radius-md);pointer-events:none}
     main.playing #mouse-hint{bottom:12px;background:rgba(22,27,34,.88);color:var(--text-secondary);font-size:12px}main.playing .game-error{top:12px}
+    #pause-notice{margin:0;border:1px solid var(--border);background:var(--bg-panel);color:var(--text);text-align:center}main.playing #pause-notice{top:50%;transform:translate(-50%,-50%);padding:12px 18px;background:rgba(22,27,34,.92)}
     #game-toolbar{position:absolute;top:10px;right:10px;z-index:2;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}
     .modal-backdrop{position:fixed;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,.7)}
     .modal-card{display:flex;flex-direction:column;gap:16px;width:100%;max-width:480px;max-height:calc(100vh - 32px);overflow:auto;padding:20px;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--bg-panel);box-shadow:0 16px 48px rgba(0,0,0,.5)}
@@ -78,7 +79,7 @@
       <button id="saves-lobby" type="button" class="btn btn-secondary" aria-controls="saves-modal"></button></div>
     <div id="resume-card" class="resume-card" hidden><div class="save-thumb"><img alt="" hidden><span></span></div>
       <div class="save-info"><span class="save-meta resume-label"></span><span class="save-name"></span><span class="save-meta"></span></div></div>
-    <p id="mouse-hint"></p>
+    <p id="mouse-hint"></p><p id="pause-notice" role="status" aria-live="polite" hidden></p>
     <canvas id="canvas" class="blank" width="640" height="400" tabindex="0"></canvas>
     <section class="panel"><h2 id="help-title"></h2><p id="help" class="muted"></p><p id="legal" class="muted"></p></section>
     <div id="game-toolbar" hidden><button id="join-playing" type="button" class="btn btn-primary"></button>
@@ -97,6 +98,11 @@
       <h2 id="confirm-title" class="modal-title"></h2><img id="confirm-thumb" class="confirm-thumb" alt="" hidden><p class="muted"></p>
       <div class="modal-footer"><button id="confirm-no" type="button" class="btn btn-secondary"></button>
         <button id="confirm-yes" type="button" class="btn btn-danger"></button></div></div></div>
+    <div id="save-question" class="modal-backdrop" hidden><div class="modal-card modal-wide" role="alertdialog" aria-modal="true" aria-labelledby="save-question-title">
+      <h2 id="save-question-title" class="modal-title"></h2><p id="save-question-context" class="muted"></p>
+      <div id="save-question-slots" class="save-list"></div><p id="save-question-note" class="muted"></p>
+      <div class="modal-footer"><button id="save-question-no" type="button" class="btn btn-secondary"></button>
+        <button id="save-question-yes" type="button" class="btn btn-primary"></button></div></div></div>
     <p id="toast" class="toast" role="status" aria-live="polite" hidden></p>`;
   const get = id => document.getElementById(id);
   const status = get('status');
@@ -107,15 +113,23 @@
   let prepareFailed = false;
   let round = 0, incomingHash, uploading = false, menuOpen = false, savesOpen = false, pendingAction = null, confirmReturn = null;
   let doomGeneration = 0, watchingDoom = false, canResume = false;
-  let engine, nes, gameData, hash, loop, audio, audioTime = 0, audioSamples = [];
+  let engine, nes, gameData, hash, loop, hostLoop, audio, audioTime = 0, audioSamples = [];
   let buttons = 0, remoteButtons = [0, 0], nesSynchronized = false;
   let replay = [], replayIndex = 0, catchingUp = false;
-  // NES saves: slot 0 is the autosave/checkpoint; the bot keeps every slot in memory for the session.
-  const AUTOSAVE = 0, SAVE_SLOTS = [0, 1, 2, 3], SAVE_FORMAT = 'monky-nes-save';
+  // NES saves belong to each player: slot 0 is their autosave (the host's checkpoint), 1-3 are their own slots.
+  // The bot keeps them for the session; with permission, Monky also keeps them on this computer.
+  const AUTOSAVE = 0, SAVE_SLOTS = [0, 1, 2, 3], PLAYER_SLOTS = [1, 2, 3], SAVE_FORMAT = 'monky-nes-save';
   const MAX_SAVE_BYTES = 512 * 1024, MAX_SAVE_JSON = 4 * 1024 * 1024, MAX_THUMBNAIL = 96 * 1024;
   let emulator = '', romName = '', saves = [], baseInfo = null, baseText = '', baseHash = '', nesBase = '', resumeFrom = null;
   let checkpointId = 0, sinceCheckpoint = 0, uploads = Promise.resolve(), toastText = null, toastTimer, peersKey = '';
-  const saving = new Map();
+  // Slots with a save in progress, and keep requests waiting for the bot's answer.
+  const saving = new Set(), keeping = new Map();
+  // Device storage (absent in older Monky clients): status, the ROM already restored, and this view's own saves.
+  const storage = api.storage;
+  let storageStatus = storage?.status ?? 'unavailable', restoredFor = '';
+  const ownSaves = new Map();
+  // Closing: the save question shown to this player, the host loop frozen for it, and the host being out of view.
+  let question = null, frozen = false, hostVisible = true, pauseInfo = null, closingInfo = null;
   // Save screenshots by save hash; each is fetched from the bot at most once per view.
   const thumbs = new Map(), thumbRequests = new Set();
   const down = new Map();
@@ -206,12 +220,12 @@
     get('saves-toggle').setAttribute('aria-expanded', String(savesOpen));
     get('menu-toggle').textContent = text('Controles e opções · ', 'Controls and options · ') + (config.game === 'doom' ? 'F2' : 'Esc');
     get('menu-toggle').setAttribute('aria-expanded', String(menuOpen));
-    get('game-menu').hidden = !playing || !menuOpen || !!pendingAction;
+    get('game-menu').hidden = !playing || !menuOpen || !!pendingAction || asking();
     get('game-menu-title').textContent = config.game === 'doom' ? text('Controles do DOOM', 'DOOM controls') : text('Controles do NES', 'NES controls');
     get('game-help').textContent = config.game === 'doom' ? doomHelp() : nesHelp();
     get('menu-notice').textContent = config.game === 'nes'
-      ? text('O menu não pausa a partida. Os dois jogadores podem salvar; só o host carrega um save, reinicia ou volta ao lobby.',
-        'The menu does not pause the game. Both players can save; only the host loads a save, restarts or returns to the lobby.')
+      ? text('O menu não pausa a partida. Cada jogador tem os próprios saves; só o host carrega um save, reinicia ou volta ao lobby.',
+        'The menu does not pause the game. Each player has their own saves; only the host loads a save, restarts or returns to the lobby.')
       : text('O menu não pausa a partida. Só o host pode reiniciar ou voltar ao lobby.',
         'The menu does not pause the game. Only the host can restart or return to the lobby.');
     get('menu-saves-open').hidden = !started || !savesAvailable();
@@ -221,11 +235,11 @@
     get('menu-close').setAttribute('aria-label', text('Fechar', 'Close'));
     get('restart').textContent = config.game === 'doom' ? text('Reiniciar partida', 'Restart game') : text('Reiniciar ROM', 'Restart ROM');
     get('return-lobby').textContent = text('Voltar ao lobby', 'Return to lobby');
-    get('saves-modal').hidden = !savesOpen || !!pendingAction;
+    get('saves-modal').hidden = !savesOpen || !!pendingAction || asking();
     get('saves-close').setAttribute('aria-label', text('Fechar', 'Close'));
     renderSaves(get('menu-saves'));
     const confirm = get('confirm-action');
-    confirm.hidden = !pendingAction || slot !== 0;
+    confirm.hidden = !pendingAction || slot !== 0 || asking();
     if (!confirm.hidden) {
       get('confirm-title').textContent = confirmTitle();
       confirm.querySelector('p').textContent = confirmText();
@@ -237,6 +251,15 @@
       image.hidden = !preview;
     }
     get('confirm-no').textContent = text('Cancelar', 'Cancel');
+    const notice = get('pause-notice');
+    const closer = closingInfo?.uid !== uid ? closingInfo : null;
+    const waiting = config.game === 'nes' && started && !ended && !asking() && (closer ?? (slot !== 0 ? pauseInfo : null));
+    notice.hidden = !waiting;
+    if (waiting) notice.textContent = closer
+      ? text(`Partida parada: ${closer.nickname} está ${closer.reason === 'end' ? 'encerrando o NES' : 'saindo'}.`,
+        `Game stopped: ${closer.nickname} is ${closer.reason === 'end' ? 'ending the NES' : 'leaving'}.`)
+      : text(`Pausado: ${pauseInfo.nickname} não está vendo o jogo.`, `Paused: ${pauseInfo.nickname} can’t see the game.`);
+    renderQuestion();
     if (toastText) get('toast').textContent = text(...toastText);
   }
   function renderPlayers() {
@@ -299,7 +322,13 @@
   const slotName = (id, en) => id === null ? (en ? 'save file' : 'arquivo de save')
     : id === AUTOSAVE ? (en ? 'Automatic' : 'Automático') : 'Slot ' + id;
   const slotTitle = (id, en) => id === null ? (en ? 'Save file' : 'Arquivo de save') : slotName(id, en);
-  const clock = (time, en) => new Date(time).toLocaleTimeString(en ? 'en' : 'pt-BR', { hour: '2-digit', minute: '2-digit' });
+  // Saves kept on this computer may be days old, so other days also show the date.
+  const clock = (time, en) => {
+    const date = new Date(time), locale = en ? 'en' : 'pt-BR';
+    const hour = date.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
+    return date.toDateString() === new Date().toDateString() ? hour
+      : `${date.toLocaleDateString(locale, { day: '2-digit', month: '2-digit' })} ${hour}`;
+  };
   const describeSave = (save, en) => (save.nickname ? save.nickname + ' · ' : '') + clock(save.savedAt, en);
   function toast(pt, en, danger = false) {
     toastText = [pt, en];
@@ -342,11 +371,12 @@
       const id = Number(card.dataset.slot), save = saves.find(entry => entry.slot === id);
       const [saveButton, loadButton, downloadButton] = card.querySelectorAll('button');
       card.querySelector('.save-name').textContent = slotTitle(id, en);
-      card.querySelector('.save-meta').textContent = save ? describeSave(save, en)
+      // Every listed save is this player's own: the time is enough.
+      card.querySelector('.save-meta').textContent = save ? clock(save.savedAt, en)
         : id === AUTOSAVE ? text('A cada 2 min de partida', 'Every 2 min of play') : text('Vazio', 'Empty');
       showThumb(card.querySelector('.save-thumb'), save, id === AUTOSAVE ? text('Nenhum ainda', 'None yet') : text('Vazio', 'Empty'));
       saveButton.hidden = id === AUTOSAVE || !started;
-      saveButton.disabled = saving.has(id) || !nesSynchronized;
+      saveButton.disabled = saving.has(id) || !nesSynchronized || asking();
       saveButton.textContent = saving.has(id) ? text('Salvando…', 'Saving…') : save ? text('Sobrescrever', 'Overwrite') : text('Salvar', 'Save');
       // Overwriting is quieter than filling an empty slot, to avoid replacing a save by accident.
       saveButton.className = 'btn btn-sm ' + (save ? 'btn-secondary' : 'btn-primary');
@@ -357,14 +387,21 @@
       downloadButton.textContent = text('Baixar', 'Download');
       card.querySelector('.save-actions').hidden = saveButton.hidden && loadButton.hidden && downloadButton.hidden;
     }
-    container.querySelector('.saves-notice').textContent = text(
-      'Os saves ficam na memória do bot até a sessão terminar (30 min depois que todos saírem). Use Baixar para guardar o arquivo e continuar outro dia.',
-      'Saves stay in the bot’s memory until the session ends (30 min after everyone leaves). Use Download to keep the file and continue another day.');
+    container.querySelector('.saves-notice').textContent = savesNotice();
     const file = container.querySelector('.file-field');
     file.hidden = slot !== 0;
     file.querySelector('input').disabled = !!pendingAction;
     file.querySelector('.btn').textContent = text('Carregar arquivo', 'Load file');
     file.querySelector('.file-hint').textContent = text('Save baixado antes (.monkynes)', 'A downloaded save (.monkynes)');
+  }
+  function savesNotice() {
+    if (storageStatus === 'granted') return text(
+      'Só você vê seus saves. Eles ficam guardados neste computador (Configurações do bot → Armazenamento), e Baixar continua disponível.',
+      'Only you see your saves. They are kept on this computer (Bot settings → Storage), and Download remains available.');
+    return text('Só você vê seus saves. Eles ficam na memória do bot até a sessão terminar (30 min depois que todos saírem); use Baixar para continuar outro dia.' +
+      (storage ? ' Para guardá-los neste computador, permita o armazenamento ao abrir o miniapp ou em Configurações do bot → Armazenamento.' : ''),
+    'Only you see your saves. They stay in the bot’s memory until the session ends (30 min after everyone leaves); use Download to continue another day.' +
+      (storage ? ' To keep them on this computer, allow storage when opening the miniapp or in Bot settings → Storage.' : ''));
   }
   const validThumbnail = value => typeof value === 'string' && value.length <= MAX_THUMBNAIL &&
     /^data:image\/(?:png|webp|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/.test(value) ? value : '';
@@ -419,11 +456,165 @@
   function closeMenu() {
     if (menuOpen) toggleMenu();
   }
-  /** Esc and backdrop clicks close the topmost dialog first. */
+  /** Esc and backdrop clicks close the topmost dialog first; the save question only goes back a step. */
   function closeDialog() {
-    if (pendingAction) cancelConfirm();
+    if (asking()) {
+      if (question.step === 'slot') { question.step = 'ask'; render(); get('save-question-yes').focus(); }
+    } else if (pendingAction) cancelConfirm();
     else if (savesOpen) closeSaves();
     else closeMenu();
+  }
+  // ── Save question when the miniapp closes ─────────────────────────────────
+  /** Whether this player is answering the save question; it covers every other dialog. */
+  const asking = () => !!question && question.step !== 'done';
+  /** Only players with a running, synchronized game have a state to save. */
+  const canAskToSave = () => config.game === 'nes' && slot !== null && started && !ended && !!nes && nesSynchronized;
+  // Players who answered the current closing, so whoever ends the miniapp knows when nobody is left deciding.
+  const closingAnswered = new Set();
+  /**
+   * Asks this player whether to save the game state; yes picks one of their slots. `kind` is `self` when this
+   * player is closing, `closing` when another player is, and `stopped` when another player already left.
+   */
+  function askToSave(kind, { reason = 'leave', nickname = '', shot = null } = {}) {
+    let resolve;
+    const promise = new Promise(done => { resolve = done; });
+    question = { kind, reason, nickname, shot, self: kind === 'self', step: 'ask', choice: null, promise, resolve };
+    menuOpen = false;
+    savesOpen = false;
+    pendingAction = null;
+    releaseMouse();
+    render();
+    get('save-question-yes').focus();
+    return promise;
+  }
+  /** The frozen game state, or the one captured before the emulator was released. */
+  const questionShot = current => nes && nesSynchronized && !ended ? snapshot() : current.shot;
+  async function answerQuestion(id) {
+    const current = question;
+    if (!current || !['ask', 'slot'].includes(current.step)) return;
+    if (id !== null) {
+      current.step = 'saving';
+      render();
+      const shot = questionShot(current);
+      if (shot) await keepSave(id, shot, { closing: true });
+      current.choice = 'save';
+    } else current.choice = 'skip';
+    if (question !== current) return;
+    // The closer who ends the miniapp for everyone waits for this answer.
+    if (current.kind !== 'stopped') {
+      try { if (started && !ended) send({ type: 'closing-done', round }); } catch { /* the game connection already closed */ }
+    }
+    current.step = current.self && current.reason === 'end' ? 'waiting' : 'done';
+    settleQuestion();
+    render();
+  }
+  /** Ending for everyone waits until the other players answered or left; Monky's "End now" skips the wait. */
+  function settleQuestion() {
+    const current = question;
+    if (!current || current.step === 'ask' || current.step === 'slot' || current.step === 'saving') return;
+    if (current.step === 'waiting' && peers.some(peer => peer.slot !== null && peer.uid !== uid && !closingAnswered.has(peer.uid))) return;
+    current.step = 'done';
+    current.resolve();
+  }
+  function questionContext(current) {
+    const name = current.nickname;
+    if (current.step === 'waiting') {
+      const names = peers.filter(peer => peer.slot !== null && peer.uid !== uid && !closingAnswered.has(peer.uid)).map(peer => peer.nickname).join(', ');
+      return text(`Aguardando ${names} decidir se salva o jogo.`, `Waiting for ${names} to decide whether to save.`);
+    }
+    if (current.kind === 'self') return current.reason === 'end'
+      ? text('Você está encerrando o NES para todos.', 'You are ending the NES for everyone.')
+      : text('Você está saindo do NES.', 'You are leaving the NES.');
+    if (current.kind === 'closing') return current.reason === 'end'
+      ? text(`${name} está encerrando o NES para todos.`, `${name} is ending the NES for everyone.`)
+      : text(`${name} está saindo do NES; a partida vai parar.`, `${name} is leaving the NES; the game will stop.`);
+    return name ? text(`${name} saiu do NES, e a partida parou.`, `${name} left the NES, and the game stopped.`)
+      : text('Um jogador saiu do NES, e a partida parou.', 'A player left the NES, and the game stopped.');
+  }
+  function buildQuestionSlots() {
+    const list = get('save-question-slots');
+    for (const id of PLAYER_SLOTS) {
+      const card = document.createElement('article');
+      card.className = 'save-card';
+      card.dataset.slot = String(id);
+      card.innerHTML = '<div class="save-thumb"><img alt="" hidden><span></span></div>' +
+        '<div class="save-info"><span class="save-name"></span><span class="save-meta"></span></div>' +
+        '<div class="save-actions"><button type="button" class="btn btn-sm"></button></div>';
+      list.append(card);
+    }
+  }
+  function renderQuestion() {
+    const dialog = get('save-question');
+    dialog.hidden = !asking();
+    if (dialog.hidden) return;
+    const current = question, en = api.viewer.locale === 'en', choosing = current.step === 'slot' || current.step === 'saving';
+    get('save-question-title').textContent = current.step === 'waiting'
+      ? text('Aguardando os outros jogadores', 'Waiting for the other players') : text('Quer salvar o estado do jogo?', 'Save the game state?');
+    get('save-question-context').textContent = questionContext(current) +
+      (current.step === 'slot' ? text(' Escolha um slot.', ' Choose a slot.') : '');
+    const list = get('save-question-slots');
+    list.hidden = !choosing;
+    for (const card of list.querySelectorAll('.save-card')) {
+      const id = Number(card.dataset.slot), save = saves.find(entry => entry.slot === id), button = card.querySelector('button');
+      card.querySelector('.save-name').textContent = slotTitle(id, en);
+      card.querySelector('.save-meta').textContent = save ? clock(save.savedAt, en) : text('Vazio', 'Empty');
+      showThumb(card.querySelector('.save-thumb'), save, text('Vazio', 'Empty'));
+      button.disabled = current.step === 'saving';
+      button.textContent = current.step === 'saving' ? text('Salvando…', 'Saving…')
+        : save ? text('Sobrescrever', 'Overwrite') : text('Salvar aqui', 'Save here');
+      button.className = 'btn btn-sm ' + (save ? 'btn-secondary' : 'btn-primary');
+    }
+    get('save-question-note').textContent = current.step === 'waiting'
+      ? text('Para não esperar, use Encerrar agora no cartão do miniapp.', 'To stop waiting, use End now on the miniapp card.')
+      : storageStatus === 'granted' ? text('O save fica guardado neste computador.', 'The save is kept on this computer.')
+        : text('Sem permissão para guardar neste computador, o save escolhido é baixado como arquivo.',
+          'Without permission to keep it on this computer, the chosen save is downloaded as a file.');
+    const no = get('save-question-no'), yes = get('save-question-yes');
+    no.hidden = current.step === 'waiting';
+    no.disabled = yes.disabled = current.step === 'saving';
+    no.textContent = choosing ? text('Voltar', 'Back') : text('Não salvar', 'Don’t save');
+    yes.hidden = current.step !== 'ask';
+    yes.textContent = text('Salvar', 'Save');
+  }
+  /** Monky asks before this person leaves or ends the miniapp: the game freezes and every player is asked. */
+  function beforeClose({ reason }) {
+    if (config.game !== 'nes') return;
+    if (!canAskToSave() && !asking()) return;
+    try { if (canAskToSave()) send({ type: 'closing', reason, round }); } catch { /* the game connection already closed */ }
+    if (asking()) {
+      // Answering another player's question also answers this close.
+      question.self = true;
+      question.reason = reason;
+      if (question.kind === 'closing') question.kind = 'self';
+    } else void askToSave('self', { reason, shot: snapshot() });
+    frozen = true;
+    syncHostLoop();
+    render();
+    return question.promise;
+  }
+  /**
+   * Runs on every close, hidden and muted, for at most 5 seconds. Without an answer (left the room, someone else
+   * ended it, or "Close now") the Automático keeps the game state when this person allowed storage.
+   */
+  async function viewClosed() {
+    if (config.game !== 'nes') return;
+    stopHostLoop();
+    const current = question;
+    const shot = current?.choice || slot === null ? null : canAskToSave() ? snapshot() : current?.shot;
+    if (shot) await storeAutosave(shot);
+    // Leaving now stops the game for the others at once instead of when Monky discards this document.
+    socket?.close();
+  }
+  /** Only the host's view matters: it produces every frame, so the game pauses while the host cannot see it. */
+  function visibility(visible) {
+    hostVisible = visible;
+    if (config.game !== 'nes' || slot !== 0 || !started || ended) return;
+    reportVisibility(visible);
+    syncHostLoop();
+  }
+  function reportVisibility(visible) {
+    try { if (socket?.readyState === WebSocket.OPEN) send({ type: visible ? 'unpause' : 'pause', round }); }
+    catch (error) { console.warn('[games] Could not report the host visibility.', error); }
   }
   function fail(error) {
     if (disposed || ended && error?.name === 'AbortError') return;
@@ -538,6 +729,7 @@
       prepared = true;
       send({ type: 'ready', hash });
       show('ROM recebida. Aguardando o host iniciar.', 'ROM received. Waiting for the host to start.');
+      void restoreSaves();
       if (started) await play();
     } catch (error) {
       prepareFailed = true;
@@ -650,7 +842,10 @@
   function applyFrame(frame) {
     nesFrame([frame[0], frame[1]]);
     sinceCheckpoint++;
-    if (frame[2] === 1) checkpoint();
+    if (frame[2] !== 1) return;
+    const state = checkpoint();
+    // The host's checkpoint is every player's Automático; each keeps it on their own computer.
+    if (slot !== null && slot !== 0 && !catchingUp) void storeAutosave({ state, thumbnail: screenshot() });
   }
   /** Autosave marker: every viewer continues from the same serialized state late viewers will load. */
   function checkpoint() {
@@ -659,12 +854,139 @@
     return state;
   }
   const autosaveFrames = () => Number.isInteger(config.autosaveFrames) && config.autosaveFrames > 0 ? config.autosaveFrames : 7200;
+  /** This player's emulator state and screen, captured together. */
+  const snapshot = () => ({ state: JSON.stringify(nes.toJSON()), thumbnail: screenshot() });
+  /** A save envelope small enough to send; the screenshot is dropped rather than the save when a state is large. */
+  async function pack({ state, thumbnail }) {
+    let data = await gzip(saveEnvelope(state, thumbnail));
+    if (data.length > MAX_SAVE_BYTES && thumbnail) data = await gzip(saveEnvelope(state, ''));
+    if (data.length > MAX_SAVE_BYTES) throw new Error(text('O save ficou grande demais.', 'The save is too large.'));
+    return data;
+  }
+  const storageKey = (romHash, id) => `nes/${romHash}/${id === AUTOSAVE ? 'auto' : 'slot-' + id}`;
+  /**
+   * Keeps one of this player's saves on this computer when they allowed it. Saves they asked for report
+   * failures; autosaves never interrupt the game (Monky itself warns when storage is nearly full).
+   */
+  async function storeSave(id, data) {
+    if (!hash) return false;
+    const key = storageKey(hash, id);
+    ownSaves.set(key, data);
+    if (storageStatus !== 'granted') return false;
+    try {
+      return await storage.set(key, data, id === AUTOSAVE ? { autosave: true } : undefined);
+    } catch (error) {
+      console.warn('[games] Could not keep the save on this computer.', error);
+      if (id !== AUTOSAVE) toast(...storageFailure(error), true);
+      return false;
+    }
+  }
+  function storageFailure(error) {
+    return error?.reason === 'quota'
+      ? ['O armazenamento do bot neste computador está cheio. Libere espaço em Configurações do bot → Armazenamento.',
+        'The bot’s storage on this computer is full. Free some space in Bot settings → Storage.']
+      : ['Não foi possível guardar o save neste computador.', 'Could not keep the save on this computer.'];
+  }
+  async function storeAutosave(shot) {
+    try { await storeSave(AUTOSAVE, await pack(shot)); }
+    catch (error) { console.warn('[games] Autosave was not kept on this computer.', error); }
+  }
+  /** Keeps a save in this player's own slot for the session; resolves whether the bot accepted it. */
+  function sendKeep(id, data) {
+    keeping.get(id)?.(false);
+    return new Promise(resolve => {
+      const timer = setTimeout(() => finish(false), 10000);
+      const finish = accepted => { clearTimeout(timer); if (keeping.get(id) === finish) keeping.delete(id); resolve(accepted); };
+      keeping.set(id, finish);
+      try { send({ type: 'keep', slot: id, data: base64(data) }); }
+      catch { finish(false); }
+    });
+  }
+  /**
+   * Saves this player's own state in one of their slots: in the bot's memory for the session and, with
+   * permission, on this computer. When closing without permission the file is downloaded instead.
+   */
+  async function keepSave(id, shot, { closing = false } = {}) {
+    saving.add(id);
+    render();
+    try {
+      const data = await pack(shot);
+      const [kept, stored] = await Promise.all([sendKeep(id, data), storeSave(id, data)]);
+      if (closing && !stored) {
+        downloadFile(data, id, Date.now());
+        toast('Download do save iniciado.', 'Save download started.');
+      } else if (stored) toast(`Salvo no ${slotName(id, false)} neste computador.`, `Saved to ${slotName(id, true)} on this computer.`);
+      else if (kept) toast(`Salvo no ${slotName(id, false)} nesta sessão.`, `Saved to ${slotName(id, true)} for this session.`);
+      else toast('Não foi possível salvar agora. Tente novamente.', 'Could not save right now. Try again.', true);
+      return kept || stored || closing;
+    } catch (error) {
+      console.warn('[games] Save failed.', error);
+      toast('Não foi possível salvar. ' + error.message, 'Could not save. ' + error.message, true);
+      return false;
+    } finally {
+      saving.delete(id);
+      render();
+    }
+  }
+  /** Rejects saves that the current ROM and emulator cannot run, before anyone loads them. */
+  function trialLoad(state) {
+    const trial = new window.jsnes.NES({ emulateSound: false });
+    trial.loadROM(gameData);
+    trial.fromJSON(state);
+    trial.frame();
+  }
+  const canRestore = () => config.game === 'nes' && storageStatus === 'granted' && slot !== null && prepared &&
+    !!gameData && !!hash && !!emulator && restoredFor !== hash && !ended;
+  /** Brings this player's saves of the chosen ROM back from this computer into their slots. */
+  async function restoreSaves() {
+    if (!canRestore()) return;
+    const romHash = restoredFor = hash;
+    try {
+      let restored = 0, skipped = 0;
+      for (const { key } of await storage.list({ prefix: `nes/${romHash}/` })) {
+        const match = /^nes\/[a-f0-9]{64}\/(auto|slot-[1-3])$/.exec(key);
+        if (!match) continue;
+        const value = await storage.get(key);
+        if (hash !== romHash || ended) return;
+        if (!(value instanceof ArrayBuffer)) continue;
+        const bytes = new Uint8Array(value);
+        let save;
+        try {
+          save = await readSave(bytes);
+          trialLoad(save.state);
+        } catch (error) {
+          console.warn('[games] Ignored a save kept on this computer.', key, error);
+          skipped++;
+          continue;
+        }
+        const image = validThumbnail(save.thumbnail), checksum = await digest(bytes);
+        if (image) { thumbs.set(checksum, image); thumbRequests.add(checksum); }
+        send({ type: 'restore', slot: match[1] === 'auto' ? AUTOSAVE : Number(match[1].slice(5)), data: base64(bytes) });
+        restored++;
+      }
+      if (restored) toast(slot === 0 && !started
+        ? 'Seus saves guardados desta ROM estão em Saves. Carregue um para retomar.'
+        : 'Seus saves guardados desta ROM estão em Saves.',
+      slot === 0 && !started ? 'Your kept saves of this ROM are in Saves. Load one to resume.' : 'Your kept saves of this ROM are in Saves.');
+      else if (skipped) toast('Saves guardados de outra versão do emulador foram ignorados.', 'Kept saves from another emulator version were skipped.');
+    } catch (error) {
+      if (restoredFor === romHash) restoredFor = '';
+      console.warn('[games] Could not read the saves kept on this computer.', error);
+    }
+  }
+  /** Once storage is allowed during a session, the saves this player made in this view are kept too. */
+  async function flushOwnSaves() {
+    for (const [key, data] of ownSaves) {
+      if (storageStatus !== 'granted') return;
+      try { await storage.set(key, data, key.endsWith('/auto') ? { autosave: true } : undefined); }
+      catch (error) { console.warn('[games] Could not keep an earlier save on this computer.', error); }
+    }
+  }
   function upload(message, state, thumbnail) {
     uploads = uploads.then(async () => {
-      let data = await gzip(saveEnvelope(state, thumbnail));
-      // The screenshot is optional: drop it rather than the save when a state is unusually large.
-      if (data.length > MAX_SAVE_BYTES && thumbnail) data = await gzip(saveEnvelope(state, ''));
-      if (data.length > MAX_SAVE_BYTES) throw new Error(text('O save ficou grande demais para enviar.', 'The save is too large to send.'));
+      const data = await pack({ state, thumbnail });
+      // The host keeps its own Automático; the bot makes the same checkpoint every player's Automático.
+      void storeSave(AUTOSAVE, data);
       // Saves are large: let the previous one drain so frame messages keep their connection budget.
       for (let attempt = 0; socket?.bufferedAmount > 64 * 1024; attempt++) {
         if (attempt >= 50) throw new Error(text('Conexão ocupada; o save não foi enviado.', 'Connection busy; the save was not sent.'));
@@ -672,20 +994,11 @@
       }
       if (ended || message.round !== round) return;
       send({ ...message, data: base64(data) });
-    }).catch(error => {
-      console.warn('[games] Save upload failed.', error);
-      if (message.slot !== AUTOSAVE) toast('Não foi possível enviar o save. ' + error.message, 'Could not send the save. ' + error.message, true);
-    });
+    }).catch(error => console.warn('[games] Autosave upload failed.', error));
   }
   function requestSave(id) {
-    if (!started || slot === null || !nesSynchronized || saving.has(id) || id === AUTOSAVE) return;
-    send({ type: 'save', slot: id, round });
-    saving.set(id, setTimeout(() => {
-      saving.delete(id);
-      toast('Não foi possível salvar agora. Tente novamente.', 'Could not save right now. Try again.', true);
-      render();
-    }, 10000));
-    render();
+    if (!started || slot === null || !nes || !nesSynchronized || saving.has(id) || !PLAYER_SLOTS.includes(id) || asking()) return;
+    void keepSave(id, snapshot());
   }
   function chooseLoad(id) {
     if (slot !== 0 || pendingAction || !saves.some(save => save.slot === id)) return;
@@ -696,20 +1009,21 @@
   function requestDownload(id) {
     if (slot !== null && saves.some(save => save.slot === id)) send({ type: 'download', slot: id });
   }
-  function downloadSave(value) {
-    const time = new Date(Date.now() - value.age), pad = number => String(number).padStart(2, '0');
-    const name = [(value.romName || 'NES').replace(/\.nes$/i, ''),
-      value.slot === AUTOSAVE ? text('automático', 'autosave') : 'slot ' + value.slot,
+  function downloadFile(bytes, id, savedAt, name = romName) {
+    const time = new Date(savedAt), pad = number => String(number).padStart(2, '0');
+    const file = [(name || 'NES').replace(/\.nes$/i, ''),
+      id === AUTOSAVE ? text('automático', 'autosave') : 'slot ' + id,
       `${time.getFullYear()}-${pad(time.getMonth() + 1)}-${pad(time.getDate())} ${pad(time.getHours())}-${pad(time.getMinutes())}`].join(' - ');
     const link = document.createElement('a');
-    link.href = URL.createObjectURL(new Blob([fromBase64(value.data)], { type: 'application/octet-stream' }));
-    link.download = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').slice(0, 150) + '.monkynes';
+    link.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+    link.download = file.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').slice(0, 150) + '.monkynes';
     link.hidden = true;
     document.body.append(link);
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(link.href), 60000);
   }
+  const downloadSave = value => downloadFile(fromBase64(value.data), value.slot, Date.now() - value.age, value.romName);
   async function importSave(input) {
     const file = input.files[0];
     input.value = '';
@@ -718,10 +1032,7 @@
     const bytes = new Uint8Array(await file.arrayBuffer());
     const value = await readSave(bytes);
     // A throwaway emulator rejects unusable files before anyone else loads them.
-    const trial = new window.jsnes.NES({ emulateSound: false });
-    trial.loadROM(gameData);
-    trial.fromJSON(value.state);
-    trial.frame();
+    trialLoad(value.state);
     if (ended || slot !== 0 || pendingAction) return;
     // The preview only feeds the confirmation; the server reads the screenshot from the file itself.
     const action = { type: 'import', data: base64(bytes), preview: validThumbnail(value.thumbnail) };
@@ -738,13 +1049,23 @@
       replayIndex = 0;
       catchingUp = false;
       nesSynchronized = true;
-      if (slot === 0) startNesLoop();
+      syncHostLoop();
       show(slot === null ? 'Assistindo à partida.' : 'Partida em andamento.', slot === null ? 'Watching the game.' : 'Game in progress.');
       render();
     } catch (error) { stop(); fail(error); }
   }
+  /** The host runs the frame loop only while it sees the game and nobody is being asked to save. */
+  function syncHostLoop() {
+    const run = config.game === 'nes' && slot === 0 && started && !!nes && nesSynchronized && !ended && hostVisible && !frozen;
+    if (run && !hostLoop) startNesLoop();
+    else if (!run && hostLoop) stopHostLoop();
+  }
+  function stopHostLoop() {
+    clearInterval(hostLoop);
+    hostLoop = undefined;
+  }
   function startNesLoop() {
-    loop = setInterval(() => {
+    hostLoop = setInterval(() => {
       try {
         const masks = [buttons, remoteButtons[1]];
         nesFrame(masks);
@@ -770,8 +1091,10 @@
       resumeAudio();
       createNes();
       nesSynchronized = slot === 0 && !resume;
-      if (nesSynchronized) startNesLoop();
+      if (nesSynchronized) syncHostLoop();
       else send({ type: 'watch', hash, round });
+      // A host that starts the round out of view starts it paused.
+      if (slot === 0 && !hostVisible) reportVisibility(false);
     }
     if (ended || !started || playingRound !== round) return;
     show('Partida em andamento.', 'Game in progress.');
@@ -859,6 +1182,10 @@
   function resetNes() {
     clearInterval(loop);
     clearTimeout(loop);
+    stopHostLoop();
+    frozen = false;
+    pauseInfo = null;
+    closingInfo = null;
     buttons = 0;
     remoteButtons = [0, 0];
     down.clear();
@@ -870,7 +1197,6 @@
     menuOpen = false;
     savesOpen = false;
     pendingAction = null;
-    for (const timer of saving.values()) clearTimeout(timer);
     saving.clear();
     for (const node of audioNodes) { node.stop(); node.disconnect(); }
     audioNodes.clear();
@@ -897,7 +1223,7 @@
     }
   }
   function toggleMenu() {
-    if (!started || !(engine || nes)) return;
+    if (!started || !(engine || nes) || asking()) return;
     menuOpen = !menuOpen;
     savesOpen = false;
     pendingAction = null;
@@ -927,7 +1253,7 @@
     render();
   }
   function key(event, pressed) {
-    if (event.code === 'Escape' && (pendingAction || savesOpen || menuOpen)) {
+    if (event.code === 'Escape' && (asking() || pendingAction || savesOpen || menuOpen)) {
       event.preventDefault();
       event.stopImmediatePropagation();
       if (pressed && !event.repeat) closeDialog();
@@ -940,7 +1266,7 @@
       if (pressed && !event.repeat) toggleMenu();
       return;
     }
-    if (menuOpen || savesOpen || pendingAction || event.target instanceof Element && event.target.closest('button,input,a')) {
+    if (menuOpen || savesOpen || pendingAction || asking() || event.target instanceof Element && event.target.closest('button,input,a')) {
       if (engine) event.stopImmediatePropagation();
       return;
     }
@@ -963,8 +1289,9 @@
     }
   }
   async function received(event) {
-    if (ended || disposed) return;
+    if (disposed) return;
     if (event.data instanceof ArrayBuffer) {
+      if (ended) return;
       const bytes = new Uint8Array(event.data);
       if (config.game === 'nes') { await receiveRom(bytes); return; }
       if (bytes.length < 12) throw new Error('Invalid DOOM packet');
@@ -975,6 +1302,8 @@
       return;
     }
     const value = JSON.parse(event.data);
+    // After the game stopped, only the bot's answer to this player's last save still matters.
+    if (ended && !(value.type === 'saved' || value.type === 'unavailable' && value.action === 'keep')) return;
     if (value.type === 'challenge') {
       const proof = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, keyPair.privateKey,
         new TextEncoder().encode(config.roomId + ':' + value.challenge));
@@ -994,7 +1323,10 @@
       resumeFrom = value.resumeFrom ?? null;
       saves = (value.saves ?? []).map(save => ({ ...save, savedAt: Date.now() - save.age }));
       baseInfo = value.base ? { ...value.base, savedAt: Date.now() - value.base.age } : null;
+      const host = peers.find(peer => peer.slot === 0);
+      pauseInfo = value.paused && host ? { nickname: host.nickname } : null;
       syncThumbnails();
+      settleQuestion();
       render();
       if (slot !== null && !started) {
         if (prepared && previousSlot === null) send({ type: 'ready', hash });
@@ -1002,6 +1334,7 @@
           void prepare().catch(fail);
         }
       }
+      if (slot !== null && previousSlot === null) void restoreSaves();
       if (config.game === 'nes' && started && prepared && !nes) await play();
     } else if (value.type === 'rom') {
       if (config.game !== 'nes' || typeof value.hash !== 'string' || !/^[a-f0-9]{64}$/.test(value.hash)) throw new Error('Invalid ROM announcement');
@@ -1019,6 +1352,9 @@
       }
       if (config.game === 'nes') resetNes();
       else resetDoom();
+      // A question about a closing that did not happen belongs to the previous round.
+      if (question && !question.self) question = null;
+      closingAnswered.clear();
       round = value.round;
       canResume = false;
       started = true;
@@ -1035,6 +1371,8 @@
       canvas.classList.add('blank');
       if (config.game === 'nes') resetNes();
       else resetDoom();
+      if (question && !question.self) question = null;
+      closingAnswered.clear();
       show('De volta ao lobby. Aguardando o host.', 'Back in the lobby. Waiting for the host.');
       render();
     } else if (value.type === 'input' && value.round === round) remoteButtons[value.slot] = value.buttons;
@@ -1056,21 +1394,39 @@
         show('Sincronizando a partida...', 'Synchronizing the game...');
         catchUp();
       }
-    } else if (value.type === 'capture') {
-      if (slot === 0 && value.round === round && nes && nesSynchronized && SAVE_SLOTS.includes(value.slot) && value.slot !== AUTOSAVE) {
-        upload({ type: 'state', slot: value.slot, round }, JSON.stringify(nes.toJSON()), screenshot());
-      }
+    } else if (value.type === 'paused' || value.type === 'unpaused') {
+      if (value.round !== round) return;
+      pauseInfo = value.type === 'paused' ? { nickname: value.nickname } : null;
+      render();
+    } else if (value.type === 'closing') {
+      if (value.round !== round || config.game !== 'nes') return;
+      // Another player is leaving or ending: the host stops producing frames and this player is asked too.
+      closingInfo = { uid: value.uid, nickname: value.nickname, reason: value.reason === 'end' ? 'end' : 'leave' };
+      closingAnswered.delete(value.uid);
+      frozen = true;
+      syncHostLoop();
+      if (value.uid !== uid && !asking() && canAskToSave()) void askToSave('closing', { reason: closingInfo.reason, nickname: value.nickname, shot: snapshot() });
+      render();
+    } else if (value.type === 'closing-answered') {
+      if (value.round !== round) return;
+      closingAnswered.add(value.uid);
+      settleQuestion();
+      render();
+    } else if (value.type === 'closing-cancelled') {
+      if (value.round !== round) return;
+      // Nobody closed after all: the game goes on, unless this player is still answering their own close.
+      closingInfo = null;
+      closingAnswered.clear();
+      // An answered question is over; only a close this player is still answering keeps the game frozen.
+      if (question && (!question.self || !asking())) question = null;
+      frozen = asking();
+      syncHostLoop();
+      render();
     } else if (value.type === 'saved') {
-      const mine = saving.has(value.slot);
-      clearTimeout(saving.get(value.slot));
-      saving.delete(value.slot);
       const image = validThumbnail(value.thumbnail);
       if (image && typeof value.hash === 'string') { thumbs.set(value.hash, image); thumbRequests.add(value.hash); }
-      if (slot !== null) {
-        if (value.slot === AUTOSAVE) toast('Save automático feito.', 'Autosave done.');
-        else if (mine) toast(`Salvo no ${slotName(value.slot, false)}.`, `Saved to ${slotName(value.slot, true)}.`);
-        else toast(`${value.nickname} salvou no ${slotName(value.slot, false)}.`, `${value.nickname} saved to ${slotName(value.slot, true)}.`);
-      }
+      if (value.slot === AUTOSAVE) { if (slot !== null && !ended) toast('Save automático feito.', 'Autosave done.'); }
+      else keeping.get(value.slot)?.(true);
       render();
     } else if (value.type === 'thumbnail') {
       const image = validThumbnail(value.thumbnail);
@@ -1079,13 +1435,10 @@
       downloadSave(value);
       toast('Download do save iniciado.', 'Save download started.');
     } else if (value.type === 'unavailable') {
-      if (value.action === 'save' || value.action === 'state') {
-        if (!saving.has(value.slot)) return;
-        clearTimeout(saving.get(value.slot));
-        saving.delete(value.slot);
-        toast('Não foi possível salvar agora. Tente novamente.', 'Could not save right now. Try again.', true);
-        render();
-      } else if (value.action === 'load' || value.action === 'import') {
+      if (value.action === 'keep') keeping.get(value.slot)?.(false);
+      else if (value.action === 'restore') console.warn('[games] The bot refused a save kept on this computer.', value.slot, value.reason);
+      else if (value.action === 'state') console.warn('[games] The bot skipped an autosave.');
+      else if (value.action === 'load' || value.action === 'import') {
         if (value.reason === 'invalid') toast('O bot recusou este arquivo de save.', 'The bot refused this save file.', true);
         else toast('Não foi possível carregar esse save agora.', 'Could not load that save right now.', true);
       } else if (value.action === 'download') {
@@ -1101,6 +1454,13 @@
       render();
     }
     else if (value.type === 'stopped') {
+      // The other player left: before the emulator is released, this player is asked whether to save.
+      if (canAskToSave()) {
+        const shot = snapshot();
+        if (asking()) question.shot = shot;
+        // Whoever already answered for this player's announced close is not asked again.
+        else if (!(closingInfo && question?.step === 'done')) void askToSave('stopped', { nickname: typeof value.nickname === 'string' ? value.nickname : '', shot });
+      }
       stop();
       if (config.game === 'nes') show('Um jogador saiu. Feche a visualização e abra novamente para continuar; os saves seguem disponíveis no lobby.',
         'A player left. Close this view and open it again to continue; saves remain available in the lobby.');
@@ -1130,6 +1490,21 @@
   }
   const savesList = get('menu-saves');
   buildSaves(savesList);
+  buildQuestionSlots();
+  get('save-question-yes').addEventListener('click', () => {
+    if (question?.step !== 'ask') return;
+    question.step = 'slot';
+    render();
+    get('save-question-slots').querySelector('button')?.focus();
+  });
+  get('save-question-no').addEventListener('click', () => {
+    if (question?.step === 'slot') { question.step = 'ask'; render(); get('save-question-yes').focus(); }
+    else void answerQuestion(null).catch(fail);
+  });
+  get('save-question-slots').addEventListener('click', event => {
+    const card = event.target.closest('button') && event.target.closest('[data-slot]');
+    if (card && question?.step === 'slot') void answerQuestion(Number(card.dataset.slot)).catch(fail);
+  });
   savesList.addEventListener('click', event => {
     const button = event.target.closest('button[data-action]');
     if (!button) return;
@@ -1242,12 +1617,25 @@
   window.addEventListener('blur', releaseMouse);
   document.addEventListener('visibilitychange', () => { if (document.hidden) releaseMouse(); });
   const unsubscribe = api.onState(render);
+  // Device storage and the closing and visibility hooks exist only in newer Monky clients.
+  const unsubscribeStorage = storage?.onStatus?.(status => {
+    const before = storageStatus;
+    storageStatus = status;
+    if (status === 'granted' && before !== 'granted') { void flushOwnSaves(); void restoreSaves(); }
+    render();
+  });
+  if (config.game === 'nes') {
+    api.onBeforeClose?.(beforeClose);
+    api.onClose?.(viewClosed);
+    api.onVisibilityChange?.(visibility);
+  }
   window.addEventListener('error', event => { fail(event.error ?? new Error(event.message)); stop(); });
   window.addEventListener('unhandledrejection', event => { fail(event.reason); stop(); });
   window.addEventListener('pagehide', () => {
     disposed = true;
     clearInterval(renewal);
     unsubscribe();
+    unsubscribeStorage?.();
     stop();
     abort.abort();
     socket?.close();

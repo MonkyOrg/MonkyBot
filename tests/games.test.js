@@ -13,7 +13,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const hash = createHash('sha256').update(nesFixture()).digest('hex');
 let jsnes;
 /** A real jsnes snapshot of the fixture after holding player 1's A button for `frames` frames. */
-async function saveData({ frames = 0, romHash = hash, emulator = NES_EMULATOR, format = 'monky-nes-save', version = 1, state, thumbnail } = {}) {
+async function saveData({ frames = 0, romHash = hash, emulator = NES_EMULATOR, format = 'monky-nes-save', version = 1, state, thumbnail, savedAt = Date.now() } = {}) {
   jsnes ??= await import('jsnes');
   let snapshot = state;
   if (!snapshot) {
@@ -22,7 +22,7 @@ async function saveData({ frames = 0, romHash = hash, emulator = NES_EMULATOR, f
     for (let i = 0; i < frames; i++) { nes.buttonDown(1, 0); nes.frame(); }
     snapshot = nes.toJSON();
   }
-  return gzipSync(JSON.stringify({ format, version, emulator, romHash, romName: 'fixture.nes', savedAt: Date.now(),
+  return gzipSync(JSON.stringify({ format, version, emulator, romHash, romName: 'fixture.nes', savedAt,
     ...thumbnail === undefined ? {} : { thumbnail }, state: snapshot })).toString('base64');
 }
 const saveHash = data => createHash('sha256').update(Buffer.from(data, 'base64')).digest('hex');
@@ -32,12 +32,19 @@ async function until(client, type, check) {
     if (check(value)) return value;
   }
 }
-async function storeSave(f, requester, host, slot, data) {
-  requester.send({ type: 'save', slot, round: f.room.round });
-  const capture = await host.receive('capture');
-  assert.deepEqual(capture, { type: 'capture', slot, round: f.room.round });
-  host.send({ type: 'state', slot, round: capture.round, data });
-  return until(requester, 'saved', value => value.slot === slot);
+/** A player keeps a snapshot of their own emulator in one of their slots. */
+async function keepSave(f, player, slot, data) {
+  for (const peer of f.room.peers) peer.lastSave = 0;
+  player.send({ type: 'keep', slot, data });
+  return until(player, 'saved', value => value.slot === slot);
+}
+const savesOf = (f, user) => f.room.saves.get(user) ?? new Map();
+/** Requests that get no answer: an ordered reply to a later message proves nothing came back. */
+async function silent(peer, request, type) {
+  peer.send(request);
+  peer.send({ type: 'download', slot: 9 });
+  await peer.receive('unavailable');
+  assert.equal(peer.messages.some(value => value.type === type), false, JSON.stringify(request));
 }
 async function waitFor(check) {
   const deadline = Date.now() + 3000;
@@ -46,8 +53,8 @@ async function waitFor(check) {
     await tick();
   }
 }
-async function setup(t, game = 'nes') {
-  const service = new GamesService({ host: '127.0.0.1', port: 0, publicUrl: 'http://127.0.0.1' });
+async function setup(t, game = 'nes', options = {}) {
+  const service = new GamesService({ host: '127.0.0.1', port: 0, publicUrl: 'http://127.0.0.1', ...options });
   t.after(() => service.close());
   const base = await service.start();
   const room = service.create(game, 'host');
@@ -304,58 +311,67 @@ test('the NES fixture counts each held A button once per frame and restores exac
   assert.equal(restored.cpu.mem[0x22], 5);
 });
 
-test('both NES players save through the host emulator; spectators cannot save, load or download', async t => {
+test('each NES player keeps independent slots; spectators cannot keep, load or download', async t => {
   const f = await setup(t);
   const { host, guest } = await players(f);
   const viewer = await connect(f, 'viewer');
   assert.equal(host.auth.emulator, NES_EMULATOR);
-  const data = await saveData({ frames: 7 });
-  assert.deepEqual(await storeSave(f, guest, host, 2, data), { type: 'saved', slot: 2, nickname: 'guest', hash: saveHash(data) });
-  assert.deepEqual(await viewer.receive('saved'), { type: 'saved', slot: 2, nickname: 'guest', hash: saveHash(data) });
-  const stored = f.room.saves.get(2);
-  assert.ok(stored.data.equals(Buffer.from(data, 'base64')), 'The bot keeps the uploaded envelope as-is');
+  const mine = await saveData({ frames: 7 });
+  assert.deepEqual(await keepSave(f, guest, 2, mine), { type: 'saved', slot: 2, nickname: 'guest', hash: saveHash(mine) });
+  const stored = savesOf(f, 'guest').get(2);
+  assert.ok(stored.data.equals(Buffer.from(mine, 'base64')), 'The bot keeps the uploaded envelope as-is');
   assert.equal(stored.romName, 'fixture.nes');
   const lobby = await until(guest, 'lobby', value => value.saves.length === 1);
   assert.deepEqual(lobby.saves.map(({ slot, nickname, romName }) => ({ slot, nickname, romName })), [{ slot: 2, nickname: 'guest', romName: 'fixture.nes' }]);
-  assert.equal(await storeSave(f, host, host, 1, await saveData({ frames: 3 })).then(value => value.nickname), 'host');
+  assert.deepEqual((await until(host, 'lobby', () => true)).saves, [], 'The host does not see the guest slots');
+  const theirs = await saveData({ frames: 3 });
+  assert.equal((await keepSave(f, host, 2, theirs)).nickname, 'host');
+  assert.equal(savesOf(f, 'guest').get(2), stored, 'Saving the same slot number does not touch another player');
+  assert.equal(host.messages.some(value => value.type === 'saved' && value.nickname === 'guest'), false);
+  assert.equal(viewer.messages.some(value => value.type === 'saved'), false, 'Spectators get no save notices');
 
-  for (const [peer, message] of [[viewer, { type: 'save', slot: 3 }], [guest, { type: 'save', slot: 0 }],
+  for (const peer of f.room.peers) peer.lastSave = 0;
+  for (const [peer, message] of [[viewer, { type: 'keep', slot: 3, data: mine }], [guest, { type: 'keep', slot: 0, data: mine }],
     [viewer, { type: 'download', slot: 2 }], [guest, { type: 'load', slot: 2 }], [host, { type: 'load', slot: 3 }]]) {
     peer.send({ ...message, round: f.room.round });
     assert.equal((await peer.receive('unavailable')).action, message.type);
   }
-  assert.equal(f.room.base, undefined, 'Only the host loads an existing save');
-  host.send({ type: 'state', slot: 3, round: f.room.round, data });
-  assert.equal((await host.receive('unavailable')).action, 'state', 'Uploads need a pending capture request');
-  assert.equal(f.room.saves.has(3), false);
+  assert.equal(f.room.base, undefined, 'Only the host loads one of their saves');
+  guest.send({ type: 'keep', slot: 1, data: mine });
+  guest.send({ type: 'keep', slot: 1, data: mine });
+  await guest.receive('saved');
+  assert.equal((await guest.receive('unavailable')).action, 'keep', 'Keeping is rate limited');
   for (const peer of f.room.peers) peer.lastSave = 0;
-  guest.send({ type: 'save', slot: 3, round: f.room.round });
-  await host.receive('capture');
-  host.send({ type: 'save', slot: 3, round: f.room.round });
-  assert.equal((await host.receive('unavailable')).action, 'save', 'One pending capture per slot');
-  guest.send({ type: 'download', slot: 2 });
-  const file = await guest.receive('save-data');
-  assert.equal(file.data, data);
-  assert.equal(file.romName, 'fixture.nes');
-  const denied = once(viewer.socket, 'close');
-  viewer.send({ type: 'state', slot: 1, round: f.room.round, data });
-  assert.equal((await denied)[0], 4002, 'Only the host emulator produces snapshots');
+  guest.send({ type: 'keep', slot: 3, data: await saveData({ romHash: 'b'.repeat(64) }) });
+  assert.deepEqual(await guest.receive('unavailable'), { type: 'unavailable', action: 'keep', slot: 3, reason: 'invalid' });
+  assert.equal(guest.socket.readyState, WebSocket.OPEN, 'A refused save does not disconnect the player');
+  for (const [peer, data] of [[guest, mine], [host, theirs]]) {
+    peer.send({ type: 'download', slot: 2 });
+    const file = await peer.receive('save-data');
+    assert.equal(file.data, data, 'Each player downloads their own slot');
+    assert.equal(file.romName, 'fixture.nes');
+  }
+  const denied = once(guest.socket, 'close');
+  guest.send({ type: 'state', slot: 0, round: f.room.round, data: mine });
+  assert.equal((await denied)[0], 4002, 'Only the host emulator produces the shared autosave');
 });
 
 test('only the host loads a save; every viewer gets the base before the new round and late viewers replay from it', async t => {
   const f = await setup(t);
   const { host, guest } = await players(f);
-  await storeSave(f, host, host, 1, await saveData({ frames: 9 }));
+  await keepSave(f, host, 1, await saveData({ frames: 9 }));
+  await keepSave(f, guest, 1, await saveData({ frames: 2 }));
   host.send({ type: 'frames', frames: [[1, 0]], round: f.room.round });
   await guest.receive('frames');
   const oldRound = f.room.round;
   host.send({ type: 'load', slot: 1, round: oldRound });
   const base = await guest.receive('base');
-  assert.equal(base.hash, f.room.saves.get(1).hash);
-  assert.ok(Buffer.from(base.data, 'base64').equals(f.room.saves.get(1).data));
+  const loaded = savesOf(f, 'host').get(1);
+  assert.equal(base.hash, loaded.hash, 'The host loads their own slot, not the guest one');
+  assert.ok(Buffer.from(base.data, 'base64').equals(loaded.data));
   assert.equal(base.slot, 1);
   assert.deepEqual(await guest.receive('start'), { type: 'start', round: oldRound + 1, base: base.hash });
-  assert.equal(f.room.base, f.room.saves.get(1));
+  assert.equal(f.room.base, loaded);
   host.send({ type: 'frames', frames: [[255, 255]], round: oldRound });
   host.send({ type: 'frames', frames: [[1, 1]], round: f.room.round });
   assert.deepEqual((await guest.receive('frames')).frames, [[1, 1]]);
@@ -368,7 +384,7 @@ test('only the host loads a save; every viewer gets the base before the new roun
   host.send({ type: 'restart', round: f.room.round });
   assert.deepEqual(await guest.receive('base'), { type: 'base', hash: '' });
   assert.equal((await guest.receive('start')).base, '', 'Restarting the ROM returns to power-on');
-  assert.ok(f.room.saves.has(1), 'Restarting keeps the saves');
+  assert.ok(savesOf(f, 'host').has(1), 'Restarting keeps the saves');
 });
 
 test('autosave checkpoints fold committed inputs into the base so late viewers replay only recent frames', async t => {
@@ -387,7 +403,8 @@ test('autosave checkpoints fold committed inputs into the base so late viewers r
   assert.equal(base.slot, 0);
   assert.deepEqual(await guest.receive('saved'), { type: 'saved', slot: 0, nickname: '', hash: base.hash });
   assert.deepEqual(f.room.frames, [[0, 1]]);
-  assert.equal(f.room.base, f.room.saves.get(0));
+  assert.equal(f.room.base, savesOf(f, 'host').get(0));
+  assert.equal(savesOf(f, 'guest').get(0), f.room.base, 'The checkpoint is each player’s own Automático');
   assert.equal(f.room.dropped, 3);
   host.send({ type: 'state', slot: 0, round, data: await saveData() });
   assert.equal((await host.receive('unavailable')).action, 'state', 'Autosaves are rate limited');
@@ -409,7 +426,7 @@ test('autosave checkpoints fold committed inputs into the base so late viewers r
   assert.deepEqual(await guest.receive('base'), { type: 'base', hash: '' });
   assert.equal((await guest.receive('start')).base, '');
   assert.equal(f.room.base, undefined, 'Starting over discards the timeline');
-  assert.ok(f.room.saves.has(0), 'Starting over keeps the autosave');
+  assert.ok(savesOf(f, 'host').has(0), 'Starting over keeps the autosave');
   const denied = once(host.socket, 'close');
   host.send({ type: 'frames', frames: [[1, 0, 1]], round: f.room.round });
   assert.equal((await denied)[0], 4002, 'A marker needs a checkpoint id');
@@ -423,7 +440,7 @@ test('saves follow the ROM, survive the host leaving and are released with the r
   host.send({ type: 'ready', hash });
   host.send({ type: 'start' });
   await host.receive('start');
-  await storeSave(f, host, host, 3, await saveData({ frames: 2 }));
+  await keepSave(f, host, 3, await saveData({ frames: 2 }));
   host.send({ type: 'return-lobby', round: f.room.round });
   await host.receive('reset-lobby');
   host.send({ type: 'load', slot: 3, round: f.room.round });
@@ -445,7 +462,7 @@ test('saves follow the ROM, survive the host leaving and are released with the r
   host.socket.close();
   await waitFor(() => f.room.rom === undefined);
   assert.equal(f.room.base, undefined);
-  assert.ok(f.room.saves.has(3), 'Saves stay in memory until the session ends');
+  assert.ok(savesOf(f, 'host').has(3), 'Saves stay in memory until the session ends');
   f.service.remove(f.room);
   assert.equal(f.room.saves.size, 0);
 });
@@ -478,42 +495,135 @@ test('the host imports a save file in the lobby and resumes everyone from it', a
   assert.equal(f.room.saves.size, 0, 'Imported files do not occupy a slot');
 });
 
-test('save screenshots reach players with the notice or on request; spectators and invalid images get none', async t => {
+test('save screenshots reach only their owner, with the notice or on request; invalid images are dropped', async t => {
   const f = await setup(t);
   const { host, guest } = await players(f);
   const viewer = await connect(f, 'viewer');
   const image = 'data:image/png;base64,' + Buffer.from('a tiny screen').toString('base64');
   const data = await saveData({ frames: 2, thumbnail: image });
   const shot = saveHash(data);
-  assert.deepEqual(await storeSave(f, guest, host, 1, data), { type: 'saved', slot: 1, nickname: 'guest', hash: shot, thumbnail: image });
-  assert.equal((await host.receive('saved')).thumbnail, image);
-  assert.deepEqual(await viewer.receive('saved'), { type: 'saved', slot: 1, nickname: 'guest', hash: shot }, 'Spectators have no saves menu');
+  assert.deepEqual(await keepSave(f, guest, 1, data), { type: 'saved', slot: 1, nickname: 'guest', hash: shot, thumbnail: image });
   const lobby = await until(guest, 'lobby', value => value.saves.length === 1);
   assert.deepEqual([lobby.saves[0].hash, lobby.saves[0].thumb], [shot, true]);
-  assert.equal(f.room.saves.get(1).thumbnail, image);
+  assert.equal(savesOf(f, 'guest').get(1).thumbnail, image);
 
   guest.send({ type: 'thumbnail', hash: shot });
   assert.deepEqual(await guest.receive('thumbnail'), { type: 'thumbnail', hash: shot, thumbnail: image });
-  // Requests that get no answer: ordered replies to a later message prove nothing came back.
-  const silent = async (peer, request) => {
-    peer.send(request);
-    peer.send({ type: 'download', slot: 9 });
-    await peer.receive('unavailable');
-    assert.equal(peer.messages.some(value => value.type === 'thumbnail'), false, JSON.stringify(request));
-  };
-  await silent(viewer, { type: 'thumbnail', hash: shot });
-  await silent(guest, { type: 'thumbnail', hash: 'f'.repeat(64) });
-  await silent(guest, { type: 'thumbnail', hash: 42 });
+  await silent(viewer, { type: 'thumbnail', hash: shot }, 'thumbnail');
+  await silent(host, { type: 'thumbnail', hash: shot }, 'thumbnail');
+  await silent(guest, { type: 'thumbnail', hash: 'f'.repeat(64) }, 'thumbnail');
+  await silent(guest, { type: 'thumbnail', hash: 42 }, 'thumbnail');
   [...f.room.peers].find(peer => peer.slot === 1).thumbnails = 128;
-  await silent(guest, { type: 'thumbnail', hash: shot });
+  await silent(guest, { type: 'thumbnail', hash: shot }, 'thumbnail');
+  assert.equal(host.messages.some(value => value.type === 'saved'), false, 'The other player gets no notice');
 
   for (const [slot, thumbnail] of [[2, 'data:image/svg+xml;base64,PHN2Zz4='], [3, 'javascript:alert(1)'],
     [2, 'data:image/png;base64,' + 'A'.repeat(96 * 1024)]]) {
-    for (const peer of f.room.peers) peer.lastSave = 0;
-    const saved = await storeSave(f, host, host, slot, await saveData({ thumbnail }));
+    const saved = await keepSave(f, host, slot, await saveData({ thumbnail }));
     assert.equal(saved.thumbnail, undefined, thumbnail.slice(0, 30));
-    assert.equal(f.room.saves.get(slot).thumbnail, '', 'The save is kept without the unusable image');
+    assert.equal(savesOf(f, 'host').get(slot).thumbnail, '', 'The save is kept without the unusable image');
   }
+});
+
+test('players bring their own saves back from their computer; newer ones win and nothing loads by itself', async t => {
+  const f = await setup(t);
+  const host = await connect(f, 'host'), guest = await connect(f, 'guest');
+  const viewer = await connect(f, 'viewer');
+  guest.send({ type: 'join' });
+  host.socket.send(nesFixture());
+  await guest.receive('binary');
+  const lastWeek = Date.now() - 7 * 24 * 3600_000;
+  const old = await saveData({ frames: 2, savedAt: lastWeek });
+  host.send({ type: 'restore', slot: 1, data: old });
+  host.send({ type: 'restore', slot: 0, data: await saveData({ frames: 4, savedAt: lastWeek + 60_000 }) });
+  const lobby = await until(host, 'lobby', value => value.saves.length === 2);
+  const one = lobby.saves.find(save => save.slot === 1);
+  assert.ok(Math.abs(Date.now() - one.age - lastWeek) < 5000, 'A restored save keeps its original time');
+  assert.equal(one.nickname, 'host');
+  assert.equal(lobby.saves.find(save => save.slot === 0).nickname, '');
+  assert.equal(host.messages.some(value => value.type === 'saved'), false, 'Restoring is quiet');
+  assert.deepEqual([lobby.canResume, f.room.base], [false, undefined], 'The host still chooses what to load');
+
+  await keepSave(f, host, 2, await saveData({ frames: 6 }));
+  const current = savesOf(f, 'host').get(2);
+  host.send({ type: 'restore', slot: 2, data: await saveData({ frames: 1, savedAt: lastWeek }) });
+  host.send({ type: 'restore', slot: 1, data: await saveData({ frames: 3, savedAt: Date.now() + 3600_000 }) });
+  await waitFor(() => savesOf(f, 'host').get(1).data.toString('base64') !== old);
+  assert.equal(savesOf(f, 'host').get(2), current, 'An older copy does not replace the session save');
+  assert.ok(savesOf(f, 'host').get(1).savedAt <= Date.now(), 'Times from the future are clamped');
+
+  guest.send({ type: 'restore', slot: 1, data: old });
+  await until(guest, 'lobby', value => value.saves.length === 1);
+  assert.notEqual(savesOf(f, 'guest').get(1), savesOf(f, 'host').get(1));
+  host.send({ type: 'restore', slot: 3, data: await saveData({ emulator: 'jsnes@0.0.1' }) });
+  assert.deepEqual(await host.receive('unavailable'), { type: 'unavailable', action: 'restore', slot: 3, reason: 'invalid' });
+  viewer.send({ type: 'restore', slot: 1, data: old });
+  assert.equal((await viewer.receive('unavailable')).action, 'restore', 'Spectators have no saves');
+  const peer = [...f.room.peers].find(entry => entry.slot === 1);
+  peer.restores = 8;
+  guest.send({ type: 'restore', slot: 2, data: old });
+  assert.equal((await guest.receive('unavailable')).action, 'restore', 'Restores are rate limited');
+});
+
+test('the host pauses the game for everyone while it cannot see it', async t => {
+  const f = await setup(t);
+  const { host, guest } = await players(f);
+  const round = f.room.round;
+  host.send({ type: 'pause', round });
+  assert.deepEqual(await guest.receive('paused'), { type: 'paused', round, nickname: 'host' });
+  host.send({ type: 'pause', round });
+  const viewer = await connect(f, 'viewer');
+  assert.equal((await until(viewer, 'lobby', () => true)).paused, true, 'Late viewers learn the game is paused');
+  host.send({ type: 'unpause', round });
+  assert.deepEqual(await guest.receive('unpaused'), { type: 'unpaused', round });
+  assert.equal(guest.messages.filter(value => value.type === 'paused').length, 0, 'Repeated pauses are not announced again');
+  host.send({ type: 'pause', round });
+  await guest.receive('paused');
+  host.send({ type: 'restart', round });
+  await guest.receive('start');
+  assert.equal(f.room.paused, false, 'A new round starts unpaused');
+  const denied = once(guest.socket, 'close');
+  guest.send({ type: 'pause', round: f.room.round });
+  assert.equal((await denied)[0], 4002, 'Only the host pauses');
+});
+
+test('closing the miniapp freezes the game, asks every player and resumes when nobody closes', async t => {
+  const f = await setup(t, 'nes', { closingLeaveMs: 50, closingAnswerMs: 400 });
+  const { host, guest } = await players(f);
+  const viewer = await connect(f, 'viewer');
+  const round = f.room.round;
+  await silent(viewer, { type: 'closing', reason: 'end', round }, 'closing');
+  guest.send({ type: 'closing', reason: 'leave', round });
+  const closing = { type: 'closing', uid: guest.uid, nickname: 'guest', reason: 'leave', round };
+  assert.deepEqual(await host.receive('closing'), closing);
+  assert.deepEqual(await viewer.receive('closing'), closing, 'Spectators see why the game stopped');
+  host.send({ type: 'closing-done', round });
+  assert.deepEqual(await guest.receive('closing-answered'), { type: 'closing-answered', uid: 1, round });
+  guest.send({ type: 'closing-done', round });
+  await host.receive('closing-answered');
+  assert.deepEqual(await host.receive('closing-cancelled'), { type: 'closing-cancelled', round },
+    'A closer that answered but stayed has given up closing');
+  assert.equal(f.room.closing, undefined);
+
+  f.room.peers.forEach(peer => { peer.lastClosing = 0; });
+  host.send({ type: 'closing', reason: 'end', round });
+  await until(guest, 'closing', value => value.uid === 1 && value.reason === 'end');
+  host.send({ type: 'closing-done', round });
+  await guest.receive('closing-answered');
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.ok(f.room.closing, 'Ending for everyone keeps waiting for the other player');
+  assert.deepEqual(await guest.receive('closing-cancelled'), { type: 'closing-cancelled', round }, 'Nobody answering resumes the game');
+
+  f.room.peers.forEach(peer => { peer.lastClosing = 0; });
+  guest.send({ type: 'closing', reason: 'leave', round });
+  await until(host, 'closing', value => value.uid === guest.uid);
+  guest.socket.close();
+  assert.deepEqual(await host.receive('stopped'), { type: 'stopped', reason: 'player-left', nickname: 'guest' },
+    'The remaining player learns who left, to be asked whether to save');
+  assert.equal(f.room.closing, undefined);
+  const denied = once(host.socket, 'close');
+  host.send({ type: 'closing', reason: 'other', round: f.room.round });
+  assert.equal((await denied)[0], 4002);
 });
 
 test('a malformed, oversized or mismatched save file is refused without disturbing the game', async t => {
@@ -647,7 +757,7 @@ test('/nes and /doom stay open while anyone is connected and end only after the 
       createScreen: async input => ({ ...input, instanceId: command.name, channelId: 'voice', revision: 0 }),
     });
   }
-  assert.match(replies[1], /termina 30 minutos depois que todos saírem.*baixe o save/);
+  assert.match(replies[1], /termina 30 minutos depois que todos saírem.*próprios slots.*baixe o arquivo/);
   assert.doesNotMatch(replies[0], /save/, 'Only the NES reply mentions saves');
   const nes = [...service.rooms.values()].find(room => room.game === 'nes');
   const viewer = await connect({ service, base: await service.start(), room: nes }, 'host');

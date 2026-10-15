@@ -50,18 +50,41 @@ the old progress.
 **NES saves:** the **Saves** button (in the corner during play, in **Controls and
 options** or in the lobby) opens a dedicated menu with the **Automatic** slot,
 updated every 2 minutes of play, and three numbered slots. Each save shows a picture
-of the screen at the moment it was made. Both players save (saving to a used slot
-overwrites it). Only the host loads a save, with a confirmation that shows that
-picture: players and spectators continue together from it, including two-player
-games. In the lobby, the host can also choose a slot or a save file and then use
-**Resume game**; the resume point appears with its picture. Saves live only in the
-bot's memory until the session ends and remain
-available if a player leaves or the host reopens the miniapp with the same ROM.
-**Download** creates a `.monkynes` file to continue another day: in a new session,
-the host chooses the same ROM and loads the file. Saves from another ROM or another
-emulator version are refused. The file contains emulator memory and the screen
-picture, which may include parts of the ROM; share it only with people who may
-receive the ROM. The autosave is
+of the screen at the moment it was made. **Each player has their own saves**, during
+the session too: player 2 saves their own emulator into their own slots, without
+seeing or overwriting the host's, and saving to a used slot overwrites it. Every
+player's Automatic slot is the same game checkpoint. Only the host loads a save (one
+of theirs or a file), with a confirmation that shows that picture: players and
+spectators continue together from it, including two-player games. In the lobby, the
+host can also choose a slot or a save file and then use **Resume game**; the resume
+point appears with its picture.
+
+**Saves on each computer:** when the administrator approves the `device_storage`
+capability, Monky asks each person opening the miniapp whether it may keep data on
+their computer (**Don't keep**, **This session only** or **Always**). With that
+permission, each player's saves are kept on their own computer, per ROM (keys
+`nes/<ROM hash>/auto` and `slot-1` to `slot-3`), and return to the **Saves** menu when
+that person plays the same ROM again; the host then loads whichever they want. Usage
+and deletion live in **Bot settings → Storage**. Without permission, saves stay in the
+bot's memory until the session ends and remain available if a player leaves or the
+host reopens the miniapp with the same ROM. **Download** creates a `.monkynes` file to
+continue another day: in a new session, the host chooses the same ROM and loads the
+file. Saves from another ROM or another emulator version are refused. The file
+contains emulator memory and the screen picture, which may include parts of the ROM;
+share it only with people who may receive the ROM.
+
+**When closing:** when a player leaves or ends the miniapp during a game, the game
+freezes and both players are asked **Save the game state?**; answering **Save** picks
+one of their own slots. Without permission to keep it on the computer, the chosen save
+is downloaded as a file instead. Ending the miniapp for everyone waits for the other
+player's answer (the card's **End now** does not wait). If a player drops or leaves the
+room without the question, the remaining player is asked. When no question is possible
+(for example, the person left the voice room), the Automatic save of whoever allowed
+storage is kept without asking. Spectators are not asked.
+
+**Pause:** the host's emulator produces every frame, so the game pauses for everyone
+while the host cannot see the miniapp (browsing elsewhere in Monky, card scrolled away
+or window minimized); the others see a notice. The autosave is
 also a checkpoint: late arrivals synchronize from it instead of replaying the whole game.
 No commercial game is bundled with the emulator. Automated coverage uses an
 original homebrew fixture. Sources, credits and rebuild instructions are in `assets/games`.
@@ -95,13 +118,20 @@ with `MONKY_GAMES_ELECTRON` pointing to the Monky checkout's Electron executable
 
 ## Compatibility
 
-This beta uses **Monky protocol 38** with official SDK **38.0.0-beta**.
-Use the Monky app and server **v38.0.0-beta**; the external port test of
-`monkybot doctor` requires a protocol 37 or newer server. The bundled SDK is checked
-during the build and needs no separate installation.
+This beta uses **Monky protocol 39** with official SDK **39.1.0-beta**.
+The bot still connects to protocol 38 servers (and older ones down to 24, through
+negotiation): there the SDK leaves out `device_storage` and saves stay in the bot's
+memory, with download. Keeping saves on each computer requires server and app
+**v39.0.1-beta** or newer and the administrator's approval of `device_storage`; the
+closing question requires app **v38.16.0-beta** or newer, and pausing while the host
+cannot see the game, **v39.1.0-beta**. Older apps keep playing without these features.
+The external port test of `monkybot doctor` requires a protocol 37 or newer server.
+The bundled SDK is checked during the build and needs no separate installation.
 Profiles, identities, registrations, languages and requested capabilities are
 preserved; this update neither enables microphone reception nor changes the
-access declared to the host, so existing consent remains valid.
+access declared to the host, so existing consent remains valid. The new
+`device_storage` capability arrives disabled in the server's permission review;
+other approvals remain.
 
 YouTube playlists and YouTube Music albums (see
 [Playlists and albums](#playlists-and-albums)) require the server and the
@@ -133,8 +163,11 @@ other servers. Its provenance and SHA-256 are documented in
 
 During installation, an administrator with permission to manage bots reviews
 the requested access: commands, public messages, voice publication, local
-execution, miniapps, and live actions. Reminders use public messages
-outside an invocation; giveaways use public messages and live actions. MonkyBot does not request general chat reading
+execution, miniapps, live actions and storage on each computer (`device_storage`).
+Reminders use public messages
+outside an invocation; giveaways use public messages and live actions; NES saves use
+storage on each computer, which only allows **asking**: each person decides on their
+own computer. MonkyBot does not request general chat reading, server storage
 or participant voice reception. Manual links and migrated bots have no access
 until that review; denying access prevents the corresponding feature.
 Server permission to request local execution never replaces each person's

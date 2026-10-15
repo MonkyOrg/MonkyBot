@@ -245,6 +245,10 @@ test('notes use the exact channel/version installation URL and treat source note
     assert.match(notes, /playlists do YouTube e álbuns do YouTube Music/);
     assert.match(notes, /servidor Monky v38\.0\.0-beta ou mais novo \(protocolo 38\)/);
     assert.match(notes, /de 10 a 500 \(padrão 100\)/);
+    assert.match(notes, /cada jogador tem os próprios saves/);
+    assert.match(notes, /`device_storage`/);
+    assert.match(notes, /continua conectando a servidores no protocolo 38/);
+    assert.match(notes, /consentimento existente continua válido/);
   }
 });
 

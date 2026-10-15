@@ -113,10 +113,10 @@ export function registerGames(bot: BotClient, service = defaultService(), idle =
           ctx.reply(message(ctx.locale,
             'Abra o miniapp no palco de voz. Seu amigo pode entrar como jogador 2; os demais podem assistir. ' +
             'A partida continua enquanto alguém estiver com o miniapp aberto e termina 30 minutos depois que todos saírem.' +
-            (game === 'nes' ? ' No menu (Esc), salve o jogo e baixe o save para continuar outro dia.' : ''),
+            (game === 'nes' ? ' No menu (Esc), cada jogador salva nos próprios slots; com sua permissão, os saves ficam neste computador, ou baixe o arquivo.' : ''),
             'Open the miniapp on the voice stage. Your friend can join as player 2; others can watch. ' +
             'The game stays open while anyone has the miniapp open and ends 30 minutes after everyone leaves.' +
-            (game === 'nes' ? ' In the menu (Esc), save the game and download the save to continue another day.' : '')));
+            (game === 'nes' ? ' In the menu (Esc), each player saves to their own slots; with your permission, saves stay on this computer, or download the file.' : '')));
         } catch (error: unknown) {
           if (room) service.remove(room);
           console.error('[games] Could not create game.', errorDiagnostic(error));

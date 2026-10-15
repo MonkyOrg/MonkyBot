@@ -14,7 +14,7 @@ const basicCommands: readonly CommandDefinition[] = [
   pingCommand, diceCommand, coinCommand, eightBallCommand, reminderCommand, giveawayCommand, helpCommand,
 ];
 export const requestedCapabilities: BotCapability[] = [
-  'commands', 'send_messages', 'publish_voice', 'local_execution', 'miniapps', 'live_actions',
+  'commands', 'send_messages', 'publish_voice', 'local_execution', 'miniapps', 'live_actions', 'device_storage',
 ];
 export const commands: readonly Omit<CommandDefinition, 'handler'>[] = [
   ...basicCommands, ...musicDefinitions, ticTacToeDefinition, ...Object.values(gameDefinitions),

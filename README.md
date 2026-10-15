@@ -50,17 +50,40 @@ o progresso anterior.
 **Saves do NES:** o botão **Saves** (no canto da partida, em **Controles e opções**
 ou no lobby) abre um menu próprio com o slot **Automático**, atualizado a cada
 2 minutos de partida, e três slots numerados. Cada save mostra a imagem da tela no
-momento em que foi feito. Os dois jogadores salvam (salvar num slot ocupado o
-sobrescreve). Só o host carrega um save, com uma confirmação que mostra essa imagem:
-jogadores e espectadores continuam juntos a partir dele, inclusive em dupla. No lobby,
-o host também escolhe um slot ou um arquivo de save e depois usa **Retomar partida**;
-o ponto de retomada aparece com a imagem.
-Os saves ficam apenas na memória do bot até a sessão terminar e continuam disponíveis
-se um jogador sair ou se o host reabrir o miniapp com a mesma ROM. **Baixar** gera um
-arquivo `.monkynes` para continuar outro dia: numa nova sessão, o host escolhe a mesma
-ROM e carrega o arquivo. Saves de outra ROM ou de outra versão do emulador são
-recusados. O arquivo contém a memória do emulador e a imagem da tela, que podem incluir
-trechos da ROM; compartilhe-o só com quem pode receber a ROM. O save automático também é um checkpoint:
+momento em que foi feito. **Cada jogador tem os próprios saves**, também durante a
+sessão: o jogador 2 salva o próprio emulador nos slots dele, sem ver nem sobrescrever
+os do host, e salvar num slot ocupado o sobrescreve. O Automático de cada jogador é o
+mesmo checkpoint da partida. Só o host carrega um save (um dos dele ou um arquivo), com
+uma confirmação que mostra essa imagem: jogadores e espectadores continuam juntos a
+partir dele, inclusive em dupla. No lobby, o host também escolhe um slot ou um arquivo
+de save e depois usa **Retomar partida**; o ponto de retomada aparece com a imagem.
+
+**Saves no computador:** se o administrador aprovar a capacidade `device_storage`, o
+Monky pergunta a cada pessoa, ao abrir o miniapp, se ele pode guardar dados no
+computador dela (**Não guardar**, **Só nesta sessão** ou **Sempre**). Com a permissão,
+os saves de cada jogador ficam guardados no próprio computador, separados por ROM
+(chaves `nes/<hash da ROM>/auto` e `slot-1` a `slot-3`), e voltam ao menu **Saves**
+quando essa pessoa joga a mesma ROM de novo; o host então carrega o que quiser. O uso e
+a exclusão ficam em **Configurações do bot → Armazenamento**. Sem permissão, os saves
+ficam na memória do bot até a sessão terminar e continuam disponíveis se um jogador sair
+ou se o host reabrir o miniapp com a mesma ROM. **Baixar** gera um arquivo `.monkynes`
+para continuar outro dia: numa nova sessão, o host escolhe a mesma ROM e carrega o
+arquivo. Saves de outra ROM ou de outra versão do emulador são recusados. O arquivo
+contém a memória do emulador e a imagem da tela, que podem incluir trechos da ROM;
+compartilhe-o só com quem pode receber a ROM.
+
+**Ao fechar:** quando um jogador sai ou encerra o miniapp durante a partida, ela congela
+e os dois jogadores recebem a pergunta **Quer salvar o estado do jogo?**; quem responde
+**Salvar** escolhe um dos próprios slots. Sem permissão para guardar no computador, o
+save escolhido também é baixado como arquivo. Encerrar o miniapp para todos espera a
+resposta do outro jogador (o **Encerrar agora** do cartão não espera). Se um jogador cai
+ou sai da sala sem a pergunta, quem ficou é perguntado. Quando nenhuma pergunta é
+possível (por exemplo, a pessoa saiu da sala de voz), o Automático de quem permitiu é
+guardado sem perguntar. Espectadores não são perguntados.
+
+**Pausa:** como o emulador do host gera os quadros da partida, ela pausa para todos
+enquanto o host não vê o miniapp (navegando pelo Monky, com o cartão fora da tela ou a
+janela minimizada); os demais veem um aviso. O save automático também é um checkpoint:
 quem entra depois sincroniza a partir dele, sem repetir a partida inteira.
 Nenhum jogo comercial acompanha o emulador. Os testes automatizados usam uma ROM
 homebrew própria. Fontes, créditos e instruções de rebuild estão em `assets/games`.
@@ -94,13 +117,19 @@ com `MONKY_GAMES_ELECTRON` apontando para o executável Electron do checkout Mon
 
 ## Compatibilidade
 
-Esta beta usa **protocolo Monky 38** com o SDK oficial **38.0.0-beta**.
-Use cliente e servidor Monky **v38.0.0-beta**; o teste externo de portas do
-`monkybot doctor` exige um servidor no protocolo 37 ou mais novo. O SDK incluído é
-verificado no build e não precisa ser instalado à parte.
+Esta beta usa **protocolo Monky 39** com o SDK oficial **39.1.0-beta**.
+O bot continua conectando a servidores no protocolo 38 (e anteriores a partir do 24,
+por negociação): neles, o SDK omite `device_storage` e os saves seguem na memória do
+bot, com download. Guardar saves no computador exige servidor e cliente **v39.0.1-beta**
+ou mais novos e a aprovação de `device_storage` pelo administrador; a pergunta ao
+fechar exige cliente **v38.16.0-beta** ou mais novo, e a pausa com o host fora de vista,
+**v39.1.0-beta**. Clientes mais antigos continuam jogando sem esses recursos. O teste
+externo de portas do `monkybot doctor` exige um servidor no protocolo 37 ou mais novo.
+O SDK incluído é verificado no build e não precisa ser instalado à parte.
 Perfis, identidades, vínculos, idiomas e capacidades solicitadas são preservados;
 a atualização não habilita recepção de microfones nem muda os acessos declarados
-ao host: o consentimento já dado continua válido.
+ao host: o consentimento já dado continua válido. A capacidade nova `device_storage`
+chega desligada na revisão de permissões do servidor; as demais aprovações continuam.
 
 Playlists do YouTube e álbuns do YouTube Music (veja
 [Playlists e álbuns](#playlists-e-álbuns)) exigem o servidor e o cliente de quem
@@ -131,9 +160,12 @@ servidores. Origem e SHA-256 estão documentados em
 
 Na instalação, um administrador com permissão de gerenciar bots revisa os
 acessos solicitados: comandos, mensagens públicas, publicação de voz, execução
-local, miniapps e live actions. Lembretes usam mensagens públicas
-fora da invocação; sorteios usam mensagens públicas e live actions. O MonkyBot não solicita leitura geral do chat nem
-recepção da voz dos participantes. Vínculos manuais e bots migrados ficam sem
+local, miniapps, live actions e armazenamento no computador (`device_storage`).
+Lembretes usam mensagens públicas
+fora da invocação; sorteios usam mensagens públicas e live actions; os saves do NES
+usam o armazenamento no computador, que só permite **pedir**: cada pessoa decide no
+próprio computador. O MonkyBot não solicita leitura geral do chat, armazenamento no
+servidor nem recepção da voz dos participantes. Vínculos manuais e bots migrados ficam sem
 acessos até essa revisão; negar um acesso impede a funcionalidade correspondente.
 A autorização do servidor para solicitar execução local não substitui o
 consentimento de cada pessoa para preparar e usar ferramentas no seu computador.
