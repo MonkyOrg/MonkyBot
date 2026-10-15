@@ -1,13 +1,28 @@
 import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
-import { createReadStream, statSync } from 'node:fs';
+import { createReadStream, readFileSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import path from 'node:path';
+import { gunzipSync } from 'node:zlib';
 import { WebSocket, WebSocketServer } from 'ws';
 import { handleReachabilityProbe } from '@monky/bot-sdk';
 import { errorDiagnostic } from '../music/process';
 import { cliText } from '../i18n';
 
 export type GameId = 'doom' | 'nes';
+/** Both controller masks of one NES frame; a trailing 1 marks an autosave checkpoint after it. */
+export type NesFrame = [number, number] | [number, number, 1];
+/** A gzip `monky-nes-save` envelope kept only in memory. Slot 0 is the autosave; null is an imported file. */
+export interface NesSave {
+  slot: number | null;
+  data: Buffer;
+  hash: string;
+  romHash: string;
+  romName: string;
+  /** Small data-URL image of the screen when the save was made ('' when absent). */
+  thumbnail: string;
+  nickname: string;
+  savedAt: number;
+}
 interface Identity { userId: string; nickname: string; expires: number }
 interface Peer {
   socket: WebSocket;
@@ -21,6 +36,10 @@ interface Peer {
   hash: string;
   window: number;
   count: number;
+  lastSave: number;
+  lastDownload: number;
+  /** Thumbnail requests answered on this connection (bounded; repeats are allowed when saves reappear). */
+  thumbnails: number;
 }
 export interface GameRoom {
   id: string;
@@ -30,17 +49,38 @@ export interface GameRoom {
   peers: Set<Peer>;
   started: boolean;
   nextUid: number;
-  frames: [number, number][];
+  /** Committed inputs after `base` (power-on when there is no base). */
+  frames: NesFrame[];
   rom?: Buffer;
   romHash: string;
   round: number;
+  saves: Map<number, NesSave>;
+  base?: NesSave;
+  /** Frames already folded into `base` by checkpoints, so marker positions stay absolute. */
+  dropped: number;
+  /** Host checkpoint id -> absolute frame count right after the marked frame. */
+  markers: Map<number, number>;
+  captures: Map<number, { nickname: string; expires: number }>;
+  lastAuto: number;
+  lastImport: number;
+  /** When the last authenticated viewer left; undefined while someone is connected. */
+  idleSince?: number;
 }
 
+export const AUTOSAVE_SLOT = 0;
+const SAVE_FORMAT = 'monky-nes-save';
+const MAX_SAVE_BYTES = 512 * 1024;
+const MAX_SAVE_JSON = 4 * 1024 * 1024;
+const MAX_THUMBNAIL = 96 * 1024;
+const MAX_THUMBNAIL_REQUESTS = 128;
+const jsnesRoot = path.join(path.dirname(require.resolve('jsnes')), '..');
+/** Saves are only exchanged between identical emulator versions. */
+export const NES_EMULATOR = `jsnes@${(JSON.parse(readFileSync(path.join(jsnesRoot, 'package.json'), 'utf8')) as { version: string }).version}`;
 const root = path.resolve(__dirname, '..', '..', 'assets', 'games');
 const files = new Map<string, { file: string; type: string }>([
   ['/games/app.js', { file: path.join(root, 'app.js'), type: 'text/javascript' }],
-  ['/games/nes.js', { file: path.join(path.dirname(require.resolve('jsnes')), 'jsnes.min.js'), type: 'text/javascript' }],
-  ['/games/nes-license', { file: path.join(path.dirname(require.resolve('jsnes')), '..', 'LICENSE'), type: 'text/plain' }],
+  ['/games/nes.js', { file: path.join(jsnesRoot, 'dist', 'jsnes.min.js'), type: 'text/javascript' }],
+  ['/games/nes-license', { file: path.join(jsnesRoot, 'LICENSE'), type: 'text/plain' }],
   ...['engine.js', 'engine.wasm', 'freedoom1.wad', 'COPYING-engine.txt', 'COPYING-freedoom.txt',
     'AUTHORS-engine.txt', 'CREDITS-freedoom.txt', 'CREDITS-MUSIC-freedoom.txt',
     'engine-build.json', 'source/engine.tar.gz', 'source/build.cjs', 'source/monky.c',
@@ -54,6 +94,34 @@ const files = new Map<string, { file: string; type: string }>([
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function saveSlot(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= AUTOSAVE_SLOT && value <= 3;
+}
+
+function sha256(data: Buffer): string {
+  return createHash('sha256').update(data).digest('hex');
+}
+
+/** Validates a base64 save envelope for the room's current ROM without trusting its producer. */
+function decodeSave(room: GameRoom, data: unknown): { data: Buffer; romName: string; thumbnail: string } {
+  if (typeof data !== 'string' || !data.length || data.length % 4 || data.length > Math.ceil(MAX_SAVE_BYTES / 3) * 4 ||
+      !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) throw new Error('Invalid NES save encoding.');
+  const bytes = Buffer.from(data, 'base64');
+  if (bytes.length < 20 || bytes.length > MAX_SAVE_BYTES || bytes[0] !== 0x1f || bytes[1] !== 0x8b) throw new Error('Invalid NES save size.');
+  const value: unknown = JSON.parse(gunzipSync(bytes, { maxOutputLength: MAX_SAVE_JSON }).toString('utf8'));
+  if (!object(value) || value.format !== SAVE_FORMAT || value.version !== 1 || value.emulator !== NES_EMULATOR ||
+      !room.romHash || value.romHash !== room.romHash || typeof value.savedAt !== 'number' ||
+      (value.romName !== undefined && typeof value.romName !== 'string') || !object(value.state) ||
+      !['cpu', 'mmap', 'ppu', 'papu'].every(key => object((value.state as Record<string, unknown>)[key]))) {
+    throw new Error('Invalid NES save.');
+  }
+  // Only raster data URLs: viewers render it directly as an <img>.
+  const thumbnail = typeof value.thumbnail === 'string' && value.thumbnail.length <= MAX_THUMBNAIL &&
+    /^data:image\/(?:png|webp|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/.test(value.thumbnail) ? value.thumbnail : '';
+  return { data: bytes, thumbnail,
+    romName: typeof value.romName === 'string' ? value.romName.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 80) : '' };
 }
 
 export class GamesService {
@@ -156,9 +224,16 @@ export class GamesService {
     const room: GameRoom = {
       id: randomBytes(16).toString('hex'), game, creatorId, identities: new Map(),
       peers: new Set(), started: false, nextUid: 2, frames: [], romHash: '', round: 0,
+      saves: new Map(), dropped: 0, markers: new Map(), captures: new Map(), lastAuto: 0, lastImport: 0,
+      idleSince: Date.now(),
     };
     this.rooms.set(room.id, room);
     return room;
+  }
+
+  /** Milliseconds since the last authenticated viewer left; 0 while anyone is connected. */
+  idleFor(room: GameRoom): number {
+    return room.idleSince === undefined ? 0 : Date.now() - room.idleSince;
   }
 
   authorize(room: GameRoom, key: string, userId: string, nickname: string): void {
@@ -181,6 +256,10 @@ export class GamesService {
     room.frames = [];
     room.rom = undefined;
     room.romHash = '';
+    room.saves.clear();
+    room.base = undefined;
+    room.markers.clear();
+    room.captures.clear();
     for (const peer of room.peers) peer.socket.close(4000, 'Game ended');
   }
 
@@ -200,7 +279,8 @@ export class GamesService {
   private accept(room: GameRoom, socket: WebSocket): void {
     const peer: Peer = {
       socket, challenge: randomBytes(32).toString('hex'), slot: null,
-      uid: room.nextUid++, ready: false, hash: '', window: Date.now(), count: 0,
+      uid: room.nextUid++, ready: false, hash: '', window: Date.now(), count: 0, lastSave: 0, lastDownload: 0,
+      thumbnails: 0,
     };
     room.peers.add(peer);
     const timeout = setTimeout(() => { if (!peer.identity) socket.close(4003, 'Authentication timed out'); }, 12_000);
@@ -223,8 +303,9 @@ export class GamesService {
               throw new Error('Invalid iNES ROM.');
             }
             room.rom = bytes;
-            room.romHash = createHash('sha256').update(bytes).digest('hex');
-            room.frames = [];
+            room.romHash = sha256(bytes);
+            room.captures.clear();
+            this.setBase(room, undefined);
             for (const other of room.peers) {
               other.ready = false;
               other.hash = '';
@@ -267,9 +348,12 @@ export class GamesService {
     socket.once('close', () => {
       clearTimeout(timeout);
       room.peers.delete(peer);
+      if (![...room.peers].some(other => other.identity)) room.idleSince ??= Date.now();
       if (peer.slot !== null && room.started || peer.slot === 0 && room.game === 'nes') {
         room.started = false;
-        room.frames = [];
+        room.captures.clear();
+        // Saves stay in the room; only the interrupted timeline is discarded.
+        this.setBase(room, undefined);
         if (peer.slot === 0) { room.rom = undefined; room.romHash = ''; }
         for (const other of room.peers) other.ready = false;
         this.broadcast(room, { type: 'stopped', reason: 'player-left' });
@@ -288,19 +372,29 @@ export class GamesService {
     if (!verify('sha256', Buffer.from(`${room.id}:${peer.challenge}`),
       { key, dsaEncoding: 'ieee-p1363' }, Buffer.from(peer.proof, 'base64'))) throw new Error('Game proof rejected.');
     peer.identity = identity;
+    room.idleSince = undefined;
     if (identity.userId === room.creatorId && ![...room.peers].some(other => other !== peer && other.slot === 0)) {
       peer.slot = 0;
       peer.uid = 1;
     }
-    this.send(peer, { type: 'authenticated', uid: peer.uid, game: room.game });
+    this.send(peer, { type: 'authenticated', uid: peer.uid, game: room.game, ...room.game === 'nes' ? { emulator: NES_EMULATOR } : {} });
     this.lobby(room);
-    if (room.game === 'nes') this.sendRom(room, peer);
+    if (room.game === 'nes') {
+      this.sendRom(room, peer);
+      if (room.base) this.sendBinary(peer, this.baseMessage(room), false);
+    }
   }
 
   private handle(room: GameRoom, peer: Peer, value: Record<string, unknown>): void {
+    if (['save', 'state', 'load', 'import', 'download', 'thumbnail'].includes(value.type as string) && room.game !== 'nes') {
+      throw new Error('Unknown game action.');
+    }
     if (value.type === 'request-rom') {
       if (room.game !== 'nes' || !room.rom) this.send(peer, { type: 'unavailable' });
-      else this.sendRom(room, peer);
+      else {
+        this.sendRom(room, peer);
+        if (room.base) this.sendBinary(peer, this.baseMessage(room), false);
+      }
     } else if (value.type === 'join') {
       if ((room.started && (room.game !== 'nes' || !peer.ready || peer.hash !== room.romHash)) ||
           peer.slot !== null || [...room.peers].some(other => other.slot === 1 ||
@@ -329,7 +423,7 @@ export class GamesService {
       const players = [...room.peers].filter(other => other.slot !== null);
       if (peer.slot !== 0 || room.started || players.length < (room.game === 'doom' ? 2 : 1) ||
           players.length > 2 || players.some(other => !other.ready) ||
-          value.type === 'resume' && (room.game !== 'nes' || !room.frames.length)) {
+          value.type === 'resume' && (room.game !== 'nes' || !room.frames.length && !room.base)) {
         this.send(peer, { type: 'unavailable' });
         return;
       }
@@ -337,17 +431,21 @@ export class GamesService {
         this.broadcast(room, { type: 'mismatch' });
         return;
       }
+      if (value.type === 'start') this.setBase(room, undefined);
       this.startRound(room, value.type === 'resume');
     } else if (value.type === 'restart' || value.type === 'return-lobby') {
-      if (peer.slot !== 0 || peer.identity!.userId !== room.creatorId ||
-          !room.started || value.round !== room.round) {
+      if (!this.isHost(room, peer) || !room.started || value.round !== room.round) {
         this.send(peer, { type: 'unavailable' });
         return;
       }
-      if (value.type === 'restart') this.startRound(room);
-      else {
+      if (value.type === 'restart') {
+        this.setBase(room, undefined);
+        this.startRound(room);
+      } else {
         room.started = false;
         if (room.game !== 'nes') room.frames = [];
+        room.markers.clear();
+        room.captures.clear();
         room.round++;
         this.broadcast(room, { type: 'reset-lobby', round: room.round });
         this.lobby(room);
@@ -359,13 +457,22 @@ export class GamesService {
       for (const host of room.peers) if (host.slot === 0) this.send(host, { type: 'input', slot: peer.slot, buttons: value.buttons, round: room.round });
     } else if (value.type === 'frames') {
       if (room.game === 'nes' && !this.currentRound(room, value)) return;
-      if (!room.started || room.game !== 'nes' || peer.slot !== 0 || !Array.isArray(value.frames) ||
-          value.frames.length < 1 || value.frames.length > 8 ||
-          value.frames.some(frame => !Array.isArray(frame) || frame.length !== 2 ||
-            frame.some(mask => !Number.isInteger(mask) || mask < 0 || mask > 255))) throw new Error('Invalid NES frames.');
-      if (room.frames.length + value.frames.length > 120_000) throw new Error('Game replay duration exceeded.');
-      for (const frame of value.frames) room.frames.push([frame[0], frame[1]]);
-      this.broadcast(room, { type: 'frames', frames: value.frames, round: room.round }, peer);
+      const checkpoint = value.checkpoint;
+      const frames: unknown = value.frames;
+      if (!room.started || room.game !== 'nes' || peer.slot !== 0 || !Array.isArray(frames) ||
+          frames.length < 1 || frames.length > 8 ||
+          checkpoint !== undefined && (typeof checkpoint !== 'number' || !Number.isSafeInteger(checkpoint) || checkpoint < 1) ||
+          frames.some((frame, index) => !Array.isArray(frame) ||
+            frame.length !== (checkpoint !== undefined && index === frames.length - 1 ? 3 : 2) ||
+            frame.slice(0, 2).some(mask => !Number.isInteger(mask) || mask < 0 || mask > 255) ||
+            frame.length === 3 && frame[2] !== 1)) throw new Error('Invalid NES frames.');
+      if (room.frames.length + frames.length > 120_000) throw new Error('Game replay duration exceeded.');
+      for (const frame of frames as number[][]) room.frames.push(frame.length === 3 ? [frame[0], frame[1], 1] : [frame[0], frame[1]]);
+      if (typeof checkpoint === 'number') {
+        room.markers.set(checkpoint, room.dropped + room.frames.length);
+        if (room.markers.size > 8) room.markers.delete(room.markers.keys().next().value!);
+      }
+      this.broadcast(room, { type: 'frames', frames, round: room.round }, peer);
     } else if (value.type === 'watch') {
       if (room.game === 'nes' && !this.currentRound(room, value)) return;
       const host = [...room.peers].find(other => other.slot === 0);
@@ -375,10 +482,126 @@ export class GamesService {
         return;
       }
       peer.hash = value.hash;
-      this.send(peer, { type: 'replay', frames: room.frames, round: room.round });
+      this.send(peer, { type: 'replay', frames: room.frames, round: room.round, base: room.base?.hash ?? '' });
+    } else if (value.type === 'save') {
+      // Players ask the host emulator, the only snapshot producer, so a seat cannot inject arbitrary state.
+      if (!this.currentRound(room, value)) return;
+      const host = [...room.peers].find(other => this.isHost(room, other));
+      if (!room.started || peer.slot === null || !host || !saveSlot(value.slot) || value.slot === AUTOSAVE_SLOT ||
+          this.capture(room, value.slot) || Date.now() - peer.lastSave < 1000) {
+        this.send(peer, { type: 'unavailable', action: 'save', slot: value.slot });
+        return;
+      }
+      peer.lastSave = Date.now();
+      room.captures.set(value.slot, { nickname: peer.identity!.nickname, expires: Date.now() + 10_000 });
+      this.send(host, { type: 'capture', slot: value.slot, round: room.round });
+    } else if (value.type === 'state') {
+      if (!this.currentRound(room, value)) return;
+      const checkpoint = value.checkpoint;
+      if (!this.isHost(room, peer) || !saveSlot(value.slot) || checkpoint !== undefined &&
+          (value.slot !== AUTOSAVE_SLOT || typeof checkpoint !== 'number' || !Number.isSafeInteger(checkpoint))) {
+        throw new Error('Unexpected NES save.');
+      }
+      const capture = value.slot === AUTOSAVE_SLOT ? undefined : this.capture(room, value.slot);
+      if (!room.started || (value.slot === AUTOSAVE_SLOT ? Date.now() - room.lastAuto < 30_000 : !capture)) {
+        this.send(peer, { type: 'unavailable', action: 'state', slot: value.slot });
+        return;
+      }
+      const decoded = decodeSave(room, value.data);
+      const save: NesSave = { slot: value.slot, ...decoded, hash: sha256(decoded.data), romHash: room.romHash,
+        nickname: capture?.nickname ?? '', savedAt: Date.now() };
+      room.saves.set(value.slot, save);
+      room.captures.delete(value.slot);
+      if (value.slot === AUTOSAVE_SLOT) {
+        room.lastAuto = save.savedAt;
+        const at = typeof checkpoint === 'number' ? room.markers.get(checkpoint) : undefined;
+        if (typeof checkpoint === 'number' && at !== undefined && at >= room.dropped) {
+          // Every viewer reloaded from this state at the marker, so the replay can start there.
+          room.frames.splice(0, at - room.dropped);
+          room.dropped = at;
+          for (const id of [...room.markers.keys()]) if (id <= checkpoint) room.markers.delete(id);
+          room.base = save;
+          this.broadcastBase(room, true);
+        }
+      }
+      // Players get the screenshot with the notice; spectators have no saves menu.
+      for (const other of room.peers) if (other.identity) this.send(other, { type: 'saved', slot: value.slot,
+        nickname: save.nickname, hash: save.hash, ...other.slot !== null && save.thumbnail ? { thumbnail: save.thumbnail } : {} });
+      this.lobby(room);
+    } else if (value.type === 'load' || value.type === 'import') {
+      if (!this.currentRound(room, value)) return;
+      let save = value.type === 'load' && saveSlot(value.slot) ? room.saves.get(value.slot) : undefined;
+      if (!this.isHost(room, peer) || !room.rom || value.type === 'load' && save?.romHash !== room.romHash ||
+          value.type === 'import' && Date.now() - room.lastImport < 2000) {
+        this.send(peer, { type: 'unavailable', action: value.type });
+        return;
+      }
+      if (value.type === 'import') {
+        room.lastImport = Date.now();
+        let decoded: ReturnType<typeof decodeSave>;
+        // A user-chosen file is refused on its own; only host-generated uploads are protocol violations.
+        try { decoded = decodeSave(room, value.data); }
+        catch (error) {
+          console.warn('[games] Rejected NES save file.', error instanceof Error ? error.message : error);
+          this.send(peer, { type: 'unavailable', action: 'import', reason: 'invalid' });
+          return;
+        }
+        save = { slot: null, ...decoded, hash: sha256(decoded.data), romHash: room.romHash,
+          nickname: peer.identity!.nickname, savedAt: Date.now() };
+      }
+      this.setBase(room, save);
+      if (room.started) this.startRound(room);
+      else this.lobby(room);
+    } else if (value.type === 'download') {
+      const save = saveSlot(value.slot) ? room.saves.get(value.slot) : undefined;
+      if (peer.slot === null || !save || save.romHash !== room.romHash || Date.now() - peer.lastDownload < 1000) {
+        this.send(peer, { type: 'unavailable', action: 'download', slot: value.slot });
+        return;
+      }
+      peer.lastDownload = Date.now();
+      this.sendBinary(peer, JSON.stringify({ type: 'save-data', slot: save.slot, hash: save.hash, romName: save.romName,
+        nickname: save.nickname, age: Date.now() - save.savedAt, data: save.data.toString('base64') }), false);
+    } else if (value.type === 'thumbnail') {
+      // Players fetch the screenshots of the saves they can see; a per-connection budget bounds the traffic.
+      const save = typeof value.hash === 'string' ? [...room.saves.values(), ...room.base ? [room.base] : []]
+        .find(entry => entry.hash === value.hash && entry.romHash === room.romHash && entry.thumbnail) : undefined;
+      if (peer.slot === null || !save || peer.thumbnails >= MAX_THUMBNAIL_REQUESTS) return;
+      peer.thumbnails++;
+      this.send(peer, { type: 'thumbnail', hash: save.hash, thumbnail: save.thumbnail });
     } else {
       throw new Error('Unknown game action.');
     }
+  }
+
+  private isHost(room: GameRoom, peer: Peer): boolean {
+    return peer.slot === 0 && peer.identity?.userId === room.creatorId;
+  }
+
+  private capture(room: GameRoom, slot: number): { nickname: string; expires: number } | undefined {
+    const capture = room.captures.get(slot);
+    if (capture && capture.expires < Date.now()) room.captures.delete(slot);
+    return capture && capture.expires >= Date.now() ? capture : undefined;
+  }
+
+  /** Replaces the timeline origin; viewers receive the new base before any round that uses it. */
+  private setBase(room: GameRoom, save: NesSave | undefined): void {
+    room.frames = [];
+    room.dropped = 0;
+    room.markers.clear();
+    if (room.base === save) return;
+    room.base = save;
+    this.broadcastBase(room);
+  }
+
+  private baseMessage(room: GameRoom, checkpoint = false): string {
+    const base = room.base;
+    return JSON.stringify(base ? { type: 'base', hash: base.hash, data: base.data.toString('base64'), slot: base.slot,
+      nickname: base.nickname, age: Date.now() - base.savedAt, thumb: !!base.thumbnail, checkpoint } : { type: 'base', hash: '' });
+  }
+
+  private broadcastBase(room: GameRoom, checkpoint = false): void {
+    const message = this.baseMessage(room, checkpoint);
+    for (const peer of room.peers) if (peer.identity) this.sendBinary(peer, message, false);
   }
 
   private currentRound(room: GameRoom, value: Record<string, unknown>): boolean {
@@ -391,9 +614,14 @@ export class GamesService {
 
   private startRound(room: GameRoom, resume = false): void {
     room.started = true;
-    if (!resume) room.frames = [];
+    if (!resume) {
+      room.frames = [];
+      room.dropped = 0;
+    }
+    room.markers.clear();
+    room.captures.clear();
     room.round++;
-    this.broadcast(room, { type: resume ? 'resume' : 'start', round: room.round });
+    this.broadcast(room, { type: resume ? 'resume' : 'start', round: room.round, base: room.base?.hash ?? '' });
   }
 
   private sendRom(room: GameRoom, peer: Peer): void {
@@ -403,8 +631,17 @@ export class GamesService {
   }
 
   private lobby(room: GameRoom): void {
+    const canResume = room.game === 'nes' && !room.started && (room.frames.length > 0 || !!room.base);
+    const now = Date.now();
     this.broadcast(room, { type: 'lobby', started: room.started, round: room.round, romHash: room.romHash,
-      canResume: room.game === 'nes' && !room.started && room.frames.length > 0, peers: [...room.peers]
+      canResume, resumeFrom: canResume ? room.frames.length ? 'progress' : 'save' : null,
+      // Saves of another ROM stay hidden until the host chooses that ROM again.
+      saves: room.game === 'nes' && room.romHash ? [...room.saves.values()].filter(save => save.romHash === room.romHash)
+        .map(save => ({ slot: save.slot, nickname: save.nickname, romName: save.romName, age: now - save.savedAt,
+          hash: save.hash, thumb: !!save.thumbnail })) : [],
+      base: room.base ? { slot: room.base.slot, nickname: room.base.nickname, age: now - room.base.savedAt,
+        hash: room.base.hash, thumb: !!room.base.thumbnail } : null,
+      peers: [...room.peers]
       .filter(peer => peer.identity).map(peer => ({
         uid: peer.uid, slot: peer.slot, nickname: peer.identity!.nickname, ready: peer.ready,
       })) });

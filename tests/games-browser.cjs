@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const zlib = require('node:zlib');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const nesFixture = require('./helpers/nes-fixture');
@@ -44,6 +45,15 @@ if (!process.versions.electron) {
     throw new Error(`Timed out: ${label}\n${errors.join('\n')}`);
   };
   const run = (window, code) => window.webContents.executeJavaScript(code, true);
+  // Optional visual review: MONKY_GAMES_TEST_SHOTS=<dir> keeps screenshots of the main screens.
+  const shot = async (window, name) => {
+    if (!process.env.MONKY_GAMES_TEST_SHOTS) return;
+    // A hidden window returns its last painted frame; the first capture makes it paint the current one.
+    await window.webContents.capturePage();
+    await new Promise(resolve => setTimeout(resolve, 300));
+    fs.writeFileSync(path.join(process.env.MONKY_GAMES_TEST_SHOTS, `${process.env.MONKY_GAMES_TEST_GAME}-${name}.png`),
+      (await window.webContents.capturePage()).toPNG());
+  };
   const finish = async code => {
     clearTimeout(timeout);
     for (const window of windows) if (!window.isDestroyed()) window.destroy();
@@ -51,7 +61,7 @@ if (!process.versions.electron) {
     app.exit(code);
   };
   app.whenReady().then(async () => {
-    timeout = setTimeout(() => { console.error('Games smoke timeout\n' + errors.join('\n')); void finish(1); }, 100000);
+    timeout = setTimeout(() => { console.error('Games smoke timeout\n' + errors.join('\n')); void finish(1); }, 180000);
     const base = await service.start();
     const game = process.env.MONKY_GAMES_TEST_GAME;
     assert.ok(['doom', 'nes'].includes(game));
@@ -127,23 +137,28 @@ if (!process.versions.electron) {
           const Original=window.jsnes.NES;
           window.ReferenceNes=Original;
           window.jsnes={...window.jsnes,NES:class extends Original {
-            constructor(...args){super(...args);window.testNes=this;window.testFrames=0;
+            constructor(...args){super(...args);if(!args[0]?.onFrame)return;window.testNes=this;window.testFrames=0;
               const originalFrame=this.frame;this.frame=()=>{
                 window.testFrames++;const result=originalFrame();
                 if(window.testFrames===window.testRestoreAt)window.restoredState=JSON.stringify(this.cpu.toJSON());
                 return result;};}
+            fromJSON(state){super.fromJSON(state);if(this===window.testNes){
+              window.testLoads=(window.testLoads||0)+1;window.testLoaded=JSON.stringify(this.cpu.toJSON());}}
           }};
         })()`);
       }
       assert.equal(await run(guest, 'document.querySelector("#rom").files.length'), 0, 'Guest never selects a local file');
       assert.equal(await run(viewer, 'document.querySelector("#rom").files.length'), 0, 'Spectator never selects a local file');
       await waitFor(() => run(host, '!document.querySelector("#start").disabled'), 'NES ready players');
+      await shot(host, 'lobby-host');
+      await shot(guest, 'lobby-guest');
       await run(host, 'document.querySelector("#start").click()');
       for (const window of windows) await waitFor(() => run(window, 'window.testFrames > 20'), 'players and waiting spectator start automatically');
       assert.equal(await run(host, `(() => {
         const r=document.querySelector('#canvas').getBoundingClientRect();
         return r.x===0 && r.y===0 && r.width===innerWidth && r.height===innerHeight;
       })()`), true, 'NES also fills the miniapp during play');
+      await shot(host, 'playing');
       await run(guest, 'window.dispatchEvent(new KeyboardEvent("keydown",{code:"KeyX",bubbles:true}))');
       for (const window of [host, guest]) {
         await waitFor(() => run(window, 'testNes.cpu.mem[0x21] === 1 && testNes.cpu.mem[0x20] === 0'), 'independent player 2 input');
@@ -155,6 +170,7 @@ if (!process.versions.electron) {
       for (const window of windows) await waitFor(() => run(window, 'testNes.cpu.mem[0x20] === 1 && testNes.cpu.mem[0x21] === 0'), 'independent player 1 input');
       await run(guest, 'window.dispatchEvent(new KeyboardEvent("keydown",{code:"Escape",bubbles:true}))');
       assert.equal(await run(guest, '!document.querySelector("#game-menu").hidden && document.querySelector("#host-actions").hidden'), true, 'Guest can see instructions but not host administration');
+      await shot(guest, 'menu-guest');
       assert.match(await run(guest, 'document.querySelector("#game-help").textContent'), /Enter: Start.*Shift: Select/);
       const originalRound = room.round;
       await run(guest, 'document.querySelector("#restart").click(); document.querySelector("#confirm-yes").click(); window.dispatchEvent(new KeyboardEvent("keydown",{code:"KeyX",bubbles:true}))');
@@ -213,6 +229,166 @@ if (!process.versions.electron) {
       assert.equal(await run(host, 'document.querySelector("#resume").hidden'), true, 'Changing the ROM removes obsolete resume');
       await run(host, 'document.querySelector("#start").click()');
       for (const window of windows) await waitFor(() => run(window, 'testFrames > 20'), 'replacement game starts');
+
+      // Save states: both players save, only the host loads, and every viewer restores the same console.
+      const saveState = save => JSON.parse(zlib.gunzipSync(save.data).toString('utf8')).state;
+      const press = (window, code, type) => run(window, `window.dispatchEvent(new KeyboardEvent("${type}",{code:"${code}",bubbles:true}))`);
+      const counters = window => run(window, '[testNes.cpu.mem[0x22],testNes.cpu.mem[0x23]]');
+      const settled = async label => {
+        let values;
+        await waitFor(async () => {
+          values = await Promise.all(windows.map(counters));
+          return values.every(value => JSON.stringify(value) === JSON.stringify(values[0]));
+        }, label);
+        return values[0];
+      };
+      const savesMenu = (window, open) => run(window, `(() => {
+        if (document.querySelector("#saves-modal").hidden === ${open}) document.querySelector("#saves-toggle").click();
+      })()`);
+      const card = id => `#menu-saves [data-slot="${id}"]`;
+      const slotButton = (window, id, action) => run(window, `document.querySelector('${card(id)} [data-action="${action}"]').click()`);
+      // The screenshot inside a save must be the host screen at that moment (the fixture draws a solid color).
+      const screenshotMatches = (window, image) => run(window, `(async () => {
+        const image=document.querySelector(${JSON.stringify(image)});
+        if (image.hidden || !image.src.startsWith('data:image/png;base64,')) return false;
+        await image.decode();
+        const copy=document.createElement('canvas');copy.width=256;copy.height=240;
+        const context=copy.getContext('2d');context.drawImage(image,0,0);
+        const pixel=canvas=>[...canvas.getContext('2d').getImageData(8,8,1,1).data].join();
+        return image.naturalWidth===256 && image.naturalHeight===240 && pixel(copy)===pixel(document.querySelector('#canvas')) &&
+          pixel(copy)!=='0,0,0,255';
+      })()`);
+      // The fixture palette has black entries; saving on a visible color keeps the screenshot check meaningful.
+      const black = window => run(window, '[...document.querySelector("#canvas").getContext("2d").getImageData(8,8,1,1).data].join() === "0,0,0,255"');
+      await press(host, 'KeyX', 'keydown');
+      await waitFor(async () => (await counters(host))[0] >= 30, 'player 1 counter advances');
+      await press(host, 'KeyX', 'keyup');
+      await press(guest, 'KeyX', 'keydown');
+      await waitFor(async () => (await counters(guest))[1] >= 10, 'player 2 counter advances');
+      await press(guest, 'KeyX', 'keyup');
+      let savedCounters = await settled('counters settle before saving');
+      while (await black(host)) {
+        await press(guest, 'KeyX', 'keydown');
+        await waitFor(async () => (await counters(guest))[1] > savedCounters[1], 'player 2 counter moves off black');
+        await press(guest, 'KeyX', 'keyup');
+        savedCounters = await settled('counters settle before saving');
+      }
+      await press(host, 'Escape', 'keydown');
+      await run(host, 'document.querySelector("#menu-saves-open").click()');
+      assert.equal(await run(host, '!document.querySelector("#saves-modal").hidden && document.querySelector("#game-menu").hidden'), true,
+        'The controls menu leads to the dedicated saves menu');
+      assert.equal(await run(host, 'document.querySelectorAll("#menu-saves .save-card").length'), 4, 'Automatic plus three numbered slots');
+      await slotButton(host, 1, 'save');
+      await waitFor(() => room.saves.get(1)?.nickname === 'alice', 'host saves slot 1');
+      assert.match(room.saves.get(1).thumbnail, /^data:image\/png;base64,/, 'The save carries a screenshot');
+      for (const window of [host, guest]) {
+        await waitFor(() => run(window, `document.querySelector('${card(1)} .save-meta').textContent.includes("alice")`), 'slot 1 listed');
+        assert.equal(await screenshotMatches(window, `${card(1)} .save-thumb img`), true, 'Both players see the saved moment');
+      }
+      await waitFor(() => run(guest, 'document.querySelector("#toast").textContent === "alice saved to Slot 1."'), 'player 2 is told about the save');
+      await shot(host, 'saves-host');
+      await savesMenu(guest, true);
+      assert.equal(await run(guest, `[...document.querySelectorAll('#menu-saves [data-action="load"]')].every(button => button.hidden) &&
+        document.querySelector('#menu-saves .file-field').hidden`), true, 'Player 2 saves and downloads but cannot load');
+      assert.equal(await run(viewer, 'document.querySelector("#saves-toggle").hidden && document.querySelector("#saves-modal").hidden'), true, 'Spectators have no saves');
+      await slotButton(guest, 2, 'save');
+      await waitFor(() => room.saves.get(2)?.nickname === 'bob', 'player 2 saves slot 2 through the host emulator');
+      await shot(guest, 'saves-guest');
+      const slotOne = saveState(room.saves.get(1));
+      assert.deepEqual([slotOne.cpu.mem[0x22], slotOne.cpu.mem[0x23]], savedCounters, 'Slot 1 holds both players’ progress');
+      await press(guest, 'Escape', 'keydown');
+      assert.equal(await run(guest, 'document.querySelector("#saves-modal").hidden && document.querySelector("#game-menu").hidden'), true, 'Esc closes the saves menu first');
+      await savesMenu(host, false);
+      await press(host, 'KeyX', 'keydown');
+      await waitFor(async () => (await counters(host))[0] >= savedCounters[0] + 20, 'progress after saving');
+      await press(host, 'KeyX', 'keyup');
+      await settled('counters settle after more progress');
+      await run(guest, `document.querySelector('${card(1)} [data-action="load"]').click()`);
+      assert.equal(room.base, undefined, 'Hidden load buttons stay guarded');
+      for (const window of windows) await run(window, 'window.previousNes=testNes; undefined');
+      await savesMenu(host, true);
+      await slotButton(host, 1, 'load');
+      assert.equal(await run(host, '!document.querySelector("#confirm-action").hidden && document.querySelector("#saves-modal").hidden'), true, 'Loading asks for confirmation');
+      assert.equal(await run(host, 'document.querySelector("#confirm-thumb").src === document.querySelector(\'#menu-saves [data-slot="1"] .save-thumb img\').src'), true,
+        'The confirmation shows the moment being loaded');
+      await shot(host, 'confirm-load');
+      await run(host, 'document.querySelector("#confirm-no").click()');
+      assert.equal(room.base, undefined, 'Cancel keeps the current progress');
+      assert.equal(await run(host, '!document.querySelector("#saves-modal").hidden && document.querySelector("#saves-modal").contains(document.activeElement)'), true, 'Cancel returns to the saves menu');
+      await slotButton(host, 1, 'load');
+      await run(host, 'document.querySelector("#confirm-yes").click()');
+      const expectedCpu = JSON.stringify(slotOne.cpu);
+      for (const window of windows) {
+        await waitFor(() => run(window, `testNes !== previousNes && testLoaded === ${JSON.stringify(expectedCpu)}`), 'every viewer restores the exact slot');
+      }
+      assert.deepEqual(await settled('restored counters agree'), savedCounters, 'Both players returned to the saved progress');
+      assert.equal(room.base, room.saves.get(1));
+      await waitFor(() => run(guest, 'document.querySelector("#toast").textContent.startsWith("Save loaded for everyone: Slot 1 (alice")'), 'load announced');
+
+      for (const window of windows) await run(window, 'window.loadsBeforeCheckpoint=testLoads; undefined');
+      // One short autosave interval for exactly one checkpoint, then the default two minutes again.
+      await run(host, `(() => { const before=window.testNes;
+        Object.defineProperty(window.monkyGame,'autosaveFrames',{configurable:true,get:()=>window.testNes===before?90:undefined}); })()`);
+      await waitFor(() => room.saves.has(0) && room.base === room.saves.get(0), 'autosave becomes the checkpoint base');
+      await run(host, 'delete window.monkyGame.autosaveFrames; undefined');
+      const checkpointCpu = JSON.stringify(saveState(room.saves.get(0)).cpu);
+      for (const window of windows) {
+        await waitFor(() => run(window, `testLoads === loadsBeforeCheckpoint + 1 && testLoaded === ${JSON.stringify(checkpointCpu)}`), 'every viewer reloads at the checkpoint');
+      }
+      assert.ok(room.dropped > 0, 'The checkpoint folds committed frames into the base');
+      await savesMenu(host, true);
+      await waitFor(() => run(host, `document.querySelector('${card(0)} .save-name').textContent === "Automatic" &&
+        !document.querySelector('${card(0)} .save-meta').textContent.includes("Every 2 min") &&
+        !document.querySelector('${card(0)} .save-thumb img').hidden`), 'autosave listed with its screenshot');
+      assert.match(room.saves.get(0).thumbnail, /^data:image\/png;base64,/, 'Autosaves carry a screenshot too');
+
+      const downloads = [];
+      host.webContents.session.once('will-download', (event, item) => {
+        item.setSavePath(path.join(temporary, 'slot-1.monkynes'));
+        item.once('done', (doneEvent, state) => downloads.push({ state, name: item.getFilename() }));
+      });
+      await slotButton(host, 1, 'download');
+      await waitFor(() => downloads.length === 1, 'save download');
+      assert.equal(downloads[0].state, 'completed');
+      assert.match(downloads[0].name, /^homebrew-fixture - slot 1 - .+\.monkynes$/);
+      const file = fs.readFileSync(path.join(temporary, 'slot-1.monkynes'));
+      assert.ok(file.equals(room.saves.get(1).data), 'The download is the save kept by the bot');
+
+      await run(host, 'document.querySelector("#return-lobby").click(); document.querySelector("#confirm-yes").click()');
+      for (const window of windows) await waitFor(() => run(window, '!document.querySelector("#game-root").classList.contains("playing")'), 'lobby before importing');
+      await waitFor(() => run(host, '!document.querySelector("#saves-lobby").hidden'), 'lobby saves for the host');
+      await run(host, 'document.querySelector("#saves-lobby").click()');
+      assert.equal(await run(host, '!document.querySelector("#saves-modal").hidden && !document.querySelector("#menu-saves .file-field").hidden'), true, 'The host imports from the saves menu');
+      await shot(host, 'saves-lobby');
+      await run(host, `(() => {
+        const bytes=Uint8Array.from(atob(${JSON.stringify(file.toString('base64'))}),value=>value.charCodeAt(0));
+        const transfer=new DataTransfer();transfer.items.add(new File([bytes],'slot-1.monkynes'));
+        const input=document.querySelector('#menu-saves input[type=file]');input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));
+      })()`);
+      await waitFor(() => run(host, '!document.querySelector("#confirm-action").hidden'), 'importing over preserved progress asks first');
+      assert.equal(await run(host, '!document.querySelector("#confirm-thumb").hidden && document.querySelector("#confirm-thumb").src.startsWith("data:image/png;base64,")'), true,
+        'The import confirmation previews the file’s screenshot');
+      await shot(host, 'confirm-import');
+      await run(host, 'document.querySelector("#confirm-yes").click()');
+      await waitFor(async () => room.base?.slot === null &&
+        await run(host, 'document.querySelector("#status").textContent.startsWith("Save ready to resume: save file")'), 'imported file is the resume point');
+      for (const window of [host, guest]) {
+        await waitFor(() => run(window, `!document.querySelector("#resume-card").hidden && document.querySelector("#saves-modal").hidden &&
+          document.querySelector("#resume-card .save-name").textContent === "Save file"`), 'the lobby shows the resume point');
+        assert.equal(await screenshotMatches(window, '#resume-card img'), true, 'The resume point shows the imported screenshot');
+      }
+      assert.equal(await run(viewer, 'document.querySelector("#resume-card").hidden'), true, 'Spectators only read the status');
+      await shot(host, 'lobby-resume');
+      for (const window of windows) await run(window, 'window.previousNes=testNes; undefined');
+      await run(host, 'document.querySelector("#resume").click()');
+      for (const window of windows) {
+        await waitFor(() => run(window, `testNes !== previousNes && testLoaded === ${JSON.stringify(expectedCpu)} && testFrames > 10`), 'imported save restores every viewer');
+      }
+      assert.deepEqual(await settled('imported counters agree'), savedCounters);
+      await press(guest, 'KeyX', 'keydown');
+      await waitFor(async () => (await counters(guest))[1] > savedCounters[1], 'player 2 plays after import');
+      await press(guest, 'KeyX', 'keyup');
+      await settled('both controllers stay synchronized after import');
       await new Promise(resolve => { viewer.webContents.once('did-finish-load', resolve); viewer.reload(); });
       await waitFor(() => run(viewer, 'document.querySelector("#status")?.textContent === "Watching the game." && document.querySelector("#game-root").classList.contains("playing")'), 'late spectator receives ROM and replays automatically');
       assert.equal(await run(viewer, 'document.querySelector("#rom").files.length'), 0);
@@ -222,7 +398,7 @@ if (!process.versions.electron) {
       await waitFor(() => run(host, 'document.querySelector("#status").textContent.includes("player left")'), 'NES disconnect teardown');
       await new Promise(resolve => setTimeout(resolve, 100));
       assert.ok(await run(host, 'testFrames') <= ticks + 3, 'Emulation stopped with the departed player');
-      console.log('NES: host-only ROM, controls, restart/lobby, exact-state resume for all viewers, invalid replacement recovery, ROM replacement, late spectator and teardown passed.');
+      console.log('NES: host-only ROM, controls, restart/lobby, exact-state resume for all viewers, invalid replacement recovery, ROM replacement, two-player save slots with screenshots, host-only load, autosave checkpoint, save download/import, late spectator and teardown passed.');
       await finish(0);
       return;
     }
@@ -240,6 +416,7 @@ if (!process.versions.electron) {
         };undefined;`);
     }
     await waitFor(() => run(host, '!document.querySelector("#start").disabled'), 'two ready players');
+    await shot(host, 'lobby-host');
     await run(host, 'document.querySelector("#start").click()');
     for (const window of [host, guest]) {
       await waitFor(() => run(window, 'window.testEngine?._monky_players() === 2 && window.testEngine._monky_tics() > 80'), 'two real Doom avatars', 40000);
@@ -304,6 +481,7 @@ if (!process.versions.electron) {
     for (const window of windows) await run(window, 'window.previousEngine=window.testEngine; window.previousAudio=testEngine.SDL2.audioContext; undefined');
     await run(guest, 'window.dispatchEvent(new KeyboardEvent("keydown",{code:"F2",bubbles:true}))');
     assert.equal(await run(guest, '!document.querySelector("#game-menu").hidden && document.querySelector("#host-actions").hidden'), true, 'DOOM guest sees controls but not administration');
+    await shot(guest, 'menu-guest');
     assert.match(await run(guest, 'document.querySelector("#game-help").textContent'), /WASD.*Mouse/);
     const oldRound = room.round;
     await run(guest, 'document.querySelector("#restart").click(); document.querySelector("#confirm-yes").click()');
