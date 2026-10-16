@@ -7,8 +7,8 @@ const { checkSdk } = require('../scripts/check-sdk');
 const protocolVersion = require('../package.json').monky.protocolVersion;
 
 test('the installed SDK matches the bot protocol and required runtime APIs', () => {
-  assert.equal(protocolVersion, 38);
-  assert.equal(require('@monky/bot-sdk/package.json').version, '38.0.0-beta');
+  assert.equal(protocolVersion, 39);
+  assert.equal(require('@monky/bot-sdk/package.json').version, '39.1.0-beta');
   assert.equal(checkSdk(), protocolVersion);
 });
 
@@ -30,12 +30,14 @@ function sdkFixture(t, { version = protocolVersion, missing } = {}) {
     .map(name => `exports.${name} = class extends Error {};`).join('\n');
   const runtimeCli = ['runBotCli', 'buildBotPackage', 'handleReachabilityProbe'].filter(name => name !== missing)
     .map(name => `exports.${name} = () => {};`).join('\n');
+  const capabilities = ['commands', 'miniapps', ...missing === 'device_storage' ? [] : ['device_storage']];
   fs.writeFileSync(path.join(sdk, 'index.js'),
-    `exports.PROTOCOL_VERSION = ${version}; exports.BotClient = class { ${methods}\n${registrations} }; ${commandPresentation}\n${localErrors}\n${runtimeCli}`);
+    `exports.PROTOCOL_VERSION = ${version}; exports.BotClient = class { ${methods}\n${registrations} }; ${commandPresentation}\n${localErrors}\n${runtimeCli}\n` +
+    `exports.BOT_CAPABILITIES = ${JSON.stringify(capabilities)};`);
   return root;
 }
 
-test('SDK compatibility requires matching protocol, persistent messages, live actions, voice, local execution, screens, command localization and the runtime CLI', (t) => {
+test('SDK compatibility requires matching protocol, persistent messages, live actions, voice, local execution, screens, command localization, device storage and the runtime CLI', (t) => {
   assert.equal(checkSdk(sdkFixture(t)), protocolVersion);
   assert.throws(() => checkSdk(sdkFixture(t, { version: protocolVersion - 1 })), /requires the bot-sdk/);
   for (const missing of ['close', 'registeredServerCount',
@@ -43,7 +45,7 @@ test('SDK compatibility requires matching protocol, persistent messages, live ac
     'sendMessage',
     'joinVoice', 'getVoiceConnection', 'leaveVoice', 'createScreen', 'updateScreen', 'closeScreen', 'listScreens',
     'getCommandPresentation', 'localExecution', 'LocalExecutionError', 'LocalExecutionRpcError',
-    'runBotCli', 'buildBotPackage', 'handleReachabilityProbe']) {
+    'runBotCli', 'buildBotPackage', 'handleReachabilityProbe', 'device_storage']) {
     assert.throws(() => checkSdk(sdkFixture(t, { missing })), /native live actions/, missing);
   }
 });

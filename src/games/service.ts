@@ -40,6 +40,17 @@ interface Peer {
   lastDownload: number;
   /** Thumbnail requests answered on this connection (bounded; repeats are allowed when saves reappear). */
   thumbnails: number;
+  /** Saves brought back from this player's computer in the current 10-second window. */
+  restores: number;
+  restoreWindow: number;
+  lastClosing: number;
+}
+/** A player is closing the miniapp: every player is asked whether to save before the game stops. */
+interface Closing {
+  closers: Map<number, { reason: 'leave' | 'end'; nickname: string }>;
+  answered: Set<number>;
+  deadline: number;
+  timer?: ReturnType<typeof setTimeout>;
 }
 export interface GameRoom {
   id: string;
@@ -54,15 +65,18 @@ export interface GameRoom {
   rom?: Buffer;
   romHash: string;
   round: number;
-  saves: Map<number, NesSave>;
+  /** Each player's own saves by Monky user id; slot 0 is their autosave. Nobody else sees or overwrites them. */
+  saves: Map<string, Map<number, NesSave>>;
   base?: NesSave;
   /** Frames already folded into `base` by checkpoints, so marker positions stay absolute. */
   dropped: number;
   /** Host checkpoint id -> absolute frame count right after the marked frame. */
   markers: Map<number, number>;
-  captures: Map<number, { nickname: string; expires: number }>;
   lastAuto: number;
   lastImport: number;
+  /** The host cannot see the game, so the emulator that produces every frame is paused for everyone. */
+  paused: boolean;
+  closing?: Closing;
   /** When the last authenticated viewer left; undefined while someone is connected. */
   idleSince?: number;
 }
@@ -73,6 +87,9 @@ const MAX_SAVE_BYTES = 512 * 1024;
 const MAX_SAVE_JSON = 4 * 1024 * 1024;
 const MAX_THUMBNAIL = 96 * 1024;
 const MAX_THUMBNAIL_REQUESTS = 128;
+/** Users whose saves a room keeps; the host and current players are never evicted. */
+const MAX_SAVE_USERS = 6;
+const MAX_RESTORES = 8;
 const jsnesRoot = path.join(path.dirname(require.resolve('jsnes')), '..');
 /** Saves are only exchanged between identical emulator versions. */
 export const NES_EMULATOR = `jsnes@${(JSON.parse(readFileSync(path.join(jsnesRoot, 'package.json'), 'utf8')) as { version: string }).version}`;
@@ -105,14 +122,14 @@ function sha256(data: Buffer): string {
 }
 
 /** Validates a base64 save envelope for the room's current ROM without trusting its producer. */
-function decodeSave(room: GameRoom, data: unknown): { data: Buffer; romName: string; thumbnail: string } {
+function decodeSave(room: GameRoom, data: unknown): { data: Buffer; romName: string; thumbnail: string; savedAt: number } {
   if (typeof data !== 'string' || !data.length || data.length % 4 || data.length > Math.ceil(MAX_SAVE_BYTES / 3) * 4 ||
       !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) throw new Error('Invalid NES save encoding.');
   const bytes = Buffer.from(data, 'base64');
   if (bytes.length < 20 || bytes.length > MAX_SAVE_BYTES || bytes[0] !== 0x1f || bytes[1] !== 0x8b) throw new Error('Invalid NES save size.');
   const value: unknown = JSON.parse(gunzipSync(bytes, { maxOutputLength: MAX_SAVE_JSON }).toString('utf8'));
   if (!object(value) || value.format !== SAVE_FORMAT || value.version !== 1 || value.emulator !== NES_EMULATOR ||
-      !room.romHash || value.romHash !== room.romHash || typeof value.savedAt !== 'number' ||
+      !room.romHash || value.romHash !== room.romHash || typeof value.savedAt !== 'number' || !Number.isFinite(value.savedAt) ||
       (value.romName !== undefined && typeof value.romName !== 'string') || !object(value.state) ||
       !['cpu', 'mmap', 'ppu', 'papu'].every(key => object((value.state as Record<string, unknown>)[key]))) {
     throw new Error('Invalid NES save.');
@@ -120,7 +137,7 @@ function decodeSave(room: GameRoom, data: unknown): { data: Buffer; romName: str
   // Only raster data URLs: viewers render it directly as an <img>.
   const thumbnail = typeof value.thumbnail === 'string' && value.thumbnail.length <= MAX_THUMBNAIL &&
     /^data:image\/(?:png|webp|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/.test(value.thumbnail) ? value.thumbnail : '';
-  return { data: bytes, thumbnail,
+  return { data: bytes, thumbnail, savedAt: value.savedAt,
     romName: typeof value.romName === 'string' ? value.romName.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 80) : '' };
 }
 
@@ -132,7 +149,13 @@ export class GamesService {
   private url = '';
   private timer?: ReturnType<typeof setInterval>;
   private closed = false;
-  constructor(private readonly config: { host: string; port: number; publicUrl: string }) {}
+  /**
+   * `closingAnswerMs` bounds how long a closing player may keep the game frozen without answering;
+   * `closingLeaveMs` how long after answering they may stay before the game resumes.
+   */
+  constructor(private readonly config: {
+    host: string; port: number; publicUrl: string; closingAnswerMs?: number; closingLeaveMs?: number;
+  }) {}
 
   start(): Promise<string> {
     if (this.closed) return Promise.reject(new Error('Games service has closed.'));
@@ -224,7 +247,7 @@ export class GamesService {
     const room: GameRoom = {
       id: randomBytes(16).toString('hex'), game, creatorId, identities: new Map(),
       peers: new Set(), started: false, nextUid: 2, frames: [], romHash: '', round: 0,
-      saves: new Map(), dropped: 0, markers: new Map(), captures: new Map(), lastAuto: 0, lastImport: 0,
+      saves: new Map(), dropped: 0, markers: new Map(), lastAuto: 0, lastImport: 0, paused: false,
       idleSince: Date.now(),
     };
     this.rooms.set(room.id, room);
@@ -259,7 +282,7 @@ export class GamesService {
     room.saves.clear();
     room.base = undefined;
     room.markers.clear();
-    room.captures.clear();
+    this.endClosing(room);
     for (const peer of room.peers) peer.socket.close(4000, 'Game ended');
   }
 
@@ -280,7 +303,7 @@ export class GamesService {
     const peer: Peer = {
       socket, challenge: randomBytes(32).toString('hex'), slot: null,
       uid: room.nextUid++, ready: false, hash: '', window: Date.now(), count: 0, lastSave: 0, lastDownload: 0,
-      thumbnails: 0,
+      thumbnails: 0, restores: 0, restoreWindow: 0, lastClosing: 0,
     };
     room.peers.add(peer);
     const timeout = setTimeout(() => { if (!peer.identity) socket.close(4003, 'Authentication timed out'); }, 12_000);
@@ -304,7 +327,6 @@ export class GamesService {
             }
             room.rom = bytes;
             room.romHash = sha256(bytes);
-            room.captures.clear();
             this.setBase(room, undefined);
             for (const other of room.peers) {
               other.ready = false;
@@ -351,12 +373,14 @@ export class GamesService {
       if (![...room.peers].some(other => other.identity)) room.idleSince ??= Date.now();
       if (peer.slot !== null && room.started || peer.slot === 0 && room.game === 'nes') {
         room.started = false;
-        room.captures.clear();
+        room.paused = false;
+        this.endClosing(room);
         // Saves stay in the room; only the interrupted timeline is discarded.
         this.setBase(room, undefined);
         if (peer.slot === 0) { room.rom = undefined; room.romHash = ''; }
         for (const other of room.peers) other.ready = false;
-        this.broadcast(room, { type: 'stopped', reason: 'player-left' });
+        // The remaining player is asked whether to save, so they learn who left.
+        this.broadcast(room, { type: 'stopped', reason: 'player-left', nickname: peer.identity?.nickname ?? '' });
       }
       this.lobby(room);
     });
@@ -386,7 +410,8 @@ export class GamesService {
   }
 
   private handle(room: GameRoom, peer: Peer, value: Record<string, unknown>): void {
-    if (['save', 'state', 'load', 'import', 'download', 'thumbnail'].includes(value.type as string) && room.game !== 'nes') {
+    if (['state', 'load', 'import', 'download', 'thumbnail', 'keep', 'restore', 'pause', 'unpause', 'closing', 'closing-done']
+      .includes(value.type as string) && room.game !== 'nes') {
       throw new Error('Unknown game action.');
     }
     if (value.type === 'request-rom') {
@@ -445,18 +470,23 @@ export class GamesService {
         room.started = false;
         if (room.game !== 'nes') room.frames = [];
         room.markers.clear();
-        room.captures.clear();
+        room.paused = false;
+        this.endClosing(room);
         room.round++;
         this.broadcast(room, { type: 'reset-lobby', round: room.round });
         this.lobby(room);
       }
     } else if (value.type === 'input') {
       if (room.game === 'nes' && !this.currentRound(room, value)) return;
+      // Inputs already in flight when a player left belong to a game that just stopped.
+      if (room.game === 'nes' && !room.started && peer.slot !== null) return;
       if (!room.started || room.game !== 'nes' || peer.slot === null ||
           !Number.isInteger(value.buttons) || typeof value.buttons !== 'number' || value.buttons < 0 || value.buttons > 255) throw new Error('Invalid player input.');
       for (const host of room.peers) if (host.slot === 0) this.send(host, { type: 'input', slot: peer.slot, buttons: value.buttons, round: room.round });
     } else if (value.type === 'frames') {
       if (room.game === 'nes' && !this.currentRound(room, value)) return;
+      // Frames the host sent before learning that the other player left are stale, not a violation.
+      if (room.game === 'nes' && !room.started && peer.slot === 0) return;
       const checkpoint = value.checkpoint;
       const frames: unknown = value.frames;
       if (!room.started || room.game !== 'nes' || peer.slot !== 0 || !Array.isArray(frames) ||
@@ -483,54 +513,72 @@ export class GamesService {
       }
       peer.hash = value.hash;
       this.send(peer, { type: 'replay', frames: room.frames, round: room.round, base: room.base?.hash ?? '' });
-    } else if (value.type === 'save') {
-      // Players ask the host emulator, the only snapshot producer, so a seat cannot inject arbitrary state.
-      if (!this.currentRound(room, value)) return;
-      const host = [...room.peers].find(other => this.isHost(room, other));
-      if (!room.started || peer.slot === null || !host || !saveSlot(value.slot) || value.slot === AUTOSAVE_SLOT ||
-          this.capture(room, value.slot) || Date.now() - peer.lastSave < 1000) {
-        this.send(peer, { type: 'unavailable', action: 'save', slot: value.slot });
+    } else if (value.type === 'keep' || value.type === 'restore') {
+      // Each player keeps their own saves: a snapshot of their own emulator, or one brought back from their
+      // computer. Only the host's saves can be loaded into the game, so a seat cannot inject state into it.
+      const restoring = value.type === 'restore';
+      if (restoring && Date.now() - peer.restoreWindow >= 10_000) { peer.restoreWindow = Date.now(); peer.restores = 0; }
+      if (peer.slot === null || !room.rom || !saveSlot(value.slot) || !restoring && value.slot === AUTOSAVE_SLOT ||
+          (restoring ? ++peer.restores > MAX_RESTORES : Date.now() - peer.lastSave < 250)) {
+        this.send(peer, { type: 'unavailable', action: value.type, slot: value.slot });
         return;
       }
-      peer.lastSave = Date.now();
-      room.captures.set(value.slot, { nickname: peer.identity!.nickname, expires: Date.now() + 10_000 });
-      this.send(host, { type: 'capture', slot: value.slot, round: room.round });
+      if (!restoring) peer.lastSave = Date.now();
+      let decoded: ReturnType<typeof decodeSave>;
+      // Kept on a computer, a save may come from another emulator version; refusing it is not a protocol error.
+      try { decoded = decodeSave(room, value.data); }
+      catch (error) {
+        console.warn('[games] Rejected NES save.', error instanceof Error ? error.message : error);
+        this.send(peer, { type: 'unavailable', action: value.type, slot: value.slot, reason: 'invalid' });
+        return;
+      }
+      const { userId, nickname } = peer.identity!;
+      const saves = this.userSaves(room, userId);
+      const savedAt = restoring ? Math.min(Date.now(), Math.max(0, decoded.savedAt)) : Date.now();
+      const current = saves.get(value.slot);
+      if (restoring && current?.romHash === room.romHash && current.savedAt >= savedAt) return;
+      const save: NesSave = { slot: value.slot, data: decoded.data, romName: decoded.romName, thumbnail: decoded.thumbnail,
+        hash: sha256(decoded.data), romHash: room.romHash, nickname: value.slot === AUTOSAVE_SLOT ? '' : nickname, savedAt };
+      saves.set(value.slot, save);
+      if (!restoring) {
+        for (const other of room.peers) if (other.identity?.userId === userId) this.send(other, { type: 'saved', slot: save.slot,
+          nickname: save.nickname, hash: save.hash, ...save.thumbnail ? { thumbnail: save.thumbnail } : {} });
+      }
+      this.lobby(room);
     } else if (value.type === 'state') {
+      // The host emulator produces the shared autosave checkpoint; it becomes every player's own Automático.
       if (!this.currentRound(room, value)) return;
       const checkpoint = value.checkpoint;
-      if (!this.isHost(room, peer) || !saveSlot(value.slot) || checkpoint !== undefined &&
-          (value.slot !== AUTOSAVE_SLOT || typeof checkpoint !== 'number' || !Number.isSafeInteger(checkpoint))) {
+      if (!this.isHost(room, peer) || value.slot !== AUTOSAVE_SLOT || checkpoint !== undefined &&
+          (typeof checkpoint !== 'number' || !Number.isSafeInteger(checkpoint))) {
         throw new Error('Unexpected NES save.');
       }
-      const capture = value.slot === AUTOSAVE_SLOT ? undefined : this.capture(room, value.slot);
-      if (!room.started || (value.slot === AUTOSAVE_SLOT ? Date.now() - room.lastAuto < 30_000 : !capture)) {
-        this.send(peer, { type: 'unavailable', action: 'state', slot: value.slot });
+      if (!room.started || Date.now() - room.lastAuto < 30_000) {
+        this.send(peer, { type: 'unavailable', action: 'state', slot: AUTOSAVE_SLOT });
         return;
       }
       const decoded = decodeSave(room, value.data);
-      const save: NesSave = { slot: value.slot, ...decoded, hash: sha256(decoded.data), romHash: room.romHash,
-        nickname: capture?.nickname ?? '', savedAt: Date.now() };
-      room.saves.set(value.slot, save);
-      room.captures.delete(value.slot);
-      if (value.slot === AUTOSAVE_SLOT) {
-        room.lastAuto = save.savedAt;
-        const at = typeof checkpoint === 'number' ? room.markers.get(checkpoint) : undefined;
-        if (typeof checkpoint === 'number' && at !== undefined && at >= room.dropped) {
-          // Every viewer reloaded from this state at the marker, so the replay can start there.
-          room.frames.splice(0, at - room.dropped);
-          room.dropped = at;
-          for (const id of [...room.markers.keys()]) if (id <= checkpoint) room.markers.delete(id);
-          room.base = save;
-          this.broadcastBase(room, true);
-        }
+      const save: NesSave = { slot: AUTOSAVE_SLOT, data: decoded.data, romName: decoded.romName, thumbnail: decoded.thumbnail,
+        hash: sha256(decoded.data), romHash: room.romHash, nickname: '', savedAt: Date.now() };
+      room.lastAuto = save.savedAt;
+      const at = typeof checkpoint === 'number' ? room.markers.get(checkpoint) : undefined;
+      if (typeof checkpoint === 'number' && at !== undefined && at >= room.dropped) {
+        // Every viewer reloaded from this state at the marker, so the replay can start there.
+        room.frames.splice(0, at - room.dropped);
+        room.dropped = at;
+        for (const id of [...room.markers.keys()]) if (id <= checkpoint) room.markers.delete(id);
+        room.base = save;
+        this.broadcastBase(room, true);
       }
-      // Players get the screenshot with the notice; spectators have no saves menu.
-      for (const other of room.peers) if (other.identity) this.send(other, { type: 'saved', slot: value.slot,
-        nickname: save.nickname, hash: save.hash, ...other.slot !== null && save.thumbnail ? { thumbnail: save.thumbnail } : {} });
+      // Players get the screenshot with the notice; spectators have no saves.
+      const players = [...room.peers].filter(other => other.slot !== null && other.identity);
+      for (const userId of new Set(players.map(other => other.identity!.userId))) this.userSaves(room, userId).set(AUTOSAVE_SLOT, save);
+      for (const other of players) this.send(other, { type: 'saved', slot: AUTOSAVE_SLOT, nickname: '', hash: save.hash,
+        ...save.thumbnail ? { thumbnail: save.thumbnail } : {} });
       this.lobby(room);
     } else if (value.type === 'load' || value.type === 'import') {
       if (!this.currentRound(room, value)) return;
-      let save = value.type === 'load' && saveSlot(value.slot) ? room.saves.get(value.slot) : undefined;
+      let save = value.type === 'load' && saveSlot(value.slot) ? room.saves.get(room.creatorId)?.get(value.slot) : undefined;
       if (!this.isHost(room, peer) || !room.rom || value.type === 'load' && save?.romHash !== room.romHash ||
           value.type === 'import' && Date.now() - room.lastImport < 2000) {
         this.send(peer, { type: 'unavailable', action: value.type });
@@ -546,14 +594,14 @@ export class GamesService {
           this.send(peer, { type: 'unavailable', action: 'import', reason: 'invalid' });
           return;
         }
-        save = { slot: null, ...decoded, hash: sha256(decoded.data), romHash: room.romHash,
-          nickname: peer.identity!.nickname, savedAt: Date.now() };
+        save = { slot: null, data: decoded.data, romName: decoded.romName, thumbnail: decoded.thumbnail,
+          hash: sha256(decoded.data), romHash: room.romHash, nickname: peer.identity!.nickname, savedAt: Date.now() };
       }
       this.setBase(room, save);
       if (room.started) this.startRound(room);
       else this.lobby(room);
     } else if (value.type === 'download') {
-      const save = saveSlot(value.slot) ? room.saves.get(value.slot) : undefined;
+      const save = saveSlot(value.slot) ? this.ownSaves(room, peer)?.get(value.slot) : undefined;
       if (peer.slot === null || !save || save.romHash !== room.romHash || Date.now() - peer.lastDownload < 1000) {
         this.send(peer, { type: 'unavailable', action: 'download', slot: value.slot });
         return;
@@ -562,12 +610,45 @@ export class GamesService {
       this.sendBinary(peer, JSON.stringify({ type: 'save-data', slot: save.slot, hash: save.hash, romName: save.romName,
         nickname: save.nickname, age: Date.now() - save.savedAt, data: save.data.toString('base64') }), false);
     } else if (value.type === 'thumbnail') {
-      // Players fetch the screenshots of the saves they can see; a per-connection budget bounds the traffic.
-      const save = typeof value.hash === 'string' ? [...room.saves.values(), ...room.base ? [room.base] : []]
+      // Players fetch the screenshots of their own saves and the resume point; a per-connection budget bounds the traffic.
+      const save = typeof value.hash === 'string' ? [...this.ownSaves(room, peer)?.values() ?? [], ...room.base ? [room.base] : []]
         .find(entry => entry.hash === value.hash && entry.romHash === room.romHash && entry.thumbnail) : undefined;
       if (peer.slot === null || !save || peer.thumbnails >= MAX_THUMBNAIL_REQUESTS) return;
       peer.thumbnails++;
       this.send(peer, { type: 'thumbnail', hash: save.hash, thumbnail: save.thumbnail });
+    } else if (value.type === 'pause' || value.type === 'unpause') {
+      // The host's emulator produces every frame: while the host cannot see the game, everyone waits.
+      if (!this.currentRound(room, value)) return;
+      if (!this.isHost(room, peer)) throw new Error('Only the host pauses the game.');
+      const paused = value.type === 'pause';
+      if (!room.started || room.paused === paused) return;
+      room.paused = paused;
+      this.broadcast(room, paused ? { type: 'paused', round: room.round, nickname: peer.identity!.nickname }
+        : { type: 'unpaused', round: room.round });
+    } else if (value.type === 'closing') {
+      // A player is leaving or ending the miniapp: the game freezes and every player is asked whether to save.
+      if (!this.currentRound(room, value)) return;
+      if (value.reason !== 'leave' && value.reason !== 'end') throw new Error('Invalid closing reason.');
+      if (peer.slot === null || !room.started || Date.now() - peer.lastClosing < 10_000) return;
+      peer.lastClosing = Date.now();
+      const closing = room.closing ??= { closers: new Map(), answered: new Set(), deadline: 0 };
+      closing.closers.set(peer.uid, { reason: value.reason, nickname: peer.identity!.nickname });
+      closing.answered.delete(peer.uid);
+      this.scheduleClosing(room, Date.now() + (this.config.closingAnswerMs ?? 3 * 60_000));
+      this.broadcast(room, { type: 'closing', uid: peer.uid, nickname: peer.identity!.nickname, reason: value.reason, round: room.round });
+    } else if (value.type === 'closing-done') {
+      if (!this.currentRound(room, value)) return;
+      const closing = room.closing;
+      if (peer.slot === null || !closing || closing.answered.has(peer.uid)) return;
+      closing.answered.add(peer.uid);
+      this.broadcast(room, { type: 'closing-answered', uid: peer.uid, round: room.round });
+      // A closer that answered leaves within seconds; one that stays has given up closing. Ending for everyone
+      // first waits for every player's answer.
+      const players = [...room.peers].filter(other => other.slot !== null && other.identity);
+      if ([...closing.closers].some(([uid, closer]) => closing.answered.has(uid) &&
+          (closer.reason === 'leave' || players.every(other => closing.answered.has(other.uid))))) {
+        this.scheduleClosing(room, Math.min(closing.deadline, Date.now() + (this.config.closingLeaveMs ?? 15_000)));
+      }
     } else {
       throw new Error('Unknown game action.');
     }
@@ -577,10 +658,41 @@ export class GamesService {
     return peer.slot === 0 && peer.identity?.userId === room.creatorId;
   }
 
-  private capture(room: GameRoom, slot: number): { nickname: string; expires: number } | undefined {
-    const capture = room.captures.get(slot);
-    if (capture && capture.expires < Date.now()) room.captures.delete(slot);
-    return capture && capture.expires >= Date.now() ? capture : undefined;
+  private ownSaves(room: GameRoom, peer: Peer): Map<number, NesSave> | undefined {
+    return peer.identity ? room.saves.get(peer.identity.userId) : undefined;
+  }
+
+  /** The user's saves, most recently used last; the oldest absent users are dropped beyond the room bound. */
+  private userSaves(room: GameRoom, userId: string): Map<number, NesSave> {
+    const saves = room.saves.get(userId) ?? new Map<number, NesSave>();
+    room.saves.delete(userId);
+    room.saves.set(userId, saves);
+    if (room.saves.size > MAX_SAVE_USERS) {
+      const playing = new Set([...room.peers].filter(peer => peer.slot !== null && peer.identity).map(peer => peer.identity!.userId));
+      for (const id of [...room.saves.keys()]) {
+        if (room.saves.size <= MAX_SAVE_USERS) break;
+        if (id !== room.creatorId && id !== userId && !playing.has(id)) room.saves.delete(id);
+      }
+    }
+    return saves;
+  }
+
+  /** Resumes the frozen game when nobody actually closes before `deadline`. */
+  private scheduleClosing(room: GameRoom, deadline: number): void {
+    const closing = room.closing!;
+    closing.deadline = deadline;
+    clearTimeout(closing.timer);
+    closing.timer = setTimeout(() => {
+      if (room.closing !== closing) return;
+      this.endClosing(room);
+      this.broadcast(room, { type: 'closing-cancelled', round: room.round });
+    }, Math.max(0, deadline - Date.now()));
+    closing.timer.unref();
+  }
+
+  private endClosing(room: GameRoom): void {
+    clearTimeout(room.closing?.timer);
+    room.closing = undefined;
   }
 
   /** Replaces the timeline origin; viewers receive the new base before any round that uses it. */
@@ -619,7 +731,8 @@ export class GamesService {
       room.dropped = 0;
     }
     room.markers.clear();
-    room.captures.clear();
+    room.paused = false;
+    this.endClosing(room);
     room.round++;
     this.broadcast(room, { type: resume ? 'resume' : 'start', round: room.round, base: room.base?.hash ?? '' });
   }
@@ -630,21 +743,26 @@ export class GamesService {
     this.sendBinary(peer, room.rom);
   }
 
+  /** Room state for everyone, with each player's own saves: nobody sees another player's slots. */
   private lobby(room: GameRoom): void {
     const canResume = room.game === 'nes' && !room.started && (room.frames.length > 0 || !!room.base);
     const now = Date.now();
-    this.broadcast(room, { type: 'lobby', started: room.started, round: room.round, romHash: room.romHash,
-      canResume, resumeFrom: canResume ? room.frames.length ? 'progress' : 'save' : null,
-      // Saves of another ROM stay hidden until the host chooses that ROM again.
-      saves: room.game === 'nes' && room.romHash ? [...room.saves.values()].filter(save => save.romHash === room.romHash)
-        .map(save => ({ slot: save.slot, nickname: save.nickname, romName: save.romName, age: now - save.savedAt,
-          hash: save.hash, thumb: !!save.thumbnail })) : [],
+    const shared = { type: 'lobby', started: room.started, round: room.round, romHash: room.romHash,
+      canResume, resumeFrom: canResume ? room.frames.length ? 'progress' : 'save' : null, paused: room.started && room.paused,
       base: room.base ? { slot: room.base.slot, nickname: room.base.nickname, age: now - room.base.savedAt,
         hash: room.base.hash, thumb: !!room.base.thumbnail } : null,
       peers: [...room.peers]
       .filter(peer => peer.identity).map(peer => ({
         uid: peer.uid, slot: peer.slot, nickname: peer.identity!.nickname, ready: peer.ready,
-      })) });
+      })) };
+    for (const peer of room.peers) {
+      if (!peer.identity) continue;
+      // Saves of another ROM stay hidden until the host chooses that ROM again.
+      const own = room.game === 'nes' && room.romHash && peer.slot !== null ? room.saves.get(peer.identity.userId) : undefined;
+      this.send(peer, { ...shared, saves: own ? [...own.values()].filter(save => save.romHash === room.romHash)
+        .map(save => ({ slot: save.slot, nickname: save.nickname, romName: save.romName, age: now - save.savedAt,
+          hash: save.hash, thumb: !!save.thumbnail })) : [] });
+    }
   }
   private broadcast(room: GameRoom, value: unknown, exclude?: Peer): void {
     for (const peer of room.peers) if (peer.identity && peer !== exclude) this.send(peer, value);

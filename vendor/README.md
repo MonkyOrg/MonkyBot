@@ -1,8 +1,30 @@
 # SDK compativel
 
-## SDK oficial atual (protocolo 38)
+## SDK oficial atual (protocolo 39)
 
-A dependencia ativa e `monky-bot-sdk-38.0.0-beta.tgz`, da
+A dependencia ativa e `monky-bot-sdk-39.1.0-beta.tgz`, da
+[release Monky v39.1.0-beta](https://github.com/MonkyOrg/Monky/releases/tag/v39.1.0-beta)
+(MonkyOrg/Monky#792, MonkyOrg/Monky#791, MonkyOrg/Monky#789). Inclui protocolo
+**39** (piso de bots 24, piso de clientes 35) e o armazenamento por bot: as
+capacidades `server_storage` e `device_storage`, `bot.storage()` e os tipos do
+bridge dos miniapps (`onBeforeClose`, `onClose`, `onVisibilityChange` e
+`storage`). O MonkyBot declara somente `device_storage`, usada pelos saves do
+NES no computador de cada jogador. Com servidores anteriores ao recurso
+`bot-storage` (protocolo 38), o SDK omite a capacidade do registro e do manifest
+e o restante do bot continua funcionando. O CLI reutilizavel e os `requirements`
+nao mudaram: a impressao digital do consentimento continua a mesma.
+
+Origem: commit `a6a2fb855ce191c238f5ea578d17b3e8c6b4824b`, workflow
+[Release 38815299259](https://github.com/MonkyOrg/Monky/actions/runs/38815299259).
+Bytes oficiais sem modificacoes, conferidos contra o digest SHA-256 publicado e
+o `checksums-sha256.txt` da release:
+`f8d0bb624b35527acb03f5f19ef0ea1a89fe26e1aa201e6e7a6583321dec8e5e`.
+Tamanho: 6.251.579 bytes. Dependencia e lockfile fixam os mesmos bytes.
+Perfis, identidades, vinculos e consentimentos existentes permanecem preservados.
+
+## SDK oficial anterior (protocolo 38)
+
+A dependencia anterior era `monky-bot-sdk-38.0.0-beta.tgz`, da
 [release Monky v38.0.0-beta](https://github.com/MonkyOrg/Monky/releases/tag/v38.0.0-beta)
 (MonkyOrg/Monky#775, MonkyOrg/Monky#752). Inclui protocolo **38** (piso de bots
 24, piso de clientes 35) e a operacao local `youtube.playlist`, com

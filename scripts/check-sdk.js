@@ -17,14 +17,16 @@ function checkSdk(root = path.resolve(__dirname, '..')) {
   // The packaged `monkybot` command is the SDK's reusable CLI; the games listener answers its probes.
   const hasRuntimeCli = ['runBotCli', 'buildBotPackage', 'handleReachabilityProbe']
     .every((name) => typeof sdk[name] === 'function');
+  // NES saves ask to keep data on each player's computer; older servers never see the capability.
+  const hasDeviceStorage = Array.isArray(sdk.BOT_CAPABILITIES) && sdk.BOT_CAPABILITIES.includes('device_storage');
   if (sdk.PROTOCOL_VERSION !== expected || typeof sdk.BotClient?.prototype.close !== 'function' ||
       !hasPersistentRegistrations || !hasLiveActions || !hasPersistentMessages ||
-      !hasVoiceAndScreens || !hasLocalExecution || !hasRuntimeCli ||
+      !hasVoiceAndScreens || !hasLocalExecution || !hasRuntimeCli || !hasDeviceStorage ||
       typeof sdk.getCommandPresentation !== 'function') {
     throw new Error(
       `MonkyBot requires the bot-sdk for Monky protocol ${expected}; found ${sdk.PROTOCOL_VERSION ?? 'unknown'}. ` +
       'The SDK must also support persistent marketplace registrations, native live actions, persistent channel messages, voice, screens, concrete local execution, localized command names, ' +
-      'the reusable runtime CLI with declared requirements and reachability probes. ' +
+      'device storage for miniapps, the reusable runtime CLI with declared requirements and reachability probes. ' +
       'Use the matching Monky release (or build the matching local shared and bot-sdk workspaces).'
     );
   }

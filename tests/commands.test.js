@@ -24,7 +24,7 @@ const presentations = [
 
 test('production declares only the capabilities its commands use', () => {
   assert.deepEqual(requestedCapabilities, [
-    'commands', 'send_messages', 'publish_voice', 'local_execution', 'miniapps', 'live_actions',
+    'commands', 'send_messages', 'publish_voice', 'local_execution', 'miniapps', 'live_actions', 'device_storage',
   ]);
 });
 

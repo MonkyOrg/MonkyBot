@@ -62,18 +62,36 @@ retains the committed input replay; resume reconstructs the same state on every
 client before the host emits new frames. Starting over or replacing the ROM
 clears that replay. The test does not download or test a commercial Contra ROM.
 
-NES save states use jsnes `toJSON`/`fromJSON`. The host emulator is the only
-snapshot producer (player 2 asks it to capture); the bot keeps gzip
-`monky-nes-save` envelopes for three slots plus the autosave in memory only,
-checks size, decompressed size, ROM hash and emulator version, and only the host
-loads one. A load recreates every emulator from the ROM plus the same state. Each
-autosave (every 2 minutes of play) is also a checkpoint: all viewers reload from
-their identical serialized state at the marked frame, and the bot drops the replay
-before it, so late viewers start from the checkpoint. Each save also carries a
-PNG screenshot of the host canvas at the saved frame (a data URL of at most 96 KiB;
-the bot keeps only png/webp/jpeg images and drops anything else without refusing
-the save). Players get it with the save notice or request it once per visible save,
-within a per-connection budget; spectators get none. A save file that fails the
-bot's checks is refused without disconnecting the host. The real-browser test covers
-two-player saves, screenshots, host-only load, checkpoint coherence, download and import. Games
+NES save states use jsnes `toJSON`/`fromJSON`. Saves belong to each player: a player
+keeps a snapshot of their own emulator in their own three slots (`keep`), and the
+host emulator's autosave checkpoint becomes every player's Automatic slot. The bot
+keeps each player's gzip `monky-nes-save` envelopes in memory for the session and
+checks size, decompressed size, ROM hash and emulator version; only the host loads,
+and only one of their own saves or a file, so a seat cannot inject state into the
+game. With Monky's `device_storage` (protocol 39) and each person's consent, the
+miniapp also keeps that player's saves on their computer under
+`nes/<romHash>/{auto,slot-1,slot-2,slot-3}` and brings them back (`restore`, newer
+copy wins, checked in a throwaway emulator first) when that player plays the ROM
+again; nothing loads by itself. A load recreates every emulator from the ROM plus the
+same state. Each autosave (every 2 minutes of play) is also a checkpoint: all viewers
+reload from their identical serialized state at the marked frame, and the bot drops
+the replay before it, so late viewers start from the checkpoint. Each save also
+carries a PNG screenshot of the player's canvas at the saved frame (a data URL of at
+most 96 KiB; the bot keeps only png/webp/jpeg images and drops anything else without
+refusing the save). Its owner gets it with the save notice or requests it once per
+visible save, within a per-connection budget; nobody sees another player's saves. A
+save file that fails the bot's checks is refused without disconnecting anyone.
+
+When a player leaves or ends the miniapp (`onBeforeClose`), the host stops producing
+frames (`closing`) and every player is asked whether to save, choosing one of their
+own slots; without storage permission the chosen save is downloaded. Ending for
+everyone waits until the other players answered (`closing-done`); a closing that does
+not happen is cancelled after a timeout and the game resumes. A player who drops
+without the question leaves the remaining player asked; `onClose` without an answer
+keeps the Automatic slot when allowed. While the host cannot see the miniapp
+(`onVisibilityChange`), its frame loop pauses for everyone (`pause`/`unpause`). The
+real-browser test covers per-player saves, screenshots, host-only load, checkpoint
+coherence, download and import, saves kept on each computer and restored in a new
+session, the host pause, and the save question on leave, end and drop with the
+download fallback. Games
 end 30 minutes after the last viewer disconnects instead of after a fixed lifetime. The test does not download or test a commercial Contra ROM.

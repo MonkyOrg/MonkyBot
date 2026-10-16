@@ -224,6 +224,11 @@ async function smokePack(tarball) {
     assert.deepEqual(manifest.requestedCapabilities, [
       'commands', 'send_messages', 'publish_voice', 'local_execution', 'miniapps', 'live_actions',
     ]);
+    // Servers that negotiate bot storage also see the device storage request used by NES saves.
+    const storageManifest = await (await fetch(url, {
+      headers: { 'x-monky-protocol-features': 'bot-storage' }, signal: AbortSignal.timeout(10000),
+    })).json();
+    assert.deepEqual(storageManifest.requestedCapabilities, [...manifest.requestedCapabilities, 'device_storage']);
     assert.equal(child.exitCode, null, 'Packaged runtime must still be running.');
     assert.equal(fs.existsSync(path.join(runtime, '.keys')), false, 'The runner must use the profile identity.');
 
