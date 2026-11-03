@@ -39,7 +39,7 @@ function environment(home, extra = {}) {
     ...extra,
   };
   for (const name of ['MONKY_BOT_LOCALE', 'MONKY_LANG', 'MONKY_HOST_CONSENT', 'MONKY_SERVE', 'MONKY_SERVE_PORT',
-    'MONKY_SERVE_HOST', 'MONKY_SERVE_PUBLIC_HOST', 'MONKY_SERVER_URL', 'MONKY_BOT_TOKEN', 'MONKY_BOT_PUBLIC_KEY',
+    'MONKY_SERVE_HOST', 'MONKY_SERVE_PUBLIC_HOST', 'MONKY_SERVE_PUBLIC_URL', 'MONKY_SERVER_URL', 'MONKY_BOT_TOKEN', 'MONKY_BOT_PUBLIC_KEY',
     'MONKY_BOT_NAME', 'MONKY_BOT_REGISTRATION_FILE', 'MONKY_GAMES_PORT', 'MONKY_GAMES_HOST', 'MONKY_GAMES_PUBLIC_URL',
     'MONKY_MUSIC_GRACE_SECONDS']) {
     if (!(name in extra)) delete env[name];
@@ -82,12 +82,12 @@ async function runConfiguredBot(state, extra = {}) {
   child.stderr.on('data', chunk => { output += chunk; });
   state.children.push({ child, exited: once(child, 'exit') });
   const deadline = Date.now() + 20000;
-  while (!/Manifest: (http:\/\/\S+)/.test(output)) {
+  while (!/Manifest: (https?:\/\/\S+)/.test(output)) {
     if (child.exitCode !== null) throw new Error(`The runner exited early.\n${output}`);
     if (Date.now() > deadline) throw new Error(`The runner did not serve its manifest.\n${output}`);
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  return { child, logs: () => output, manifestUrl: /Manifest: (http:\/\/\S+)/.exec(output)[1] };
+  return { child, logs: () => output, manifestUrl: /Manifest: (https?:\/\/\S+)/.exec(output)[1] };
 }
 
 test('package.json declares the shared SDK CLI, its release asset and what the host must provide', () => {
@@ -180,12 +180,32 @@ test('the SDK runner starts the compiled MonkyBot with the profile identity, reg
   const response = await fetch(run.manifestUrl, { signal: AbortSignal.timeout(10000) });
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('x-monky-bot-public-key'), keys.publicKeyHex);
-  assert.equal((await response.json()).name, 'QA MonkyBot');
+  const manifest = await response.json();
+  assert.equal(manifest.name, 'QA MonkyBot');
+  assert.equal(manifest.registrationUrl, `http://127.0.0.1:${port}/register`,
+    'Without a public URL the manifest keeps announcing the public host and port.');
   assert.ok(run.logs().includes(`(${path.join(dir, '.keys', 'registrations.json')})`), run.logs());
   assert.equal(fs.existsSync(path.join(ROOT, '.keys')), false, 'The runtime must not create keys in the checkout.');
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'environment.json'), 'utf8')).values, {
     MONKY_GAMES_PUBLIC_URL: 'https://games.example.test', MONKY_MUSIC_GRACE_SECONDS: '90',
   });
+});
+
+test('with a profile public URL the manifest announces HTTPS registration, as the CLI expects', async t => {
+  const state = profile(t);
+  const { home } = state;
+  const port = await freePort();
+  cli(home, ['setup', '--non-interactive', '--mode', 'marketplace', '--public-host', '127.0.0.1',
+    '--serve-port', String(port), '--public-url', 'https://bot.example.test']);
+  cli(home, ['consent', '--accept', fingerprint]);
+  loadOrCreateBotKeys(state.dir);
+
+  const run = await runConfiguredBot(state, { MONKY_SERVE_HOST: '127.0.0.1' });
+  assert.equal(run.manifestUrl, 'https://bot.example.test/manifest');
+  assert.doesNotMatch(run.logs(), /Local host/);
+  const response = await fetch(`http://127.0.0.1:${port}/manifest`, { signal: AbortSignal.timeout(10000) });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).registrationUrl, 'https://bot.example.test/register');
 });
 
 test('a profile from the former standalone CLI keeps its identity and language and inherits consent once', async t => {

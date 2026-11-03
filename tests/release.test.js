@@ -258,8 +258,14 @@ test('workflow explicitly separates beta builds from promotion and never derives
   assert.match(workflow, /group: release\s+cancel-in-progress: false/);
   assert.match(workflow, /PROMOTE_TAG: \$\{\{ inputs.promote_tag \}\}/);
   assert.equal((workflow.match(/if: steps\.release\.outputs\.promotion != 'true'/g) || []).length, 5);
-  assert.match(workflow, /name: Install FFmpeg for generated music fixtures\s+if: steps\.release\.outputs\.promotion != 'true'/);
-  assert.match(workflow, /echo "MONKY_MUSIC_FFMPEG=\$\(command -v ffmpeg\)" >> "\$GITHUB_ENV"/);
+  assert.match(workflow, /name: Install FFmpeg for generated music fixtures\s+if: steps\.release\.outputs\.promotion != 'true'\s+run: bash scripts\/install-ci-ffmpeg\.sh/);
+  const ci = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+  assert.match(ci, /run: bash scripts\/install-ci-ffmpeg\.sh/, 'CI and release test against the same FFmpeg build');
+  const installer = fs.readFileSync(path.join(ROOT, 'scripts', 'install-ci-ffmpeg.sh'), 'utf8');
+  assert.match(installer, /yt-dlp\/FFmpeg-Builds\/releases\/download\/latest/, 'The build the Monky client installs');
+  assert.match(installer, /sha256sum --check --strict/);
+  assert.match(installer, /echo "MONKY_MUSIC_FFMPEG=\$ffmpeg" >> "\$GITHUB_ENV"/);
+  assert.ok(!/apt-get/.test(workflow + ci), 'The runner distribution FFmpeg is not what listeners run');
   assert.ok(!workflow.includes('SDK_PRERELEASE'));
   assert.match(workflow, /run: npm run check:sdk/);
   assert.match(workflow, /run: npm run smoke:pack -- "release\/monky-bot-\$\{VERSION\}\.tgz"/);
@@ -283,6 +289,7 @@ test('every workflow shell script passes bash -n', (t) => {
     }
   }
   assert.equal(scripts.length, 9);
+  scripts.push(fs.readFileSync(path.join(ROOT, 'scripts', 'install-ci-ffmpeg.sh'), 'utf8'));
   for (const script of scripts) {
     const result = spawnSync(bash, ['-n'], { input: script, encoding: 'utf8', cwd: ROOT });
     if (result.error) throw result.error;
