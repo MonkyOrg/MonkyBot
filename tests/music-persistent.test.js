@@ -266,7 +266,8 @@ test('persistent seekability survives an initial HTTP 200 for a traditional M4A'
   const { source } = sourceFor(t, fixture);
   const result = await consume(await source.open(item(), new AbortController().signal, { mode: 'persistent' }));
   assert.ok(result.frames >= 400 && result.frames <= 402);
-  assert.ok(fixture.requests.some(request => !request.range.startsWith('bytes=0-')), 'The decoder must perform a real seek.');
+  assert.ok(fixture.requests.some(request => !request.range.startsWith('bytes=0-')),
+    `The decoder must perform a real seek. Requests: ${JSON.stringify(fixture.requests)}; bytes: ${bytes.length}`);
 });
 
 for (const kind of ['ignored range', 'changed entity', 'mismatched range', 'HTTP 403', 'corrupt media', 'clean short media']) {
