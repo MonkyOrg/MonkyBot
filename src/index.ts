@@ -21,6 +21,8 @@ const config = {
   servePort: Number(process.env.MONKY_SERVE_PORT ?? '7780'),
   serveHost: process.env.MONKY_SERVE_HOST || '0.0.0.0',
   servePublicHost: process.env.MONKY_SERVE_PUBLIC_HOST || 'localhost',
+  // Origem HTTPS de um proxy com TLS; o runner do CLI a entrega quando o perfil tem publicUrl.
+  servePublicUrl: process.env.MONKY_SERVE_PUBLIC_URL || undefined,
   botName: process.env.MONKY_BOT_NAME || DEFAULT_BOT_NAME,
   registrationFile: process.env.MONKY_BOT_REGISTRATION_FILE || REGISTRATIONS_PATH,
 };
@@ -139,11 +141,15 @@ async function main(): Promise<void> {
         port: config.servePort,
         host: config.serveHost,
         publicHost: host,
+        publicUrl: config.servePublicUrl,
       });
 
       const addr = server.address();
       const port = typeof addr === 'object' && addr ? addr.port : config.servePort;
-      const manifestUrl = getManifestUrl(host, port);
+      // serve() already validated publicUrl as a bare http(s) origin.
+      const manifestUrl = config.servePublicUrl
+        ? `${new URL(config.servePublicUrl).origin}/manifest`
+        : getManifestUrl(host, port);
       console.log('');
       console.log(`🌐 Manifest: ${manifestUrl}`);
       console.log(cliText(`💾 Cadastros salvos: ${bot.registeredServerCount} (${config.registrationFile})`,
@@ -152,7 +158,7 @@ async function main(): Promise<void> {
         console.log(cliText('♻️  Reconectando aos servidores salvos. Aguarde a confirmação de conexão nos logs.',
           '♻️  Reconnecting to saved servers. Wait for connection confirmation in the logs.'));
       }
-      if (['localhost', '127.0.0.1', '::1', '[::1]'].includes(host.toLowerCase())) {
+      if (!config.servePublicUrl && ['localhost', '127.0.0.1', '::1', '[::1]'].includes(host.toLowerCase())) {
         console.log('');
         console.log(cliText('⚠️  Host local — outros servidores não conseguirão acessar.',
           '⚠️  Local host — other servers cannot access it.'));

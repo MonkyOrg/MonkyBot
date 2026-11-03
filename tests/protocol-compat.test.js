@@ -50,10 +50,10 @@ async function connectBot(t, server) {
 }
 
 test('a protocol 38 server accepts the bot without the storage capability it does not know', async t => {
-  assert.equal(PROTOCOL_VERSION, 39);
+  assert.equal(PROTOCOL_VERSION, 40);
   const server = await fakeServer(t, 38, ['message-length-setting', 'server-community', 'local-youtube-playlist']);
   const registration = await connectBot(t, server);
-  assert.equal(server.connects[0].protocolVersion, 39);
+  assert.equal(server.connects[0].protocolVersion, 40);
   assert.equal(server.connects[0].protocolOffer.minimumVersion, 24, 'Servers down to protocol 24 can still negotiate.');
   assert.deepEqual(registration.requestedCapabilities, withoutStorage);
   assert.ok(registration.commands.some(command => command.name === 'nes'), '/nes keeps working without storage.');

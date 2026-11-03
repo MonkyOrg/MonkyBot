@@ -135,7 +135,7 @@ async function smokePack(tarball) {
       CI: '1',
     };
     for (const name of ['MONKY_BOT_LOCALE', 'MONKY_LANG', 'MONKY_HOST_CONSENT', 'MONKY_SERVE', 'MONKY_SERVE_PORT',
-      'MONKY_SERVE_HOST', 'MONKY_SERVE_PUBLIC_HOST', 'MONKY_SERVER_URL', 'MONKY_BOT_TOKEN', 'MONKY_BOT_PUBLIC_KEY',
+      'MONKY_SERVE_HOST', 'MONKY_SERVE_PUBLIC_HOST', 'MONKY_SERVE_PUBLIC_URL', 'MONKY_SERVER_URL', 'MONKY_BOT_TOKEN', 'MONKY_BOT_PUBLIC_KEY',
       'MONKY_BOT_NAME', 'MONKY_BOT_REGISTRATION_FILE', 'MONKY_GAMES_PORT', 'MONKY_GAMES_HOST', 'MONKY_GAMES_PUBLIC_URL',
       'LANG', 'LC_ALL', 'LC_MESSAGES', 'LANGUAGE']) delete env[name];
     const guard = ['--no-global-search-paths', '--require', path.join(__dirname, 'isolated-runtime.cjs')];

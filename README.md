@@ -117,7 +117,7 @@ com `MONKY_GAMES_ELECTRON` apontando para o executável Electron do checkout Mon
 
 ## Compatibilidade
 
-Esta beta usa **protocolo Monky 39** com o SDK oficial **39.1.0-beta**.
+Esta beta usa **protocolo Monky 40** com o SDK oficial **41.1.1-beta**.
 O bot continua conectando a servidores no protocolo 38 (e anteriores a partir do 24,
 por negociação): neles, o SDK omite `device_storage` e os saves seguem na memória do
 bot, com download. Guardar saves no computador exige servidor e cliente **v39.0.1-beta**
@@ -618,6 +618,18 @@ MONKY_SERVE_PUBLIC_HOST=seu-ip-ou-dominio
 O bot imprime a URL do manifest. Um administrador com permissão para gerenciar
 bots pode colá-la em **Configurações do Servidor → Bots** para vincular o bot.
 Nome e avatar vêm do bot; não há criação ou edição de perfil no cliente.
+
+### Registro por HTTPS (proxy com TLS)
+
+Ao vincular, o servidor Monky envia o token do bot para a URL de registro do
+manifest. Sem configuração extra ela é `http://<host>:<porta>/register`, e o
+token viaja sem criptografia. Atrás de um proxy reverso com TLS, salve a origem
+pública no perfil: `monkybot config set publicUrl https://bot.exemplo.com` (ou
+`--public-url` no `setup --non-interactive`). O CLI repassa o valor em
+`MONKY_SERVE_PUBLIC_URL`, o manifest passa a anunciar
+`https://bot.exemplo.com/register` e `start`/`doctor` conferem o manifest por
+essa URL. Em execução direta, defina `MONKY_SERVE_PUBLIC_URL` no ambiente.
+Use apenas a origem, sem caminho; `config set publicUrl clear` remove.
 
 ## Comandos
 

@@ -1,8 +1,28 @@
 # SDK compativel
 
-## SDK oficial atual (protocolo 39)
+## SDK oficial atual (protocolo 40)
 
-A dependencia ativa e `monky-bot-sdk-39.1.0-beta.tgz`, da
+A dependencia ativa e `monky-bot-sdk-41.1.1-beta.tgz`, da
+[release Monky v41.1.1-beta](https://github.com/MonkyOrg/Monky/releases/tag/v41.1.1-beta),
+a primeira linha publicada depois do mega code review (MonkyOrg/Monky#490).
+Inclui protocolo **40** (piso de bots 24, piso de clientes 35) e a opcao
+`publicUrl` de `serve()`: atras de um proxy com TLS, o manifest anuncia
+`https://.../register` e o servidor Monky envia o token do bot por HTTPS. O CLI
+reutilizavel salva `publicUrl` no perfil e o entrega em `MONKY_SERVE_PUBLIC_URL`,
+que o MonkyBot repassa a `serve()` (MonkyOrg/MonkyBot#32). Sem a variavel, nada
+muda.
+
+Origem: commit `04eda63ae9b07733b5fd62a0c95991d8527892b3`, workflow
+[Release 41637614594](https://github.com/MonkyOrg/Monky/actions/runs/41637614594).
+Bytes oficiais sem modificacoes, conferidos contra o `checksums-sha256.txt` da
+release:
+`992b00655709e81b964d21511b156435ac65a8caa54c8e839fba89ffc4c58580`.
+Tamanho: 6.342.558 bytes. Dependencia e lockfile fixam os mesmos bytes.
+Perfis, identidades, vinculos e consentimentos existentes permanecem preservados.
+
+## SDK oficial anterior (protocolo 39)
+
+A dependencia anterior era `monky-bot-sdk-39.1.0-beta.tgz`, da
 [release Monky v39.1.0-beta](https://github.com/MonkyOrg/Monky/releases/tag/v39.1.0-beta)
 (MonkyOrg/Monky#792, MonkyOrg/Monky#791, MonkyOrg/Monky#789). Inclui protocolo
 **39** (piso de bots 24, piso de clientes 35) e o armazenamento por bot: as
