@@ -255,7 +255,15 @@ test('persistent input clamps closed ranges and joins complete partial segments 
 });
 
 test('persistent seekability survives an initial HTTP 200 for a traditional M4A', { timeout: 10000 }, async t => {
-  const bytes = compressed(t);
+  // A small file fits in the decoder's read-ahead on some platforms (Linux sizes it from the socket receive
+  // buffer), which would never reach the moov by seeking. A free box between mdat and moov keeps the M4A valid and
+  // its duration intact, but puts the moov far beyond any read-ahead, so every platform must really seek.
+  const authored = compressed(t);
+  const moov = authored.indexOf('moov') - 4;
+  const padding = Buffer.alloc(16 * 1024 * 1024);
+  padding.writeUInt32BE(padding.length, 0);
+  padding.write('free', 4, 'latin1');
+  const bytes = Buffer.concat([authored.subarray(0, moov), padding, authored.subarray(moov)]);
   const fixture = await server(t, (request, response) => {
     if (range(request, bytes).start !== 0) { send(request, response, bytes); return; }
     response.writeHead(200, {
