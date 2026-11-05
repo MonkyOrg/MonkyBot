@@ -1,5 +1,6 @@
 import type { BotClient, BotScreen, BotScreenActionEvent, BotScreenRemoved } from '@monky/bot-sdk';
 import { GamesService, type GameRoom } from '../games/service';
+import { tlsSourceFromEnv, type TlsSource } from '../games/tls';
 import { message, type LocalizedCommandDefinition } from './i18n';
 import { errorDiagnostic } from '../music/process';
 
@@ -43,8 +44,13 @@ function defaultService(): GamesService {
   const host = process.env.MONKY_GAMES_HOST ?? process.env.MONKY_SERVE_HOST ?? '0.0.0.0';
   const publicHost = process.env.MONKY_SERVE_PUBLIC_HOST ?? 'localhost';
   const hostname = publicHost.includes(':') && !publicHost.startsWith('[') ? `[${publicHost}]` : publicHost;
+  let tls: TlsSource | undefined;
+  try { tls = tlsSourceFromEnv(process.env); }
+  catch (error: unknown) { console.error('[games] TLS not enabled; serving plain HTTP.', errorDiagnostic(error)); }
+  const tlsHost = tls?.host && tls.host.includes(':') ? `[${tls.host}]` : tls?.host;
+  const defaultUrl = tls ? `https://${tlsHost ?? hostname}:${port}` : `http://${hostname}:${port}`;
   return new GamesService({
-    host, port, publicUrl: process.env.MONKY_GAMES_PUBLIC_URL ?? `http://${hostname}:${port}`,
+    host, port, publicUrl: process.env.MONKY_GAMES_PUBLIC_URL ?? defaultUrl, tls: tls?.load,
   });
 }
 

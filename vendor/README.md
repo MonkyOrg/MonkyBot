@@ -2,7 +2,22 @@
 
 ## SDK oficial atual (protocolo 40)
 
-A dependencia ativa e `monky-bot-sdk-41.1.1-beta.tgz`, da
+A dependencia ativa e `monky-bot-sdk-41.5.3-beta.tgz`, da
+[release Monky v41.5.3-beta](https://github.com/MonkyOrg/Monky/releases/tag/v41.5.3-beta).
+Inclui o TLS compartilhado por maquina (MonkyOrg/Monky#868): `createBotTls()` e o
+comando `tls enable|disable|status` do CLI reutilizavel. O MonkyBot usa o
+certificado do servidor Monky ou de outro bot da mesma maquina para servir os
+miniapps (NES/Doom) por HTTPS, o que a versao web exige. Protocolo continua **40**.
+
+Origem: commit `a929c24bd34fad06175c69077f3ffd57073efe8b`, workflow
+[Release 42064322465](https://github.com/MonkyOrg/Monky/actions/runs/42064322465).
+Bytes oficiais sem modificacoes, conferidos contra o `checksums-sha256.txt` da
+release:
+`b1a4ce6818a6586b6a3c0efe1269d6ec1bacd47af8823300d0b6330fe34a29b5`.
+Tamanho: 6.404.549 bytes. Dependencia e lockfile fixam os mesmos bytes.
+
+## SDK oficial anterior (protocolo 40)
+A dependencia anterior era `monky-bot-sdk-41.1.1-beta.tgz`, da
 [release Monky v41.1.1-beta](https://github.com/MonkyOrg/Monky/releases/tag/v41.1.1-beta),
 a primeira linha publicada depois do mega code review (MonkyOrg/Monky#490).
 Inclui protocolo **40** (piso de bots 24, piso de clientes 35) e a opcao
