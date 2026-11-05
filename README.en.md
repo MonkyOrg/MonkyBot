@@ -98,6 +98,15 @@ forwarding `/games/*` and WebSocket upgrades. `MONKY_GAMES_HOST` and
 `http://<MONKY_SERVE_PUBLIC_HOST or localhost>:7781`. `localhost` only works
 when the bot and clients run on the same computer.
 
+**Monky Web (HTTPS):** browsers block `http://`/`ws://` inside an HTTPS page, so
+miniapps only work on the web when the service uses HTTPS/WSS. Run
+`monkybot tls enable` and restart the bot: it reuses the certificate of the Monky
+server or another bot on the same machine (or issues a new one for the public IP,
+renewed automatically; port 80 must be reachable). The URL becomes
+`https://<IP>:7781`. To use your own certificate, set `MONKY_GAMES_TLS_CERT` and
+`MONKY_GAMES_TLS_KEY`. If no certificate is available, the service falls back to
+HTTP.
+
 The listener starts on demand and checks files and its port before creating a
 miniapp. Each client checks HTTP access and WebSocket authentication before
 enabling play. A local bind does not prove external reachability: firewall,

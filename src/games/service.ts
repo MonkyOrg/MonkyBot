@@ -1,6 +1,10 @@
 import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
 import { createReadStream, readFileSync, statSync } from 'node:fs';
-import { createServer, type Server } from 'node:http';
+import { createServer, type RequestListener, type Server } from 'node:http';
+import { createServer as createSecureServer, Server as SecureServerClass } from 'node:https';
+
+type SecureServer = SecureServerClass;
+export interface TlsMaterial { cert: string; key: string }
 import path from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -143,11 +147,12 @@ function decodeSave(room: GameRoom, data: unknown): { data: Buffer; romName: str
 
 export class GamesService {
   readonly rooms = new Map<string, GameRoom>();
-  private server?: Server;
+  private server?: Server | SecureServer;
   private sockets?: WebSocketServer;
   private starting?: Promise<string>;
   private url = '';
   private timer?: ReturnType<typeof setInterval>;
+  private tlsTimer?: ReturnType<typeof setInterval>;
   private closed = false;
   /**
    * `closingAnswerMs` bounds how long a closing player may keep the game frozen without answering;
@@ -155,6 +160,8 @@ export class GamesService {
    */
   constructor(private readonly config: {
     host: string; port: number; publicUrl: string; closingAnswerMs?: number; closingLeaveMs?: number;
+    /** When set the listener speaks HTTPS/WSS directly; it is re-read hourly so renewals apply to new connections. */
+    tls?: () => TlsMaterial;
   }) {}
 
   start(): Promise<string> {
@@ -171,7 +178,9 @@ export class GamesService {
     if (!['http:', 'https:'].includes(publicUrl.protocol) || publicUrl.username || publicUrl.password ||
         publicUrl.pathname !== '/' || publicUrl.search || publicUrl.hash) throw new Error('Invalid games public URL.');
     if (!Number.isInteger(this.config.port) || this.config.port < 0 || this.config.port > 65535) throw new Error('Invalid games port.');
-    const server = createServer((request, response) => {
+    const secure = this.config.tls !== undefined;
+    if (secure && publicUrl.protocol !== 'https:') throw new Error('Games TLS is enabled but the public URL is not https.');
+    const handler: RequestListener = (request, response) => {
       // Lets `monkybot doctor` and Monky servers prove this port reaches this bot.
       if (handleReachabilityProbe(request, response)) return;
       response.setHeader('Access-Control-Allow-Origin', '*');
@@ -195,7 +204,8 @@ export class GamesService {
       if (request.method === 'HEAD') { input.destroy(); response.end(); }
       else input.pipe(response);
       response.once('close', () => input.destroy());
-    });
+    };
+    const server = this.config.tls ? createSecureServer(this.config.tls(), handler) : createServer(handler);
     const sockets = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024, perMessageDeflate: false });
     server.on('upgrade', (request, socket, head) => {
       const match = /^\/games\/room\/([a-f0-9]{32})$/.exec(request.url ?? '');
@@ -239,6 +249,14 @@ export class GamesService {
       }
     }, 15_000);
     this.timer.unref();
+    const loadTls = this.config.tls;
+    if (loadTls && server instanceof SecureServerClass) {
+      this.tlsTimer = setInterval(() => {
+        try { server.setSecureContext(loadTls()); }
+        catch (error: unknown) { console.error('[games] Could not reload the TLS certificate; keeping the previous one.', errorDiagnostic(error)); }
+      }, 60 * 60_000);
+      this.tlsTimer.unref();
+    }
     return this.url;
   }
 
@@ -290,6 +308,7 @@ export class GamesService {
     this.closed = true;
     if (this.starting) await this.starting.catch(error => console.error('[games] Startup failed during shutdown.', errorDiagnostic(error)));
     clearInterval(this.timer);
+    clearInterval(this.tlsTimer);
     for (const room of this.rooms.values()) this.remove(room);
     for (const socket of this.sockets?.clients ?? []) socket.terminate();
     this.sockets?.close();
