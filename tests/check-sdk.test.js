@@ -7,8 +7,9 @@ const { checkSdk } = require('../scripts/check-sdk');
 const protocolVersion = require('../package.json').monky.protocolVersion;
 
 test('the installed SDK matches the bot protocol and required runtime APIs', () => {
-  assert.equal(protocolVersion, 40);
-  assert.equal(require('@monky/bot-sdk/package.json').version, '41.5.3-beta');
+  assert.equal(protocolVersion, 41);
+  assert.equal(require('@monky/bot-sdk/package.json').version,
+    require('../package-lock.json').packages['node_modules/@monky/bot-sdk'].version);
   assert.equal(checkSdk(), protocolVersion);
 });
 
@@ -22,28 +23,32 @@ function sdkFixture(t, { version = protocolVersion, missing } = {}) {
   const methods = ['close',
     'createLiveAction', 'listLiveActions', 'updateLiveAction', 'closeLiveAction', 'onLiveActionSubmission',
     'sendMessage',
-    'joinVoice', 'getVoiceConnection', 'leaveVoice', 'createScreen', 'updateScreen', 'closeScreen', 'listScreens', 'localExecution']
+    'joinVoice', 'getVoiceConnection', 'leaveVoice', 'createScreen', 'createBrowserScreen', 'updateScreen', 'closeScreen', 'listScreens', 'localExecution']
     .filter((name) => name !== missing).map((name) => `${name}() {}`).join('\n');
   const registrations = missing === 'registeredServerCount' ? '' : 'get registeredServerCount() { return 0; }';
   const commandPresentation = missing === 'getCommandPresentation' ? '' : 'exports.getCommandPresentation = () => ({});';
-  const localErrors = ['LocalExecutionError', 'LocalExecutionRpcError'].filter(name => name !== missing)
+  const localErrors = ['LocalExecutionError', 'LocalExecutionRpcError', 'BotRequestError'].filter(name => name !== missing)
     .map(name => `exports.${name} = class extends Error {};`).join('\n');
   const runtimeCli = ['runBotCli', 'buildBotPackage', 'handleReachabilityProbe'].filter(name => name !== missing)
     .map(name => `exports.${name} = () => {};`).join('\n');
   const capabilities = ['commands', 'miniapps', ...missing === 'device_storage' ? [] : ['device_storage']];
+  const browserErrors = Object.fromEntries(['FEATURE_REQUIRES_UPDATE', 'MINIAPP_BROWSER_DESKTOP_REQUIRED']
+    .filter(name => name !== missing).map(name => [name, name]));
   fs.writeFileSync(path.join(sdk, 'index.js'),
     `exports.PROTOCOL_VERSION = ${version}; exports.BotClient = class { ${methods}\n${registrations} }; ${commandPresentation}\n${localErrors}\n${runtimeCli}\n` +
-    `exports.BOT_CAPABILITIES = ${JSON.stringify(capabilities)};`);
+    `exports.BOT_CAPABILITIES = ${JSON.stringify(capabilities)};` +
+    `exports.ProtocolErrorCode = ${JSON.stringify(browserErrors)};`);
   return root;
 }
 
-test('SDK compatibility requires matching protocol, persistent messages, live actions, voice, local execution, screens, command localization, device storage and the runtime CLI', (t) => {
+test('SDK compatibility requires matching protocol, persistent messages, live actions, voice, local execution, screens, native browsing, command localization, device storage and the runtime CLI', (t) => {
   assert.equal(checkSdk(sdkFixture(t)), protocolVersion);
   assert.throws(() => checkSdk(sdkFixture(t, { version: protocolVersion - 1 })), /requires the bot-sdk/);
   for (const missing of ['close', 'registeredServerCount',
     'createLiveAction', 'listLiveActions', 'updateLiveAction', 'closeLiveAction', 'onLiveActionSubmission',
     'sendMessage',
-    'joinVoice', 'getVoiceConnection', 'leaveVoice', 'createScreen', 'updateScreen', 'closeScreen', 'listScreens',
+    'joinVoice', 'getVoiceConnection', 'leaveVoice', 'createScreen', 'createBrowserScreen', 'updateScreen', 'closeScreen', 'listScreens',
+    'BotRequestError', 'FEATURE_REQUIRES_UPDATE', 'MINIAPP_BROWSER_DESKTOP_REQUIRED',
     'getCommandPresentation', 'localExecution', 'LocalExecutionError', 'LocalExecutionRpcError',
     'runBotCli', 'buildBotPackage', 'handleReachabilityProbe', 'device_storage']) {
     assert.throws(() => checkSdk(sdkFixture(t, { missing })), /native live actions/, missing);

@@ -15,7 +15,7 @@ const { botMessageText } = require('./helpers/bot-message');
 const presentations = [
   ['ping', 'ping', 'ping'], ['dado', 'dado', 'dice'], ['moeda', 'moeda', 'coin'],
   ['8ball', 'bola-magica', '8ball'], ['lembrete', 'lembrete', 'reminder'],
-  ['sorteio', 'sorteio', 'giveaway'], ['ajuda', 'ajuda', 'help'],
+  ['sorteio', 'sorteio', 'giveaway'], ['ajuda', 'ajuda', 'help'], ['browser', 'navegador', 'browser'],
   ['play', 'tocar', 'play'], ['queue', 'fila', 'queue'], ['nowplaying', 'tocando', 'nowplaying'],
   ['pause', 'pausar', 'pause'], ['resume', 'retomar', 'resume'], ['skip', 'pular', 'skip'],
   ['stop', 'parar', 'stop'], ['leave', 'sair', 'leave'], ['remove', 'remover', 'remove'],
@@ -28,8 +28,8 @@ test('production declares only the capabilities its commands use', () => {
   ]);
 });
 
-test('all 20 official definitions declare the expected presentation names and retain translated option text', () => {
-  assert.equal(commands.length, 20);
+test('all 21 official definitions declare the expected presentation names and retain translated option text', () => {
+  assert.equal(commands.length, 21);
   assert.deepEqual(commands.map(command => command.name), presentations.map(([canonical]) => canonical));
   for (const command of commands) {
     const text = command.localizations.en;
@@ -114,10 +114,11 @@ test('all public command names register with the current SDK and dispose listene
   const bot = new BotClient({ publicKey: 'test-public-key', requestedCapabilities });
   const dispose = registerAllCommands(bot);
   try {
-    assert.deepEqual(commands.map((command) => command.name), ['ping', 'dado', 'moeda', '8ball', 'lembrete', 'sorteio', 'ajuda',
+    assert.deepEqual(commands.map((command) => command.name), ['ping', 'dado', 'moeda', '8ball', 'lembrete', 'sorteio', 'ajuda', 'browser',
       'play', 'queue', 'nowplaying', 'pause', 'resume', 'skip', 'stop', 'leave', 'remove', 'clear', 'jogo-da-velha', 'doom', 'nes']);
     assert.equal(commands.find(command => command.name === 'play').options[0].autocomplete, true);
     assert.equal(commands.find(command => command.name === 'jogo-da-velha').voiceRequirement, 'joined');
+    assert.equal(bot.commands.get('browser').voiceRequirement, 'joined');
     assert.equal(reminderCommand.options, undefined);
     assert.equal(giveawayCommand.options, undefined);
     assert.equal(eightBallCommand.options[0].required, true);
@@ -176,6 +177,10 @@ for (const locale of ['pt-BR', 'en']) {
         assert.match(state.replies[0], locale === 'en' ? /Reminders, giveaways, results/ : /Lembretes, sorteios, resultados/);
         assert.match(state.replies[0], locale === 'en' ? /Music requires membership/ : /Música exige estar na mesma sala/);
         assert.match(state.replies[0], locale === 'en' ? /invitation on the stage/ : /convite no palco/);
+        assert.ok(state.replies[0].includes(locale === 'en' ? '**/browser**' : '**/navegador**'));
+        assert.equal(state.replies[0].includes(locale === 'en' ? '**/navegador**' : '**/browser**'), false);
+        assert.match(state.replies[0], locale === 'en' ? /browser host controls it on desktop.*including web viewers.*watches its image, not the desktop/ : /host do navegador controla no desktop.*inclusive na web.*vê sua imagem, não o desktop/);
+        assert.doesNotMatch(state.replies[0], /individual browsing|navegação individual/);
         assert.ok(state.replies[0].length <= 2000);
       }
     }

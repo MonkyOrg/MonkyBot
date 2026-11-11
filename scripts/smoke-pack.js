@@ -8,7 +8,7 @@ const { createRequire } = require('node:module');
 const { runNpm } = require('./npm');
 
 const ROOT = path.resolve(__dirname, '..');
-const COMMANDS = ['8ball', 'ajuda', 'clear', 'dado', 'doom', 'jogo-da-velha', 'leave', 'lembrete', 'moeda', 'nes',
+const COMMANDS = ['8ball', 'ajuda', 'browser', 'clear', 'dado', 'doom', 'jogo-da-velha', 'leave', 'lembrete', 'moeda', 'nes',
   'nowplaying', 'pause', 'ping', 'play', 'queue', 'remove', 'resume', 'skip', 'sorteio', 'stop'];
 
 function waitForManifest(child, logs) {
@@ -235,7 +235,7 @@ async function smokePack(tarball) {
     const fromBot = createRequire(path.join(bot, 'package.json'));
     const fromSdk = createRequire(fromBot.resolve('@monky/bot-sdk'));
     const { WebSocketServer } = fromSdk('ws');
-    const { MessageType } = fromBot('@monky/bot-sdk');
+    const { getCommandPresentation, MessageType } = fromBot('@monky/bot-sdk');
     const token = 'f'.repeat(64);
     const serverId = randomUUID();
     let protocolError;
@@ -281,6 +281,10 @@ async function smokePack(tarball) {
       assert.equal(commandLists.length, count, 'The packaged bot must restore its commands after a process restart.');
       assert.deepEqual(commandLists[count - 1].map((command) => command.name).sort(),
         COMMANDS);
+      const browser = commandLists[count - 1].find(command => command.name === 'browser');
+      assert.equal(browser.voiceRequirement, 'joined');
+      assert.equal(getCommandPresentation(browser, 'pt-BR').displayName, 'navegador');
+      assert.equal(getCommandPresentation(browser, 'en').displayName, 'browser');
     };
     const registration = {
       serverId, serverName: 'Package smoke server',

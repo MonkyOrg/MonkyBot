@@ -8,10 +8,11 @@ import { helpCommand } from './help';
 import { musicDefinitions, registerMusicCommands } from './music';
 import { ticTacToeDefinition, registerTicTacToe } from './ticTacToe';
 import { gameDefinitions, registerGames } from './games';
+import { browserCommand } from './browser';
 import { cliText } from '../i18n';
 
 const basicCommands: readonly CommandDefinition[] = [
-  pingCommand, diceCommand, coinCommand, eightBallCommand, reminderCommand, giveawayCommand, helpCommand,
+  pingCommand, diceCommand, coinCommand, eightBallCommand, reminderCommand, giveawayCommand, helpCommand, browserCommand,
 ];
 export const requestedCapabilities: BotCapability[] = [
   'commands', 'send_messages', 'publish_voice', 'local_execution', 'miniapps', 'live_actions', 'device_storage',
