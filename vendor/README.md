@@ -1,8 +1,42 @@
 # SDK compativel
 
-## SDK oficial atual (protocolo 40)
+## SDK oficial atual (protocolo 41)
 
-A dependencia ativa e `monky-bot-sdk-41.5.3-beta.tgz`, da
+A dependencia ativa e `monky-bot-sdk-42.0.6-beta.tgz`, da
+[release Monky v42.0.6-beta](https://github.com/MonkyOrg/Monky/releases/tag/v42.0.6-beta).
+Inclui shared e as dependencias de producao no proprio pacote, com protocolo
+**41**, pisos de clientes **35** e bots **24**, e
+`ctx.createBrowserScreen({ title })` para MonkyOrg/Monky#888.
+O navegador exige a feature negociada `miniapp-browser-broadcast`, alem de
+`miniapp-browser`. O servidor identifica o host pela sessao exata da invocation,
+sem receber um host escolhido pelo bot. O snapshot inclui `hostSessionId` e
+`broadcastSource`; `html` continua vazio e `state` continua `null`. O SDK recebe
+metadados da transmissao, nunca URLs, cookies, logins ou conteudo de navegacao.
+O ACK confirma criacao do miniapp, nao uma transmissao no ar.
+
+O cliente desktop negocia `miniapp-browser-host`; a recusa de um host web usa
+`ProtocolErrorCode.MINIAPP_BROWSER_DESKTOP_REQUIRED`, enquanto espectadores web
+compativeis podem assistir. A chamada exige invocation ativa e usuario na sala
+de voz, sem o bot entrar no audio. A capacidade existente `miniapps` continua
+sendo exigida. A sessao temporaria do host e descartada ao encerrar o navegador.
+A criacao cancelada durante o ACK fecha exatamente o convite criado, e falhas
+de rollback tambem sao reportadas pelo evento `error` do SDK. O pacote preserva
+o foco local da barra (`Ctrl/Cmd+L`) e o export `BotScreenCommandCreate`.
+
+Origem: commit `27fa181c23395be9ac12e2b412f982d6ed3bd6eb`
+(MonkyOrg/Monky#898), workflow
+[Release 43002181786](https://github.com/MonkyOrg/Monky/actions/runs/43002181786).
+[Asset oficial](https://github.com/MonkyOrg/Monky/releases/download/v42.0.6-beta/monky-bot-sdk-42.0.6-beta.tgz)
+sem modificacoes, conferido contra o
+[`checksums-sha256.txt`](https://github.com/MonkyOrg/Monky/releases/download/v42.0.6-beta/checksums-sha256.txt)
+da release antes de instalar:
+`ce2bfa1438cef74ca426c6970a0f4ec212b0f70a8bb7d8e14ce4398cc87abe62`.
+Tamanho: 6.425.668 bytes. Dependencia e lockfile fixam esses mesmos bytes.
+O pacote descartavel de QA foi removido; apenas o SDK oficial acompanha a entrega.
+
+## SDK oficial anterior (protocolo 40)
+
+A dependencia oficial anterior e `monky-bot-sdk-41.5.3-beta.tgz`, da
 [release Monky v41.5.3-beta](https://github.com/MonkyOrg/Monky/releases/tag/v41.5.3-beta).
 Inclui o TLS compartilhado por maquina (MonkyOrg/Monky#868): `createBotTls()` e o
 comando `tls enable|disable|status` do CLI reutilizavel. O MonkyBot usa o

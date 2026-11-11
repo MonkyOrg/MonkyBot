@@ -12,6 +12,9 @@ function checkSdk(root = path.resolve(__dirname, '..')) {
   const hasPersistentMessages = typeof sdk.BotClient?.prototype.sendMessage === 'function';
   const hasVoiceAndScreens = ['joinVoice', 'getVoiceConnection', 'leaveVoice', 'createScreen', 'updateScreen', 'closeScreen', 'listScreens']
     .every((method) => typeof sdk.BotClient?.prototype[method] === 'function');
+  const hasNativeBrowser = typeof sdk.BotClient?.prototype.createBrowserScreen === 'function' &&
+    typeof sdk.BotRequestError === 'function' && sdk.ProtocolErrorCode?.FEATURE_REQUIRES_UPDATE !== undefined &&
+    sdk.ProtocolErrorCode?.MINIAPP_BROWSER_DESKTOP_REQUIRED !== undefined;
   const hasLocalExecution = typeof sdk.BotClient?.prototype.localExecution === 'function' &&
     typeof sdk.LocalExecutionError === 'function' && typeof sdk.LocalExecutionRpcError === 'function';
   // The packaged `monkybot` command is the SDK's reusable CLI; the games listener answers its probes.
@@ -21,11 +24,11 @@ function checkSdk(root = path.resolve(__dirname, '..')) {
   const hasDeviceStorage = Array.isArray(sdk.BOT_CAPABILITIES) && sdk.BOT_CAPABILITIES.includes('device_storage');
   if (sdk.PROTOCOL_VERSION !== expected || typeof sdk.BotClient?.prototype.close !== 'function' ||
       !hasPersistentRegistrations || !hasLiveActions || !hasPersistentMessages ||
-      !hasVoiceAndScreens || !hasLocalExecution || !hasRuntimeCli || !hasDeviceStorage ||
+      !hasVoiceAndScreens || !hasNativeBrowser || !hasLocalExecution || !hasRuntimeCli || !hasDeviceStorage ||
       typeof sdk.getCommandPresentation !== 'function') {
     throw new Error(
       `MonkyBot requires the bot-sdk for Monky protocol ${expected}; found ${sdk.PROTOCOL_VERSION ?? 'unknown'}. ` +
-      'The SDK must also support persistent marketplace registrations, native live actions, persistent channel messages, voice, screens, concrete local execution, localized command names, ' +
+      'The SDK must also support persistent marketplace registrations, native live actions, persistent channel messages, voice, screens, native browser sharing with desktop-only hosting, concrete local execution, localized command names, ' +
       'device storage for miniapps, the reusable runtime CLI with declared requirements and reachability probes. ' +
       'Use the matching Monky release (or build the matching local shared and bot-sdk workspaces).'
     );

@@ -7,7 +7,7 @@ const { once } = require('node:events');
 const { generateKeyPairSync, randomUUID } = require('node:crypto');
 const { WebSocketServer } = require('ws');
 const { BotClient, MessageType, PROTOCOL_VERSION } = require('@monky/bot-sdk');
-const { registerAllCommands, requestedCapabilities } = require('../dist/commands');
+const { commands, registerAllCommands, requestedCapabilities } = require('../dist/commands');
 
 const publicKey = generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }).toString('hex');
 const withoutStorage = requestedCapabilities.filter(capability => capability !== 'device_storage');
@@ -50,13 +50,21 @@ async function connectBot(t, server) {
 }
 
 test('a protocol 38 server accepts the bot without the storage capability it does not know', async t => {
-  assert.equal(PROTOCOL_VERSION, 40);
+  assert.equal(PROTOCOL_VERSION, 41);
   const server = await fakeServer(t, 38, ['message-length-setting', 'server-community', 'local-youtube-playlist']);
   const registration = await connectBot(t, server);
-  assert.equal(server.connects[0].protocolVersion, 40);
+  assert.equal(server.connects[0].protocolVersion, 41);
   assert.equal(server.connects[0].protocolOffer.minimumVersion, 24, 'Servers down to protocol 24 can still negotiate.');
   assert.deepEqual(registration.requestedCapabilities, withoutStorage);
   assert.ok(registration.commands.some(command => command.name === 'nes'), '/nes keeps working without storage.');
+  const browser = registration.commands.find(command => command.name === 'browser');
+  assert.ok(browser, '/browser stays registered to explain that the server needs updating.');
+  assert.equal(browser.voiceRequirement, 'joined');
+  assert.deepEqual(browser.options, []);
+  assert.equal(browser.localizations['pt-BR'].name, 'navegador');
+  assert.equal(browser.localizations.en.name, 'browser');
+  assert.match(browser.description, /Controle.*compartilhe sua imagem com a sala/);
+  assert.match(browser.localizations.en.description, /Host.*share its image with your voice room/);
 });
 
 test('a protocol 39 server receives the device storage request for NES saves', async t => {
@@ -81,4 +89,12 @@ test('the manifest lists device storage only for servers that negotiate bot stor
   assert.deepEqual(legacy.requestedCapabilities, withoutStorage);
   const current = await (await fetch(url, { headers: { 'x-monky-protocol-features': 'local-youtube-playlist, bot-storage' } })).json();
   assert.deepEqual(current.requestedCapabilities, requestedCapabilities);
+  for (const manifest of [legacy, current]) {
+    const browser = manifest.commands.find(command => command.name === 'browser');
+    assert.ok(browser, '/browser is advertised in the manifest.');
+    assert.deepEqual(browser, {
+      name: 'browser',
+      description: commands.find(command => command.name === 'browser').description,
+    });
+  }
 });

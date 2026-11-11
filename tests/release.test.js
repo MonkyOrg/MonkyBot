@@ -128,6 +128,15 @@ test('publish arguments force beta/latest=false unless explicitly promoting, and
   }
 });
 
+test('browser release notes distinguish localized creation from actual streaming and require a desktop host', () => {
+  const notes = releaseNotes({ repository: REPOSITORY, version: '2.0.0-beta', target: 'a'.repeat(40) });
+  assert.match(notes, /`\/navegador` em PT-BR \(`\/browser` em inglês\)/);
+  assert.match(notes, /somente à imagem desse navegador, não ao desktop/);
+  assert.match(notes, /confirma apenas a criação do miniapp/);
+  assert.match(notes, /host na web exige usar o aplicativo desktop/);
+  assert.doesNotMatch(notes, /SDK oficial 41\.1\.1-beta \(protocolo 40\)/);
+});
+
 test('promotion refuses stable downgrades, duplicates and draft target collisions but allows older than latest beta', () => {
   const tag = 'v2.0.0-beta';
   const source = release(tag);

@@ -8,6 +8,7 @@ import { giveawayCommand, reminderCommand } from './scheduled';
 import { musicDefinitions } from './music';
 import { ticTacToeDefinition } from './ticTacToe';
 import { gameDefinitions } from './games';
+import { browserCommand } from './browser';
 
 const usageNames: Readonly<Record<string, readonly [string, string]>> = {
   lados: ['lados', 'sides'],
@@ -26,7 +27,7 @@ export const helpCommand: LocalizedCommandDefinition = {
   handler: (ctx) => {
     if (ctx.signal.aborted) return;
     const definitions = [pingCommand, diceCommand, coinCommand, eightBallCommand,
-      reminderCommand, giveawayCommand, helpCommand,
+      reminderCommand, giveawayCommand, helpCommand, browserCommand,
       ...musicDefinitions, ticTacToeDefinition, ...Object.values(gameDefinitions)];
     const render = (locale: BotLocale): string => {
       const lines = definitions.map((definition) => {
@@ -43,8 +44,8 @@ export const helpCommand: LocalizedCommandDefinition = {
       });
       const title = translate(locale, 'MonkyBot — Comandos', 'MonkyBot — Commands');
       const privacy = translate(locale,
-        'Consultas e erros são privados. Lembretes, sorteios, resultados e mudanças na reprodução musical aparecem no canal de origem. Música exige estar na mesma sala de voz do bot, inclusive busca e prévia. O jogo aparece por convite no palco, somente para quem está na mesma sala de voz.',
-        'Queries and errors are private. Reminders, giveaways, results and music playback changes appear in the originating channel. Music requires membership in the bot’s voice room, including search and preview. Games open by invitation on the stage, only for people in that voice room.');
+        'Consultas e erros são privados. Lembretes, sorteios, resultados e mudanças na reprodução musical aparecem no canal de origem. Música exige estar na mesma sala de voz do bot, inclusive busca e prévia. Jogos aparecem por convite no palco, somente na mesma sala de voz. O host do navegador controla no desktop; a sala, inclusive na web, vê sua imagem, não o desktop.',
+        'Queries and errors are private. Reminders, giveaways, results and music playback changes appear in the originating channel. Music requires membership in the bot’s voice room, including search and preview. Games open by invitation on the stage, only in that voice room. The browser host controls it on desktop; the room, including web viewers, watches its image, not the desktop.');
       return `🤖 **${title}**\n\n${lines.join('\n')}\n\n${privacy}`;
     };
     ctx.reply(message(ctx.locale, render('pt-BR'), render('en')));

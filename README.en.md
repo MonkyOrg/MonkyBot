@@ -4,6 +4,40 @@ The **official reference bot** for Monky — utility commands, fun and more.
 
 > 📖 To create your **own** bot from scratch, see the [Bot Documentation](https://monkyorg.github.io/Monky/en/bots).
 
+## Shared browser
+
+Join a voice room and run **`/browser`** to create the miniapp on the stage.
+You are the **host**: you control the embedded browser in **Monky desktop**, while
+other participants watch the same image. Streaming captures **only this browser**,
+not your desktop or other windows. Links and browsing sessions are not synchronized
+between participants: viewers watch the image without controlling navigation or
+receiving the host's cookies and logins.
+
+The client automatically opens an empty browser for the host, with the consent
+notice and publication status. Navigation is enabled only after capturing real
+frames from the site and receiving confirmation that the stream was published.
+The command's reply only confirms creation of the miniapp, **not that streaming
+is already live**; watch the status in the miniapp. Desktop and web viewers can
+watch, but have no navigation controls or URL bar. Hosting requires Monky desktop;
+running the command on the web explains this requirement without creating an
+alternative browser.
+
+The session is temporary: closing the host's browser, leaving the room or revoking
+the host's consent ends the miniapp and stream for everyone. Cookies and storage
+are discarded after the browser is destroyed. Closing only a viewer's view does
+not end the host's session. Avoid displaying passwords, access codes or other
+private information: anything visible in the browser may be visible to the room.
+
+The native browser is controlled in the desktop app; there is no iframe browser
+or content-proxy fallback. The server, client and SDK must support the miniapp.
+On an older server, the command asks for an update without claiming streaming
+has started. The bot only creates the native miniapp with a localized title,
+using the existing `commands` and `miniapps` capabilities; it receives no URL
+argument, cookies or logins and does not join voice audio to stream. The server
+identifies the host from the exact session invoking the command, not a participant
+chosen by the bot. The snapshot contains host and stream metadata, never browsing
+content. Capture and image publication belong to the Monky client.
+
 ## DOOM and NES emulator
 
 In a voice room, use **`/doom`** for DOOM/Freedoom or **`/nes`** for the NES emulator.
@@ -99,7 +133,7 @@ forwarding `/games/*` and WebSocket upgrades. `MONKY_GAMES_HOST` and
 when the bot and clients run on the same computer.
 
 **Monky Web (HTTPS):** browsers block `http://`/`ws://` inside an HTTPS page, so
-miniapps only work on the web when the service uses HTTPS/WSS. Run
+games only work on the web when the service uses HTTPS/WSS. Run
 `monkybot tls enable` and restart the bot: it reuses the certificate of the Monky
 server or another bot on the same machine (or issues a new one for the public IP,
 renewed automatically; port 80 must be reachable). The URL becomes
@@ -127,7 +161,12 @@ with `MONKY_GAMES_ELECTRON` pointing to the Monky checkout's Electron executable
 
 ## Compatibility
 
-This beta uses **Monky protocol 40** with official SDK **41.1.1-beta**.
+This beta uses **Monky protocol 41** with official SDK **42.0.6-beta**, supporting the
+**`miniapp-browser`** and **`miniapp-browser-broadcast`** features. Hosting also
+requires the desktop client to negotiate **`miniapp-browser-host`**; compatible
+web clients can watch but cannot start the browser. Protocol minimums remain
+35 for clients and 24 for bots. Official SDK provenance and checksum
+details are documented in `vendor/README.md`.
 The bot still connects to protocol 38 servers (and older ones down to 24, through
 negotiation): there the SDK leaves out `device_storage` and saves stay in the bot's
 memory, with download. Keeping saves on each computer requires server and app
@@ -666,6 +705,7 @@ Use only the origin, without a path; `config set publicUrl clear` removes it.
 | `/tic-tac-toe` | Shared screen for 2 players and spectators |
 | `/doom` | Co-op DOOM/Freedoom with bundled free game data |
 | `/nes` | NES emulator with a local ROM, for solo or two-player games, with saves |
+| `/browser` | Host controls a desktop browser and shares its image with the room |
 | `/help` | List all commands |
 
 Type `/`, select a command, and fill its named parameters. For example, `lados`
@@ -1079,6 +1119,7 @@ MonkyBot/
 │   │   ├── dice.ts
 │   │   ├── coin.ts
 │   │   ├── eightball.ts
+│   │   ├── browser.ts    # Browser miniapp: host controls, room watches its image
 │   │   ├── games.ts      # /doom and /nes
 │   │   ├── music.ts      # Music through local execution on the client
 │   │   ├── scheduled.ts  # Persistent reminders and giveaways

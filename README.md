@@ -4,6 +4,43 @@ O **bot oficial de referência** do Monky — comandos utilitários, diversão e
 
 > 📖 Para criar seu **próprio** bot do zero, veja a [Documentação de Bots](https://monkyorg.github.io/Monky/bots).
 
+## Navegador compartilhado
+
+Entre em uma sala de voz e execute **`/navegador`** (em inglês, **`/browser`**)
+para criar o miniapp no palco.
+Você é o **host**: controla o navegador embutido no **Monky desktop**, enquanto
+os demais participantes assistem à mesma imagem. A transmissão captura
+**somente esse navegador**, não o desktop nem outras janelas. Não há sincronização
+de links ou sessões entre participantes: os espectadores assistem à imagem, sem
+controlar a navegação nem receber os cookies e logins do host.
+
+O cliente abre automaticamente o navegador vazio para o host, com o aviso de
+consentimento e o estado da publicação. A navegação só é habilitada depois da
+captura de frames reais do site e da confirmação da publicação da transmissão.
+A resposta do comando confirma apenas a criação do miniapp, **não que a
+transmissão já esteja no ar**; acompanhe o estado no próprio miniapp.
+Espectadores no desktop ou na web podem assistir, mas não têm controles de
+navegação nem barra de URL. Para ser o host, é necessário usar o Monky desktop;
+executar o comando na web exibe esse requisito, sem criar um navegador alternativo.
+
+A sessão é temporária: fechar o navegador do host, sair da sala ou revogar o
+consentimento do host encerra o miniapp e a transmissão para todos. Cookies e
+armazenamento são descartados depois que o navegador é destruído. Fechar somente
+a visualização de um espectador não encerra a sessão do host. Evite mostrar senhas,
+códigos de acesso ou outros dados privados: o que aparece no navegador pode
+aparecer para a sala.
+
+O navegador nativo é controlado no aplicativo desktop; não há navegador por
+iframe nem substituição por proxy de conteúdo. Servidor, cliente e SDK precisam
+suportar o miniapp. Em um servidor antigo, o comando pede a atualização, sem
+afirmar que a transmissão começou. O bot só cria o miniapp nativo com um título
+localizado, usando as capacidades existentes `commands` e `miniapps`; não recebe
+uma URL como argumento, não recebe cookies ou logins e não entra no áudio da
+sala para transmitir. O servidor identifica o host pela sessão exata que
+invocou o comando, não por um participante indicado pelo bot. O snapshot contém
+metadados do host e da transmissão, nunca o conteúdo da navegação. A captura e
+a publicação da imagem são do cliente Monky.
+
 ## DOOM e emulador NES
 
 Na sala de voz, use **`/doom`** para DOOM/Freedoom ou **`/nes`** para o emulador NES.
@@ -98,7 +135,7 @@ com proxy que encaminhe `/games/*` e upgrades WebSocket. `MONKY_GAMES_HOST` e
 quando bot e clientes estão na mesma máquina.
 
 **Monky Web (HTTPS):** o navegador bloqueia `http://`/`ws://` dentro de uma página
-HTTPS, então os miniapps só funcionam na web com o serviço em HTTPS/WSS. Rode
+HTTPS, então os jogos só funcionam na web com o serviço em HTTPS/WSS. Rode
 `monkybot tls enable` e reinicie o bot: ele reutiliza o certificado do servidor
 Monky ou de outro bot da mesma máquina (ou emite um novo para o IP público, com
 renovação automática; a porta 80 precisa estar acessível). A URL passa a ser
@@ -126,7 +163,12 @@ com `MONKY_GAMES_ELECTRON` apontando para o executável Electron do checkout Mon
 
 ## Compatibilidade
 
-Esta beta usa **protocolo Monky 40** com o SDK oficial **41.1.1-beta**.
+Esta beta usa **protocolo Monky 41** com o SDK oficial **42.0.6-beta**, com suporte
+às features **`miniapp-browser`** e **`miniapp-browser-broadcast`**. Ser o host também exige
+que o cliente desktop negocie **`miniapp-browser-host`**; clientes web compatíveis
+podem assistir, mas não iniciar o navegador. Os pisos de protocolo continuam
+35 para clientes e 24 para bots. A origem e os checksums do SDK oficial
+estão em `vendor/README.md`.
 O bot continua conectando a servidores no protocolo 38 (e anteriores a partir do 24,
 por negociação): neles, o SDK omite `device_storage` e os saves seguem na memória do
 bot, com download. Guardar saves no computador exige servidor e cliente **v39.0.1-beta**
@@ -662,6 +704,7 @@ Use apenas a origem, sem caminho; `config set publicUrl clear` remove.
 | `/jogo-da-velha` | Tela compartilhada para 2 jogadores, com espectadores |
 | `/doom` | DOOM/Freedoom cooperativo com conteúdo livre incluído |
 | `/nes` | Emulador NES com ROM local, para jogar sozinho ou em dupla, com saves |
+| `/navegador` | Host controla o navegador no desktop e compartilha sua imagem com a sala |
 | `/ajuda` | Lista todos os comandos |
 
 Digite `/`, selecione o comando e preencha seus parâmetros nomeados. Por exemplo,
@@ -1076,6 +1119,7 @@ MonkyBot/
 │   │   ├── dice.ts
 │   │   ├── coin.ts
 │   │   ├── eightball.ts
+│   │   ├── browser.ts    # Miniapp do navegador: host controla, sala assiste à imagem
 │   │   ├── games.ts      # /doom e /nes
 │   │   ├── music.ts      # Música pela execução local no cliente
 │   │   ├── scheduled.ts  # Lembretes e sorteios persistentes
